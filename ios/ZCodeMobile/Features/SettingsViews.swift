@@ -208,35 +208,38 @@ struct PermissionsView: View {
     @State private var showHelp = false
     private var currentPermission: PermissionMode { store.permission(for: sessionID) }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
                 Text(store.isReferenceMode ? "应如何批准 Codex 操作？" : "应如何批准 ZCode 操作？")
                 Button { showHelp = true } label: { Text("了解更多").underline() }
-            }.font(.system(size: 14)).foregroundStyle(.secondary)
-            ForEach(PermissionMode.allCases) { mode in
+            }.font(.system(size: 15)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 18) {
+              ForEach(PermissionMode.allCases) { mode in
                 Button {
                     if mode == .full && !store.isReferenceMode { confirmFullAccess = true }
                     else { apply(mode) }
                 } label: {
                     HStack(spacing: 14) {
-                        Image(systemName: mode.symbol).font(.system(size: 20)).frame(width: 24)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(mode == .custom && store.isReferenceMode ? "自定义 (config.toml)" : mode.title).font(.system(size: 16))
+                        Image(systemName: mode.symbol).font(.system(size: 20)).frame(width: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(mode == .custom && store.isReferenceMode ? "自定义 (config.toml)" : mode.title).font(.system(size: 15))
                             Text(mode == .custom ? (store.isReferenceMode ? "使用 config.toml 中定义的权限" : "当前连接尚不支持编辑自定义规则") : mode.detail)
-                                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        }
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                                .lineSpacing(4.0 / 3.0).fixedSize(horizontal: false, vertical: true)
+                        }.padding(.trailing, 8)
                         Spacer(minLength: 2)
                         if currentPermission == mode {
                             Image(systemName: "checkmark").font(.system(size: 18)).frame(width: 20)
                         } else { Color.clear.frame(width: 20, height: 1) }
-                    }.frame(minHeight: 49).contentShape(Rectangle())
+                    }.contentShape(Rectangle().inset(by: -5))
                 }.buttonStyle(.plain).disabled(busy || (!store.isReferenceMode && mode == .custom))
                     .accessibilityIdentifier("permission.\(mode.rawValue)")
                     .accessibilityAddTraits(currentPermission == mode ? .isSelected : [])
                     .accessibilityRemoveTraits(currentPermission != mode ? .isSelected : [])
+              }
             }
             if busy { ProgressView("正在更新权限…").font(.footnote) }
-        }.padding(18).frame(width: 320).tint(.primary)
+        }.padding(.horizontal, 18).padding(.vertical, 14).frame(width: 320).tint(.primary)
             .measureLayout("permissions.popover")
             .alert("操作权限", isPresented: $showHelp) {
                 Button("知道了", role: .cancel) {}

@@ -100,7 +100,7 @@ struct FilesView: View {
                     Picker("文件范围", selection: $modified) {
                         Text("已修改").tag(true)
                         Text("所有文件").tag(false)
-                    }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 7.666667)
+                    }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 11.666667)
                         .accessibilityIdentifier("files.filter")
                     Divider()
                 }
@@ -118,7 +118,7 @@ struct FilesView: View {
             .navigationTitle("文件").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 20, weight: .medium)) }
+                    Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 14, weight: .medium)) }
                         .accessibilityLabel("关闭文件").accessibilityIdentifier("files.close")
                 }
             }

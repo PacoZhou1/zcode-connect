@@ -249,7 +249,9 @@ final class AppStore {
                 try await completeRelayPairing(workspaceKey: workspace, name: profile.name)
             } catch {
                 guard relayConnectionAttempt == attempt else { return }
-                disconnect(); connection = .failed(error.localizedDescription); errorMessage = error.localizedDescription
+                disconnect()
+                let message = Self.connectionErrorMessage(error)
+                connection = .failed(message); errorMessage = message
             }
             return
         }
@@ -301,8 +303,28 @@ final class AppStore {
         } catch {
             guard epoch == connectionEpoch else { return }
             disconnect()
-            connection = .failed(error.localizedDescription)
-            errorMessage = error.localizedDescription
+            let message = Self.connectionErrorMessage(error)
+            connection = .failed(message)
+            errorMessage = message
+        }
+    }
+
+    private static func connectionErrorMessage(_ error: Error) -> String {
+        let failure = error as NSError
+        guard failure.domain == NSURLErrorDomain else { return error.localizedDescription }
+        switch URLError.Code(rawValue: failure.code) {
+        case .cannotConnectToHost:
+            return "无法连接到这台电脑。请确认电脑上的 ZCode 和远程连接服务正在运行。"
+        case .cannotFindHost, .dnsLookupFailed:
+            return "找不到这台电脑。请检查连接地址和网络。"
+        case .notConnectedToInternet:
+            return "当前没有网络连接。联网后可以重新连接电脑。"
+        case .networkConnectionLost:
+            return "与电脑的连接已中断，草稿已保留。请重新连接。"
+        case .timedOut:
+            return "连接电脑超时。请检查电脑和网络后重试。"
+        default:
+            return error.localizedDescription
         }
     }
 
