@@ -20,24 +20,39 @@ struct SessionContextInteraction: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .clear
-        view.addInteraction(UIContextMenuInteraction(delegate: context.coordinator))
+        let interaction = UIContextMenuInteraction(delegate: context.coordinator)
+        context.coordinator.interaction = interaction
+        view.addInteraction(interaction)
         view.addGestureRecognizer(UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped)))
         view.isAccessibilityElement = false
         return view
     }
-    func updateUIView(_ view: UIView, context: Context) { context.coordinator.parent = self }
+    func updateUIView(_ view: UIView, context: Context) {
+        if context.coordinator.parent.identity != identity { context.coordinator.invalidate() }
+        context.coordinator.parent = self
+    }
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) { coordinator.invalidate() }
 
     final class Coordinator: NSObject, UIContextMenuInteractionDelegate {
         var menuOpen: (@MainActor () -> Void)?
         var liftedRow: UIView?
+        weak var interaction: UIContextMenuInteraction?
+        var generation = UUID()
         var parent: SessionContextInteraction
         init(parent: SessionContextInteraction) { self.parent = parent }
+        func invalidate() {
+            generation = UUID()
+            menuOpen = nil
+            liftedRow = nil
+            interaction?.dismissMenu()
+        }
         @objc func tapped() { parent.open() }
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
             let current = parent
+            let generation = self.generation
             menuOpen = { [weak self] in
-                guard self?.parent.identity == current.identity else { return }
+                guard self?.generation == generation, self?.parent.identity == current.identity else { return }
                 current.open()
             }
             return UIContextMenuConfiguration(identifier: current.identity as NSString, previewProvider: {
@@ -50,7 +65,7 @@ struct SessionContextInteraction: UIViewRepresentable {
                 UIMenu(title: current.title, children: current.actions.map { action in
                     UIAction(title: action.title, image: UIImage(systemName: action.symbol),
                              attributes: action.destructive ? .destructive : []) { [weak self] _ in
-                        guard self?.parent.identity == current.identity else { return }
+                        guard self?.generation == generation, self?.parent.identity == current.identity else { return }
                         action.perform()
                     }
                 })
@@ -59,7 +74,8 @@ struct SessionContextInteraction: UIViewRepresentable {
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     configuration: UIContextMenuConfiguration,
                                     highlightPreviewForItemWithIdentifier identifier: any NSCopying) -> UITargetedPreview? {
-            guard let source = interaction.view, let window = source.window else { return nil }
+            guard configuration.identifier as? String == parent.identity,
+                  let source = interaction.view, let window = source.window else { return nil }
             let rect = source.convert(source.bounds, to: window)
             guard let snapshot = window.resizableSnapshotView(from: rect, afterScreenUpdates: false, withCapInsets: .zero) else { return nil }
             liftedRow = snapshot
@@ -72,7 +88,8 @@ struct SessionContextInteraction: UIViewRepresentable {
         func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
                                     configuration: UIContextMenuConfiguration,
                                     dismissalPreviewForItemWithIdentifier identifier: any NSCopying) -> UITargetedPreview? {
-            guard let source = interaction.view, let window = source.window, let snapshot = liftedRow else { return nil }
+            guard configuration.identifier as? String == parent.identity,
+                  let source = interaction.view, let window = source.window, let snapshot = liftedRow else { return nil }
             let rect = source.convert(source.bounds, to: window)
             let parameters = UIPreviewParameters()
             parameters.backgroundColor = .clear
@@ -110,6 +127,7 @@ struct ConversationPreview: View {
                     }.padding(16)
                 }
                 .defaultScrollAnchor(.bottom)
+                .defaultScrollAnchor(.top, for: .alignment)
                 .allowsHitTesting(false)
             }
         }

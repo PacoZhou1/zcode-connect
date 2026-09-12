@@ -6,11 +6,23 @@ struct HomeView: View {
     @State private var collapsed: Set<String> = []
     @State private var renameSession: RemoteSession?
     @State private var renameText = ""
+    @State private var renameScope: String?
     @State private var confirmRelayReconnect = false
+    @State private var computerToConfirm: ConnectionProfile?
 
     private struct SessionGroup: Identifiable {
         var id: String
         var sessions: [RemoteSession]
+    }
+
+    private var connectionScope: String {
+        "\(store.isReferenceMode)|\(store.activeProfileID ?? "")|\(store.activeProfile?.baseURL ?? "")"
+    }
+
+    private func beginRename(_ session: RemoteSession) {
+        renameScope = connectionScope
+        renameText = session.title
+        renameSession = session
     }
 
     private var groups: [SessionGroup] {
@@ -51,6 +63,17 @@ struct HomeView: View {
             }
         }
         .background(ZTheme.background)
+        .confirmationDialog("切换到这台电脑？", isPresented: Binding(get: { computerToConfirm != nil }, set: { if !$0 { computerToConfirm = nil } }), titleVisibility: .visible) {
+            Button("连接并切换") {
+                guard let profile = computerToConfirm else { return }
+                computerToConfirm = nil
+                search = ""; collapsed = []
+                Task { await store.switchComputer(profile, confirmedControllerReplacement: true) }
+            }
+            Button("取消", role: .cancel) { computerToConfirm = nil }
+        } message: {
+            Text("连接 \(computerToConfirm?.name ?? "所选电脑") 并加载其任务。如果另一台手机正在控制该电脑，此次连接可能替换它；电脑上的任务会继续运行。")
+        }
         .confirmationDialog("重新连接 ZCode 远程控制？", isPresented: $confirmRelayReconnect, titleVisibility: .visible) {
             Button("连接这台电脑") {
                 if let profile = store.activeProfile { Task { await store.connect(profile, confirmedControllerReplacement: true) } }
@@ -116,9 +139,18 @@ struct HomeView: View {
             TextField("任务名称", text: $renameText)
             Button("取消", role: .cancel) { renameSession = nil }
             Button("保存") {
-                if let id = renameSession?.id { store.rename(id, title: renameText) }
+                if renameScope == connectionScope, let id = renameSession?.id {
+                    store.rename(id, title: renameText)
+                }
                 renameSession = nil
             }.disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .onChange(of: connectionScope) { _, _ in
+            renameSession = nil; renameScope = nil
+            search = ""; collapsed = []
+        }
+        .onChange(of: store.sessions.map(\.id)) { _, ids in
+            if let id = renameSession?.id, !ids.contains(id) { renameSession = nil; renameScope = nil }
         }
     }
 
@@ -212,7 +244,7 @@ struct HomeView: View {
                 preview: AnyView(ConversationPreview(sessionID: session.id).environment(store)),
                 actions: [
                     SessionContextAction(title: session.isPinned ? "取消置顶" : "置顶", symbol: session.isPinned ? "pin.slash" : "pin", perform: { [pinned = !session.isPinned] in store.setPinned(pinned, sessionID: session.id) }),
-                    SessionContextAction(title: "重命名", symbol: "pencil", perform: { renameText = session.title; renameSession = session }),
+                    SessionContextAction(title: "重命名", symbol: "pencil", perform: { beginRename(session) }),
                     SessionContextAction(title: store.isUnread(session.id) ? "标记为已读" : "标记为未读", symbol: "circle.fill", perform: { [unread = !store.isUnread(session.id)] in store.setUnread(unread, sessionID: session.id) }),
                     SessionContextAction(title: "复制对话串 ID", symbol: "square.on.square", perform: { store.copy(session.id) }),
                     SessionContextAction(title: session.isArchived ? "取消归档" : "归档", symbol: "archivebox", destructive: !session.isArchived, perform: { store.archive(session.id, archived: !session.isArchived) })
@@ -220,7 +252,7 @@ struct HomeView: View {
                 .accessibilityHidden(true)
         }
         .accessibilityAction(named: Text(session.isPinned ? "取消置顶" : "置顶")) { store.togglePin(session.id) }
-        .accessibilityAction(named: Text("重命名")) { renameText = session.title; renameSession = session }
+        .accessibilityAction(named: Text("重命名")) { beginRename(session) }
         .accessibilityAction(named: Text(store.isUnread(session.id) ? "标记为已读" : "标记为未读")) { store.setUnread(!store.isUnread(session.id), sessionID: session.id) }
         .accessibilityAction(named: Text("复制对话串 ID")) { store.copy(session.id) }
         .accessibilityAction(named: Text(session.isArchived ? "取消归档" : "归档")) { store.archive(session.id, archived: !session.isArchived) }
@@ -229,6 +261,28 @@ struct HomeView: View {
     private var homeMenu: some View {
         @Bindable var store = store
         return Menu {
+            Section {
+                Menu {
+                    ForEach(store.profiles) { profile in
+                        Button {
+                            if profile.isRelay && !(store.activeProfile == profile && store.connection.isOnline && !store.isReferenceMode) {
+                                computerToConfirm = profile
+                            } else {
+                                search = ""; collapsed = []
+                                Task { await store.switchComputer(profile) }
+                            }
+                        } label: {
+                            Label(computerLabel(profile) + (store.activeProfileID == profile.id && !store.isReferenceMode ? " · \(store.connection.label)" : ""),
+                                  systemImage: store.activeProfileID == profile.id && !store.isReferenceMode ? "checkmark" : "laptopcomputer")
+                        }
+                        .accessibilityIdentifier("home.computer.\(profile.id)")
+                    }
+                    if store.profiles.isEmpty { Text("还没有添加电脑") }
+                    Divider()
+                    Button("添加电脑", systemImage: "plus") { store.sheet = .pairing }
+                    Button("管理电脑", systemImage: "laptopcomputer") { store.sheet = .connections }
+                } label: { Label("切换电脑", systemImage: "laptopcomputer") }
+            }
             Picker("排序方式", selection: $store.sortOrder) {
                 ForEach(SortOrder.allCases) { sort in Label(sort.rawValue, systemImage: sort.symbol).tag(sort) }
             }.pickerStyle(.inline)
@@ -248,12 +302,18 @@ struct HomeView: View {
         }.tint(.primary).accessibilityLabel("远程菜单").accessibilityIdentifier("home.menu")
     }
 
+    private func computerLabel(_ profile: ConnectionProfile) -> String {
+        guard store.profiles.filter({ $0.name == profile.name }).count > 1 else { return profile.name }
+        let detail = profile.relayWorkspaceKey?.split(separator: "/").last.map(String.init) ?? profile.baseURL
+        return "\(profile.name) · \(detail)"
+    }
+
     private var connectionEmptyState: some View {
         VStack(spacing: 24) {
             Spacer()
             VStack(spacing: 22) {
                 Text("\(store.connection.label) · \(store.hostName)").font(.system(size: 20))
-                Text("请确保 ZCode 正在这台电脑上运行。")
+                Text(store.connection == .connecting ? "正在加载这台电脑的任务…" : "请确保 ZCode 正在这台电脑上运行。")
                     .font(.system(size: 19)).multilineTextAlignment(.center)
                 if store.activeProfile != nil {
                     Button {

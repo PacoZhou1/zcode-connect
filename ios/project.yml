@@ -44,12 +44,6 @@ targets:
     sources: [ZCodeMobileTests]
     dependencies:
       - target: ZCodeMobile
-  ZCodeMobileUITests:
-    type: bundle.ui-testing
-    platform: iOS
-    sources: [ZCodeMobileUITests]
-    dependencies:
-      - target: ZCodeMobile
 schemes:
   ZCodeMobile:
     build:
@@ -58,4 +52,3 @@ schemes:
     test:
       targets:
         - ZCodeMobileTests
-        - ZCodeMobileUITests

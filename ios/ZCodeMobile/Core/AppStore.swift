@@ -195,6 +195,34 @@ final class AppStore {
         Task { await start() }
     }
 
+    /// Select an existing computer before awaiting its network response, so a failed
+    /// switch can never leave the previous computer's tasks under the new heading.
+    func switchComputer(_ profile: ConnectionProfile, confirmedControllerReplacement: Bool = false) async {
+        guard profiles.contains(where: { $0 == profile }) else { return }
+        if !isReferenceMode, activeProfile == profile, connection.isOnline {
+            showArchived = false; path = []
+            await refresh()
+            return
+        }
+        guard !profile.isRelay || confirmedControllerReplacement else { return }
+        disconnect()
+        isReferenceMode = false; referenceReview = false
+        activeProfileID = profile.id
+        hostName = profile.name
+        sessions = []; transcripts = [:]; projects = []; models = []
+        pendingInteractions = [:]; modelSelections = [:]; remoteSettings = [:]
+        projectSettings = [:]; uploadedAttachments = [:]; newModelSelection = nil
+        options = SessionOptions(); selectedProjectID = nil
+        path = []; sheet = nil; showArchived = false
+        bridgeVersion = nil; errorMessage = nil; toast = nil; isLoading = false
+        drafts = [:]; localFeedback = [:]; localUnreadIDs = []; locallyReadTimestamps = [:]
+        draftAttachments = [:]; pendingSubmissions = [:]
+        defaults.set(profile.id, forKey: "activeConnection")
+        do { try loadScopedState() }
+        catch { connection = .failed(error.localizedDescription); errorMessage = error.localizedDescription; return }
+        await connect(profile, confirmedControllerReplacement: confirmedControllerReplacement)
+    }
+
     func connect(_ profile: ConnectionProfile, token: String? = nil, confirmedControllerReplacement: Bool = false) async {
         if profile.isRelay {
             guard confirmedControllerReplacement else { return }
@@ -254,6 +282,7 @@ final class AppStore {
             defaults.set(profile.id, forKey: "activeConnection")
             connection = .connected
             try await loadRemoteIndex()
+            guard epoch == connectionEpoch else { return }
             beginStreaming()
         } catch {
             guard epoch == connectionEpoch else { return }
@@ -1088,7 +1117,8 @@ final class AppStore {
         let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, let i = sessions.firstIndex(where: { $0.id == id }) else { return }
         if !isReferenceMode, sessions[i].source == "bridge" {
-            Task { _ = await mutateMetadata(id, body: ["title": .string(value)]) }
+            let epoch = connectionEpoch
+            Task { guard epoch == connectionEpoch else { return }; _ = await mutateMetadata(id, body: ["title": .string(value)]) }
             return
         }
         sessions[i].title = value
@@ -1103,7 +1133,8 @@ final class AppStore {
         guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
         if !isReferenceMode, sessions[i].source == "bridge" {
             let pinned = !sessions[i].isPinned
-            Task { _ = await mutateMetadata(id, body: ["pinned": .bool(pinned)]) }
+            let epoch = connectionEpoch
+            Task { guard epoch == connectionEpoch else { return }; _ = await mutateMetadata(id, body: ["pinned": .bool(pinned)]) }
             return
         }
         sessions[i].isPinned.toggle()
@@ -1114,7 +1145,9 @@ final class AppStore {
     func archive(_ id: String, archived: Bool = true) {
         guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
         if !isReferenceMode, sessions[i].source == "bridge" {
+            let epoch = connectionEpoch
             Task {
+                guard epoch == connectionEpoch else { return }
                 if await mutateMetadata(id, body: ["archived": .bool(archived)]) {
                     if archived { path = [] }
                     notify(archived ? "已归档" : "已恢复任务")

@@ -17,8 +17,8 @@ struct ConnectionsView: View {
                 Section("我的电脑") {
                     ForEach(store.profiles) { profile in
                         Button {
-                            if profile.isRelay { relayReconnect = profile }
-                            else { dismiss(); Task { await store.connect(profile) } }
+                            if profile.isRelay && !(store.activeProfile == profile && store.connection.isOnline && !store.isReferenceMode) { relayReconnect = profile }
+                            else { dismiss(); Task { await store.switchComputer(profile) } }
                         } label: {
                             HStack {
                                 Image(systemName: "laptopcomputer")
@@ -61,7 +61,7 @@ struct ConnectionsView: View {
             Button("连接并使用此手机控制") {
                 guard let profile = relayReconnect else { return }
                 relayReconnect = nil; dismiss()
-                Task { await store.connect(profile, confirmedControllerReplacement: true) }
+                Task { await store.switchComputer(profile, confirmedControllerReplacement: true) }
             }
             Button("取消", role: .cancel) { relayReconnect = nil }
         } message: { Text("如果另一台手机正在控制这台电脑，此次连接可能替换它。电脑上的任务会保留。") }

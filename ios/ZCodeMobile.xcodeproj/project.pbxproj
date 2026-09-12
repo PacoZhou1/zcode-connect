@@ -63,13 +63,6 @@
 			remoteGlobalIDString = 2C4D7549E27B70322D29C541;
 			remoteInfo = ZCodeMobile;
 		};
-		249C46B38E5A0E25ABBA248B /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 993747C745DE33B0F940061C /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 2C4D7549E27B70322D29C541;
-			remoteInfo = ZCodeMobile;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -82,7 +75,6 @@
 		202BC01ACF9D25645498BFE1 /* ReferenceData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceData.swift; sourceTree = "<group>"; };
 		225CA0B05DD2A628608717DE /* InlineVoiceControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineVoiceControls.swift; sourceTree = "<group>"; };
 		2CD15E50100F477B7A156853 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		2E4B9ACB0572642919E42511 /* ZCodeMobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ZCodeMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3ADEF78963A492551AD4C392 /* BridgeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeClient.swift; sourceTree = "<group>"; };
 		3BF3D2F5C6EF69336805ECB6 /* ZCodeMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZCodeMobileApp.swift; sourceTree = "<group>"; };
 		4403F2376625B4E0EBCDC325 /* ConversationControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationControls.swift; sourceTree = "<group>"; };
@@ -184,13 +176,6 @@
 			path = Relay;
 			sourceTree = "<group>";
 		};
-		807A9675E9368559F7AB6B42 /* ZCodeMobileUITests */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = ZCodeMobileUITests;
-			sourceTree = "<group>";
-		};
 		826F8A79E34CE3817C867431 /* RelayAdapter */ = {
 			isa = PBXGroup;
 			children = (
@@ -226,7 +211,6 @@
 			children = (
 				DBDFB6B2861B6F275C9CBE81 /* ZCodeMobile.app */,
 				B296D89A887ECBA85C7B16C3 /* ZCodeMobileTests.xctest */,
-				2E4B9ACB0572642919E42511 /* ZCodeMobileUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -257,7 +241,6 @@
 			children = (
 				A4B6229612BB80EBE2BC6229 /* ZCodeMobile */,
 				3AB1B0A08F8B06B713867608 /* ZCodeMobileTests */,
-				807A9675E9368559F7AB6B42 /* ZCodeMobileUITests */,
 				9F56DA159BC86C7C3B7C8F91 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -293,24 +276,6 @@
 			productReference = DBDFB6B2861B6F275C9CBE81 /* ZCodeMobile.app */;
 			productType = "com.apple.product-type.application";
 		};
-		478E9A29DB34707E984AB901 /* ZCodeMobileUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = A41060A7D37A9689F9805F33 /* Build configuration list for PBXNativeTarget "ZCodeMobileUITests" */;
-			buildPhases = (
-				0D37C8D9D31A10ECE7640929 /* Sources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				A7AC68798C4104B0E0FE68E5 /* PBXTargetDependency */,
-			);
-			name = ZCodeMobileUITests;
-			packageProductDependencies = (
-			);
-			productName = ZCodeMobileUITests;
-			productReference = 2E4B9ACB0572642919E42511 /* ZCodeMobileUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 		CE46BFC959BF5A01CD727039 /* ZCodeMobileTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0A9DB74F1654B17945293800 /* Build configuration list for PBXNativeTarget "ZCodeMobileTests" */;
@@ -342,11 +307,6 @@
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
-					478E9A29DB34707E984AB901 = {
-						DevelopmentTeam = "";
-						ProvisioningStyle = Automatic;
-						TestTargetID = 2C4D7549E27B70322D29C541;
-					};
 					CE46BFC959BF5A01CD727039 = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
@@ -369,7 +329,6 @@
 			targets = (
 				2C4D7549E27B70322D29C541 /* ZCodeMobile */,
 				CE46BFC959BF5A01CD727039 /* ZCodeMobileTests */,
-				478E9A29DB34707E984AB901 /* ZCodeMobileUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -386,13 +345,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		0D37C8D9D31A10ECE7640929 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		6265D6350A101B9B490DD1C2 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -455,11 +407,6 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		A7AC68798C4104B0E0FE68E5 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 2C4D7549E27B70322D29C541 /* ZCodeMobile */;
-			targetProxy = 249C46B38E5A0E25ABBA248B /* PBXContainerItemProxy */;
-		};
 		F4119E0B0E66787AD2D29E7D /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 2C4D7549E27B70322D29C541 /* ZCodeMobile */;
@@ -667,22 +614,6 @@
 			};
 			name = Release;
 		};
-		9C83EC15C0E91A95F94501BA /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.paco.ZCodeMobileUITests;
-				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = ZCodeMobile;
-			};
-			name = Debug;
-		};
 		B161ECDBEF1528360701F328 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -699,22 +630,6 @@
 			};
 			name = Release;
 		};
-		BC0C49FD5F125E5E7E504675 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.paco.ZCodeMobileUITests;
-				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = ZCodeMobile;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -723,15 +638,6 @@
 			buildConfigurations = (
 				86DB85CE37603A7A6B887003 /* Debug */,
 				B161ECDBEF1528360701F328 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
-		};
-		A41060A7D37A9689F9805F33 /* Build configuration list for PBXNativeTarget "ZCodeMobileUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				9C83EC15C0E91A95F94501BA /* Debug */,
-				BC0C49FD5F125E5E7E504675 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

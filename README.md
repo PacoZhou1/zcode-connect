@@ -43,7 +43,7 @@ python3 scripts/launch-simulator.py --install \
 
 ## 已有功能与实际边界
 
-- 主机/项目选择、任务列表与搜索、固定/归档/重命名、会话菜单。
+- 右上角切换电脑、主机/项目选择、任务列表与搜索、固定/归档/重命名、长按会话预览与未读标记。预览不清除未读，打开会话按主机时间戳条件清除。
 - 新任务、持久正文/附件草稿、稳定输入 ID 重试、流式回复、停止任务、工具步骤与结构化审批/问答。
 - 从主机读取模型、思考强度、权限和方案模式；保留主机选定模型，不替换为参考模型。
 - 目标和智能体入口由主机活动决定；暂停/恢复只在主机提供能力时出现。不伪造移除目标或未支持的主机命令。
@@ -59,9 +59,13 @@ python3 scripts/launch-simulator.py --install \
 - [持续进展](docs/PROGRESS.md)
 - [13 图验收地图](docs/REFERENCE_MAP.md)
 - [录屏动效依据与对照](docs/MOTION_REFERENCE.md)
+- [首页长按预览](docs/HOME_CONTEXT_REFERENCE.md)
+- [未读并发回归](docs/audit/UNREAD_REVIEW.md)
 - [前端流程审查](docs/audit/FRONTEND_FLOW_REVIEW.md)
 - [分页并发回归](docs/audit/SESSION_PAGINATION_REVIEW.md)
 - [后端交接](docs/backend/HANDOFF.md)
 - [安全远程连接方案](docs/backend/SECURE_CONNECTION.md)
 
 `evidence/` 保留构建日志、模拟器截图/录屏、独立验收数据。不同编号来自不同构建，最终统一截图仍在更新；不存在“全部像素已一致”的验收结论。源码没有推送 GitHub，也没有上传 TestFlight。真机签名需在 Xcode 中选择自己的开发团队。
+
+多电脑交互与验证边界见 [COMPUTER_SWITCHING.md](docs/COMPUTER_SWITCHING.md)。

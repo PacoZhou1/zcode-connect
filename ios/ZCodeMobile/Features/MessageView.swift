@@ -125,12 +125,22 @@ struct MessageView: View {
             ShareLink(item: message.text) { BranchShareGlyph().stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)).frame(width: 16, height: 16) }
                 .accessibilityLabel("分享回复")
             if store.showTimestamps {
-                Text(store.isReferenceMode ? (message.id == "ref-assistant-1" ? "星期五 19:04" : "星期五 21:53") : message.createdAt.formatted(date: .omitted, time: .shortened))
+                Text(timestampLabel)
                     .font(.system(size: 13))
             }
             Spacer()
         }.font(.system(size: 16, weight: .regular)).foregroundStyle(.secondary)
             .buttonStyle(.plain).padding(.vertical, 2)
+    }
+
+    private var timestampLabel: String {
+        guard store.isReferenceMode else { return message.createdAt.formatted(date: .omitted, time: .shortened) }
+        switch message.id {
+        case "preview-previous": return "10:32"
+        case "preview-answer": return "10:40"
+        case "ref-assistant-1": return "星期五 19:04"
+        default: return "星期五 21:53"
+        }
     }
 }
 
