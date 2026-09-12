@@ -16,6 +16,9 @@ import { HostActivity, activityFromProjection, emptyHostActivity } from './host-
 import { forkSession, forkRows, withForkTargets } from './fork.mjs';
 import { HookReviewManager } from './hook-review.mjs';
 
+const MAX_REFRESH_PASSES = 2;
+const MAX_REFRESH_RETRIES = 2;
+
 export class BridgeService extends EventEmitter {
   constructor({ runtimeDir, zcodeRoot, cliPath, acceptanceWorkspace, protocol, history, ownedHistory }) {
     super(); Object.assign(this, { runtimeDir, zcodeRoot, cliPath, acceptanceWorkspace });
@@ -31,6 +34,7 @@ export class BridgeService extends EventEmitter {
     for (const record of Object.values(this.registry.sessions)) if (['running', 'waiting'].includes(record.status)) { record.status = 'error'; record.recoveryReason = 'The bridge restarted before the previous turn was confirmed complete.'; }
     for (const draft of Object.values(this.registry.drafts)) if (draft.status === 'pending') draft.status = 'uncertain';
     this.snapshots = new Map(); this.initialized = new Set(); this.initializing = new Map(); this.refreshing = new Map(); this.refreshTimers = new Map(); this.mutations = new Map();
+    this.refreshRequested = new Set(); this.refreshFailures = new Map(); this.sessionStateVersions = new Map(); this.closing = false;
     this.events = new EventJournal();
     this.inputRuntimeEpoch = randomUUID();
     this.sessionPages = new SessionPages();
@@ -193,7 +197,7 @@ export class BridgeService extends EventEmitter {
       this.snapshots.set(id, snapshot); this.persist();
       const session = this.ownedDTO(this.registry.sessions[id]); this.events.publish('session.created', { session }, id);
       await this.protocol.request('session/subscribe', { sessionId: id, deliveryKind: 'web-remote-replayable', includeSnapshot: false });
-      this.initialized.add(id); return session;
+      this.initialized.add(id); if (this.refreshRequested.has(id)) this.queueRefresh(id, 0); return session;
     } catch (error) {
       if (draft && this.registry.drafts[draft.key].status !== 'accepted') { this.registry.drafts[draft.key].status = 'uncertain'; this.persist(); }
       throw error;
@@ -320,6 +324,7 @@ export class BridgeService extends EventEmitter {
       if (['idle', 'running', 'waiting', 'completed', 'error'].includes(snapshot.session?.status)) record.status = snapshot.session.status;
       await this.protocol.request('session/subscribe', { sessionId: id, deliveryKind: 'web-remote-replayable', includeSnapshot: false });
       this.initialized.add(id);
+      if (this.refreshRequested.has(id)) this.queueRefresh(id, 0);
     })();
     this.initializing.set(id, initialize);
     try { await initialize; } finally { this.initializing.delete(id); }
@@ -337,11 +342,15 @@ export class BridgeService extends EventEmitter {
     if (value.reasonCode === 'fault.command.queryUnavailable') throw this.inputPending(id, inputId, value.reasonCode);
     return sanitize(value);
   }
-  async finishInput(id, inputId, input, recovered) {
+  async finishInput(id, inputId, input, recovered, submittedState) {
     const acknowledgement = input.acknowledgement, record = this.requireOwned(id);
     if (['accepted', 'duplicate', 'noop'].includes(acknowledgement.status)) {
       input.status = 'accepted';
-      if (!recovered) { record.status = 'running'; record.updatedAt = iso(); }
+      // Admission may arrive after a turn/interaction lifecycle update. Keep that
+      // newer host state while persisting the input acknowledgement independently.
+      const sameLifecycle = submittedState?.version === (this.sessionStateVersions.get(id) ?? 0)
+        && submittedState?.runtimeEpoch === this.inputRuntimeEpoch;
+      if (!recovered && !this.closing && sameLifecycle) { record.status = 'running'; record.updatedAt = iso(); this.invalidateSessionState(id); }
       if (!record.customTitle && record.title === 'New task' && input.envelope?.payload.text) record.title = input.envelope.payload.text.slice(0, 80);
       this.persist(); this.events.publish('session.updated', { session: this.ownedDTO(record) }, id);
       // Query recovery must not turn an already completed task back into running,
@@ -361,6 +370,7 @@ export class BridgeService extends EventEmitter {
   }
   async submitInput(id, inputId, input, recovered = false) {
     input.attempted = true; input.status = 'pending'; this.persist();
+    const submittedState = { version: this.sessionStateVersions.get(id) ?? 0, runtimeEpoch: this.inputRuntimeEpoch };
     let acknowledgement;
     try {
       // This exact envelope (including issuedAt and attachment refs) is on disk
@@ -372,7 +382,7 @@ export class BridgeService extends EventEmitter {
       if (['runtime_timeout', 'runtime_unavailable', 'input_pending'].includes(error.code)) throw error;
       throw this.inputPending(id, inputId, 'command_ack_unavailable');
     }
-    this.persist(); return this.finishInput(id, inputId, input, recovered);
+    this.persist(); return this.finishInput(id, inputId, input, recovered, submittedState);
   }
   async recoverInput(id, inputId, input) {
     if (input.acknowledgement) {
@@ -429,7 +439,14 @@ export class BridgeService extends EventEmitter {
     for (const [key, frame] of this.protocol.interactions) if (frame.params.sessionId === id) this.protocol.interactions.delete(key);
     const deadline = Date.now() + 10000;
     do {
-      await this.refresh(id);
+      let timer;
+      // A shared read can outlive the confirmation window. Keep it available to
+      // other observers, but do not let it extend this stop request's deadline.
+      const refreshed = await Promise.race([
+        this.refresh(id).then(() => true),
+        new Promise(resolve => { timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now())); }),
+      ]).finally(() => clearTimeout(timer));
+      if (!refreshed) break;
       const snapshot = this.snapshots.get(id);
       if (!snapshot?.runtime?.activeTurnId && !['running', 'waiting'].includes(snapshot?.session?.status)) {
         record.status = 'idle'; this.persist(); this.events.publish('session.updated', { session: this.ownedDTO(record) }, id);
@@ -444,7 +461,7 @@ export class BridgeService extends EventEmitter {
     const frame = this.protocol.interactions.get(id);
     if (!frame) throw new BridgeError(404, 'not_found', 'This request is no longer pending.');
     const record = this.requireOwned(frame.params.sessionId), sessionId = this.protocol.respond(id, body);
-    record.status = 'running'; this.persist();
+    record.status = 'running'; this.invalidateSessionState(sessionId); this.persist();
     this.events.publish('interaction.resolved', { interactionId: id }, sessionId);
     this.events.publish('session.updated', { session: this.ownedDTO(record) }, sessionId); return { accepted: true };
   }
@@ -455,42 +472,86 @@ export class BridgeService extends EventEmitter {
     return workspaceChanges(path);
   }
   onInteraction(id, frame) {
+    if (this.closing) return;
     const sessionId = frame.params.sessionId, record = this.registry.sessions[sessionId];
     if (!record) return;
-    record.status = 'waiting'; this.persist();
+    record.status = 'waiting'; this.invalidateSessionState(sessionId); this.persist();
     this.events.publish('interaction.requested', { interaction: this.pendingInteractions(sessionId).find(i => i.id === id) }, sessionId);
     this.events.publish('session.updated', { session: this.ownedDTO(record) }, sessionId);
   }
   onRuntimeEvent(event) {
+    if (this.closing) return;
     const id = event.sessionId, record = this.registry.sessions[id]; if (!record) return;
-    if (event.type === 'turn.started') record.status = 'running';
-    if (event.type === 'turn.completed') record.status = record.stopRequestedAt || event.payload?.resultType === 'cancelled' ? 'idle' : 'completed';
-    if (event.type === 'turn.failed') record.status = record.stopRequestedAt ? 'idle' : 'error';
+    const state = event.type === 'turn.started' ? 'running'
+      : event.type === 'turn.completed' ? record.stopRequestedAt || event.payload?.resultType === 'cancelled' ? 'idle' : 'completed'
+        : event.type === 'turn.failed' ? record.stopRequestedAt ? 'idle' : 'error' : undefined;
+    if (state) { record.status = state; this.invalidateSessionState(id); }
     record.updatedAt = iso();
+    if (state) this.persist();
     this.events.publish('runtime.event', { event }, id);
-    if (!this.refreshTimers.has(id)) this.refreshTimers.set(id, setTimeout(() => { this.refreshTimers.delete(id); this.refresh(id).catch(() => {}); }, event.type.startsWith('turn.') ? 20 : 200));
+    if (state) this.events.publish('session.updated', { session: this.ownedDTO(record) }, id);
+    this.queueRefresh(id, event.type.startsWith('turn.') ? 20 : 200);
+  }
+  invalidateSessionState(id) {
+    this.sessionStateVersions.set(id, (this.sessionStateVersions.get(id) ?? 0) + 1);
+  }
+  queueRefresh(id, delay = 200) {
+    if (this.closing) return;
+    this.refreshRequested.add(id);
+    // session/subscribe may deliver live events before its response. Retain the
+    // request now; initialization schedules it after the subscription is ready.
+    if (!this.initialized.has(id)) return;
+    if (this.refreshing.has(id) || this.refreshTimers.has(id)) return;
+    this.refreshTimers.set(id, setTimeout(() => { this.refreshTimers.delete(id); this.refresh(id).catch(() => {}); }, delay));
   }
   async refresh(id) {
-    if (!this.initialized.has(id)) return;
+    if (this.closing || !this.initialized.has(id)) return;
+    this.refreshRequested.add(id);
     if (this.refreshing.has(id)) return this.refreshing.get(id);
-    const operation = (async () => {
-      if (this.registry.sessions[id]?.pendingRuntimeTitle) await this.syncPendingTitle(id);
-      const snapshot = await this.protocol.request('session/read', { sessionId: id, messageLimit: 500 });
-      const before = normalizeMessages(this.snapshots.get(id)?.messages ?? []), after = withForkTargets(normalizeMessages(snapshot.messages ?? []), this.hostActivity.projections.get(id));
-      this.snapshots.set(id, snapshot);
-      const map = new Map(before.map(m => [m.id, JSON.stringify(m)]));
-      for (const message of after) if (map.get(message.id) !== JSON.stringify(message)) this.events.publish('message.updated', { message }, id);
-      const record = this.registry.sessions[id];
-      if (record) {
-        if (typeof snapshot.settings?.mode?.current === 'string') record.mode = snapshot.settings.mode.current;
-        const state = snapshot.session?.status;
-        if (['running', 'waiting', 'completed', 'error'].includes(state)) record.status = state;
-        else if (state === 'idle' && ['running', 'waiting'].includes(record.status)) record.status = 'idle';
-        record.updatedAt = iso(); this.persist(); this.events.publish('session.updated', { session: this.ownedDTO(record) }, id);
+    clearTimeout(this.refreshTimers.get(id)); this.refreshTimers.delete(id);
+    // Publish the shared promise before the first read. Events received during an
+    // in-flight read request another pass; joining the promise must not swallow them.
+    const operation = Promise.resolve().then(async () => {
+      for (let pass = 0; pass < MAX_REFRESH_PASSES && this.refreshRequested.has(id); pass++) {
+        this.refreshRequested.delete(id);
+        const stateVersion = this.sessionStateVersions.get(id) ?? 0;
+        if (this.registry.sessions[id]?.pendingRuntimeTitle) await this.syncPendingTitle(id);
+        const snapshot = await this.protocol.request('session/read', { sessionId: id, messageLimit: 500 });
+        if (this.closing || !this.initialized.has(id)) return;
+        this.refreshFailures.delete(id);
+        // A read started before a turn/interaction transition can contain an old
+        // running state and an empty assistant row that hides its persisted final text.
+        if (stateVersion !== (this.sessionStateVersions.get(id) ?? 0)) { this.refreshRequested.add(id); continue; }
+        const before = normalizeMessages(this.snapshots.get(id)?.messages ?? []), after = withForkTargets(normalizeMessages(snapshot.messages ?? []), this.hostActivity.projections.get(id));
+        this.snapshots.set(id, snapshot);
+        const map = new Map(before.map(m => [m.id, JSON.stringify(m)]));
+        for (const message of after) if (map.get(message.id) !== JSON.stringify(message)) this.events.publish('message.updated', { message }, id);
+        const record = this.registry.sessions[id];
+        if (record) {
+          if (typeof snapshot.settings?.mode?.current === 'string') record.mode = snapshot.settings.mode.current;
+          const state = snapshot.session?.status;
+          if (['running', 'waiting', 'completed', 'error'].includes(state)) record.status = state;
+          else if (state === 'idle' && ['running', 'waiting'].includes(record.status)) record.status = 'idle';
+          record.updatedAt = iso(); this.persist(); this.events.publish('session.updated', { session: this.ownedDTO(record) }, id);
+        }
       }
-    })();
+    });
     this.refreshing.set(id, operation);
-    try { return await operation; } finally { this.refreshing.delete(id); }
+    try { return await operation; } catch (error) {
+      const failures = (this.refreshFailures.get(id) ?? 0) + 1;
+      this.refreshFailures.set(id, failures);
+      if (!this.closing && this.initialized.has(id) && failures <= MAX_REFRESH_RETRIES) this.refreshRequested.add(id);
+      else {
+        this.refreshRequested.delete(id);
+        if (!this.closing) this.events.publish('resync.required', { reason: 'session_snapshot_read_failed', retryable: true }, id);
+      }
+      throw error;
+    } finally {
+      this.refreshing.delete(id);
+      // Yield between bounded passes so a long stream cannot hold an API caller
+      // indefinitely or turn event frequency into an unthrottled read loop.
+      if (this.refreshRequested.has(id)) this.queueRefresh(id, 200 * Math.max(1, this.refreshFailures.get(id) ?? 0));
+    }
   }
-  async close() { for (const timer of this.refreshTimers.values()) clearTimeout(timer); this.hostActivity.close(); await this.protocol.close(); }
+  async close() { this.closing = true; for (const timer of this.refreshTimers.values()) clearTimeout(timer); this.refreshTimers.clear(); this.refreshRequested.clear(); this.refreshFailures.clear(); this.hostActivity.close(); await this.protocol.close(); }
 }
