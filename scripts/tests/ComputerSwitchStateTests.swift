@@ -56,6 +56,151 @@ import Foundation
     @MainActor static func drainActor() async { for _ in 0..<100 { await Task.yield() } }
 
     @MainActor static func main() async throws {
+        await run("fresh installation requires a connection and durably records the initial gate") {
+            let f = Fixture(); defer { f.close() }
+            try check(f.store.profiles.isEmpty && !f.store.hasConnectedBefore && f.store.requiresInitialConnection, "Fresh install reached Home without a connection")
+            try check(f.defaults.object(forKey: "hasConnectedBefore") as? Bool == false, "Fresh-install false was not persisted before any profile can be saved")
+            await f.store.start()
+            try check(TestTransport.requests.isEmpty && f.store.requiresInitialConnection, "Empty startup attempted I/O or bypassed onboarding")
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
+            try check(reopened.requiresInitialConnection && !reopened.hasConnectedBefore, "Empty relaunch bypassed onboarding")
+        }
+        await run("a failed initial handshake remains gated after relaunch") {
+            let f = Fixture(); defer { f.close() }
+            TestTransport.handler = { request in
+                if request.path == "v1/status" { throw BridgeFailure(message: "Synthetic first connection failure", code: "offline") }
+                return nil
+            }
+            await f.connect()
+            try check(f.store.requiresInitialConnection && !f.store.hasConnectedBefore, "Failed handshake unlocked Home")
+            try check(f.store.connection == .failed("Synthetic first connection failure"), "Initial failure was hidden")
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
+            try check(reopened.requiresInitialConnection && !reopened.hasConnectedBefore, "Failed handshake became a successful prior connection on relaunch")
+        }
+        await run("saving a profile before failed initial index does not bypass the gate on relaunch") {
+            let f = Fixture(); defer { f.close() }
+            TestTransport.handler = { request in
+                if request.path.hasPrefix("v1/sessions?") { throw BridgeFailure(message: "Synthetic initial index failure", code: "offline") }
+                return nil
+            }
+            await f.connect()
+            try check(f.store.profiles == [f.profile] && f.defaults.data(forKey: "connections") != nil, "Fixture did not reach persisted-profile-before-index boundary")
+            try check(f.store.requiresInitialConnection && !f.store.hasConnectedBefore, "Saved profile was mistaken for initial connection success")
+            try check(f.defaults.object(forKey: "hasConnectedBefore") as? Bool == false, "Index failure changed the persistent gate")
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
+            try check(reopened.profiles == [f.profile] && reopened.requiresInitialConnection, "Existing failed profile bypassed onboarding during migration")
+            await reopened.start()
+            try check(reopened.requiresInitialConnection, "Automatic failed reconnect unlocked Home")
+        }
+        await run("only a completed initial index unlocks Home and the result survives disconnect and relaunch") {
+            let f = Fixture(); defer { f.close() }
+            let gate = Gate()
+            TestTransport.handler = { request in
+                if request.path.hasPrefix("v1/sessions?") { await gate.hold() }
+                return nil
+            }
+            let connecting = Task { await f.connect() }
+            defer { gate.release(); connecting.cancel() }
+            try await gate.waitUntilEntered()
+            try check(f.store.connection.isOnline && f.store.requiresInitialConnection, "Status handshake alone unlocked Home before index completion")
+            try check(!f.defaults.bool(forKey: "hasConnectedBefore"), "Success persisted while the initial index was pending")
+            gate.release(); await connecting.value
+            try check(f.store.session("S") != nil && f.store.hasConnectedBefore && !f.store.requiresInitialConnection, "Successful initial index did not unlock Home")
+            try check(f.defaults.bool(forKey: "hasConnectedBefore"), "Connection success was not persisted")
+            f.store.disconnect()
+            try check(!f.store.requiresInitialConnection, "An ordinary disconnect reset completed onboarding")
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
+            try check(reopened.connection == .disconnected && reopened.hasConnectedBefore && !reopened.requiresInitialConnection, "Offline relaunch lost successful connection history")
+        }
+        await run("reference mode skips onboarding without persisting a real connection") {
+            let f = Fixture(); defer { f.close() }
+            f.store.enterReferenceMode()
+            try check(f.store.isReferenceMode && !f.store.requiresInitialConnection && !f.store.hasConnectedBefore, "Reference preview did not bypass only the visible gate")
+            try check(!f.defaults.bool(forKey: "hasConnectedBefore") && TestTransport.requests.isEmpty, "Reference preview claimed or attempted a real connection")
+            f.store.leaveReferenceMode(); await drainActor()
+            try check(!f.store.isReferenceMode && f.store.requiresInitialConnection, "Leaving reference preview bypassed first connection")
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
+            try check(reopened.requiresInitialConnection && !reopened.isReferenceMode && !reopened.hasConnectedBefore, "Reference-only relaunch entered Home")
+        }
+        await run("legacy saved configuration migrates once without replacing explicit false") {
+            let f = Fixture(); defer { f.close() }
+            f.defaults.set(try JSONEncoder().encode([f.profile]), forKey: "connections")
+            f.defaults.set(f.profile.id, forKey: "activeConnection")
+            f.defaults.removeObject(forKey: "hasConnectedBefore")
+            let migrated = AppStore(defaults: f.defaults); defer { migrated.disconnect() }
+            try check(migrated.profiles == [f.profile] && migrated.activeProfileID == f.profile.id, "Migration changed the saved computer")
+            try check(migrated.hasConnectedBefore && !migrated.requiresInitialConnection && f.defaults.bool(forKey: "hasConnectedBefore"), "Legacy profiles were not migrated to prior connection history")
+            try check(TestTransport.requests.isEmpty, "Legacy migration performed remote I/O")
+            f.defaults.set(false, forKey: "hasConnectedBefore")
+            let explicitlyUnconnected = AppStore(defaults: f.defaults); defer { explicitlyUnconnected.disconnect() }
+            try check(!explicitlyUnconnected.hasConnectedBefore && explicitlyUnconnected.requiresInitialConnection, "Migration overrode an explicitly persisted false")
+        }
+        await run("a cancelled connection cannot unlock onboarding through its late index") {
+            let f = Fixture(); defer { f.close() }
+            let gate = Gate()
+            TestTransport.handler = { request in
+                if request.path.hasPrefix("v1/sessions?") { await gate.hold() }
+                return nil
+            }
+            let connecting = Task { await f.connect() }
+            defer { gate.release(); connecting.cancel() }
+            try await gate.waitUntilEntered()
+            f.store.disconnect(); gate.release(); await connecting.value
+            try check(f.store.connection == .disconnected && f.store.requiresInitialConnection && !f.store.hasConnectedBefore, "Late cancelled index unlocked Home")
+            try check(!f.defaults.bool(forKey: "hasConnectedBefore"), "Cancelled epoch persisted onboarding success")
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
+            try check(reopened.requiresInitialConnection, "Cancelled connection unlocked Home on relaunch")
+        }
+        await run("superseded initial index cannot unlock onboarding when its replacement fails") {
+            let f = Fixture(); defer { f.close() }
+            let first = Gate(), replacement = Gate()
+            var sessionReads = 0
+            TestTransport.handler = { request in
+                if request.path.hasPrefix("v1/sessions?") {
+                    sessionReads += 1
+                    if sessionReads == 1 { await first.hold() }
+                    else { await replacement.hold(); throw BridgeFailure(message: "Synthetic replacement index failure", code: "offline") }
+                }
+                return nil
+            }
+            let connecting = Task { await f.connect() }
+            defer { first.release(); replacement.release(); connecting.cancel() }
+            try await first.waitUntilEntered()
+            let refreshing = Task { await f.store.refresh() }
+            defer { refreshing.cancel() }
+            try await replacement.waitUntilEntered()
+            first.release(); await connecting.value
+            replacement.release(); await refreshing.value
+            try check(f.store.sessions.isEmpty && f.store.connection == .failed("Synthetic replacement index failure"), "Fixture did not supersede the initial index before replacement failure")
+            try check(f.store.requiresInitialConnection && !f.store.hasConnectedBefore, "An index discarded by indexRequest guard was treated as successful onboarding")
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
+            try check(reopened.requiresInitialConnection, "Discarded initial index permanently unlocked Home")
+        }
+        await run("a successful replacement index completes initial onboarding") {
+            let f = Fixture(); defer { f.close() }
+            let first = Gate(), replacement = Gate()
+            var sessionReads = 0
+            TestTransport.handler = { request in
+                if request.path.hasPrefix("v1/sessions?") {
+                    sessionReads += 1
+                    if sessionReads == 1 { await first.hold() }
+                    else { await replacement.hold(); return listing("successful replacement") }
+                }
+                return nil
+            }
+            let connecting = Task { await f.connect() }
+            defer { first.release(); replacement.release(); connecting.cancel() }
+            try await first.waitUntilEntered()
+            let refreshing = Task { await f.store.refresh() }
+            defer { refreshing.cancel() }
+            try await replacement.waitUntilEntered()
+            first.release(); await connecting.value
+            let gatedWhileReplacementPending = f.store.requiresInitialConnection
+            replacement.release(); await refreshing.value
+            try check(gatedWhileReplacementPending, "Discarded first index unlocked onboarding before its successful replacement")
+            try check(f.store.session("S")?.title == "successful replacement task" && f.store.hasConnectedBefore && !f.store.requiresInitialConnection, "Applied replacement index failed to complete onboarding")
+            try check(f.defaults.bool(forKey: "hasConnectedBefore"), "Replacement success was not durable")
+        }
         await run("A to B clears old content and drafts before the first response") {
             let f = await fixture(); defer { f.close() }; seedPrivateA(f.store)
             let gate = Gate()

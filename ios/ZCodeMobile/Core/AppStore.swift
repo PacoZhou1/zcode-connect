@@ -34,6 +34,8 @@ final class AppStore {
     var hostAgents: [String: RelayHostAgents] = [:]
     var changingGoals: Set<String> = []
     @ObservationIgnored private var changingHookReviews: Set<String> = []
+    var hasConnectedBefore = false
+    var requiresInitialConnection: Bool { !isReferenceMode && !hasConnectedBefore }
     var profiles: [ConnectionProfile] = []
     var activeProfileID: String?
     var selectedProjectID: String?
@@ -87,6 +89,9 @@ final class AppStore {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         profiles = decode([ConnectionProfile].self, key: "connections") ?? []
+        hasConnectedBefore = defaults.object(forKey: "hasConnectedBefore") == nil
+            ? !profiles.isEmpty : defaults.bool(forKey: "hasConnectedBefore")
+        defaults.set(hasConnectedBefore, forKey: "hasConnectedBefore")
         activeProfileID = defaults.string(forKey: "activeConnection")
         drafts = decode([String: String].self, key: scopedKey("drafts")) ?? [:]
         localTitles = decode([String: String].self, key: scopedKey("titles")) ?? [:]
@@ -559,6 +564,10 @@ final class AppStore {
             }
         }
         if !projects.contains(where: { $0.id == selectedProjectID }) { selectedProjectID = projects.first?.id }
+        if !hasConnectedBefore {
+            hasConnectedBefore = true
+            defaults.set(true, forKey: "hasConnectedBefore")
+        }
     }
 
     func previewMessages(_ id: String) async throws -> [ChatMessage] {

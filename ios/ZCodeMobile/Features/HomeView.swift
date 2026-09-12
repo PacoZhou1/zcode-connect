@@ -320,6 +320,8 @@ struct HomeView: View {
                     Button("添加电脑", systemImage: "plus") { store.sheet = .pairing }
                     Button("管理电脑", systemImage: "laptopcomputer") { store.sheet = .connections }
                 } label: { Label("切换电脑", systemImage: "laptopcomputer") }
+                Button("添加连接", systemImage: "plus") { store.sheet = .pairing }
+                    .accessibilityIdentifier("home.addConnection")
             }
             Picker("排序方式", selection: $store.sortOrder) {
                 ForEach(SortOrder.allCases) { sort in Label(sort.rawValue, systemImage: sort.symbol).tag(sort) }
@@ -329,7 +331,6 @@ struct HomeView: View {
                     store.errorMessage = "当前连接使用电脑上的 ZCode。云端任务需要对应的服务支持。"
                 }
                 Button(store.showArchived ? "全部任务" : "已归档任务", systemImage: "archivebox") { store.showArchived.toggle() }
-                Button("添加连接", systemImage: "link") { store.sheet = .pairing }
                 Button("设置", systemImage: "gearshape") { store.sheet = .settings }
             }
             if store.isReferenceMode {

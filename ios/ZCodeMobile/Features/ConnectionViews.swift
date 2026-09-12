@@ -72,6 +72,8 @@ struct PairingView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     var embedded = false
+    var onboarding = false
+    @State private var manualConnection = false
     @State private var name = ""
     @State private var address = ""
     @State private var token = ""
@@ -109,7 +111,7 @@ struct PairingView: View {
                     Image(systemName: "laptopcomputer.and.iphone").font(.system(size: 42, weight: .light))
                         .foregroundStyle(ZTheme.accent).padding(.vertical, 8)
                     Text("连接你的电脑").font(.title2.weight(.semibold))
-                    Text("在电脑的 ZCode 中开启远程控制，然后扫描二维码，或粘贴连接信息。")
+                    Text(onboarding ? "先连接一台电脑，再查看和继续你的任务。电脑需要保持运行和联网。" : "在电脑的 ZCode 左下角点击手机图标，开启远程控制，然后扫描或粘贴连接链接。")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }.listRowBackground(Color.clear)
             }
@@ -120,6 +122,11 @@ struct PairingView: View {
                 Button {
                     if let value = UIPasteboard.general.string { parse(value) }
                 } label: { Label("粘贴连接信息", systemImage: "doc.on.clipboard") }
+            }
+            if onboarding, !store.profiles.isEmpty {
+                Section {
+                    Button("选择已添加的电脑", systemImage: "laptopcomputer") { store.sheet = .connections }
+                }
             }
             if choosingWorkspace {
                 Section("选择电脑上的项目") {
@@ -160,29 +167,33 @@ struct PairingView: View {
                 if relayPayload != nil {
                     Label("已识别 ZCode 官方远程连接", systemImage: "checkmark.shield").foregroundStyle(.secondary)
                 } else {
-                TextField("连接地址", text: $address)
+                TextField(manualConnection ? "服务地址（https://…）" : "ZCode 连接链接", text: $address)
                     .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .accessibilityIdentifier("pairing.address")
-                    .onSubmit { if (try? RelayPairing(scannedURL: address)) != nil { parse(address) } }
+                    .onSubmit { if (try? RelayPairing(scannedURL: address.trimmingCharacters(in: .whitespacesAndNewlines))) != nil { parse(address) } }
+                if manualConnection {
                 SecureField("连接密钥", text: $token)
                     .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .accessibilityIdentifier("pairing.token")
+                }
                 }
                 if !certificateSHA256.isEmpty {
                     Label("已载入电脑的连接证书", systemImage: "lock.shield")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             } header: {
-                Text(relayPayload == nil ? "手动连接" : "ZCode 远程")
+                Text(manualConnection ? "自托管连接" : "ZCode 远程控制（推荐）")
             } footer: {
-                Text("连接密钥只保存在这台设备的钥匙串中。")
+                Text(manualConnection ? "需要已运行的兼容连接服务。SSH 地址本身不是 ZCode 远控链接。密钥保存在钥匙串中。" : "电脑左下角手机图标 → 移动端远程控制 → 复制链接。首次连接后选择项目。")
             }
             if let failure {
                 Section { Text(failure).foregroundStyle(.red).font(.subheadline) }
             }
             Section {
                 Button {
-                    if relayPayload != nil { confirmRelay = true } else { Task { await connect() } }
+                    if relayPayload != nil { confirmRelay = true }
+                    else if !manualConnection { parse(address); if relayPayload != nil { confirmRelay = true } }
+                    else { Task { await connect() } }
                 } label: {
                     HStack {
                         Spacer()
@@ -191,17 +202,24 @@ struct PairingView: View {
                         Spacer()
                     }
                 }
-                .disabled(connecting || choosingWorkspace || (relayPayload == nil && (AppStore.validatedURL(address) == nil || token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)))
+                .disabled(connecting || choosingWorkspace || (relayPayload == nil && (manualConnection
+                    ? (AppStore.validatedURL(address) == nil || token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    : (try? RelayPairing(scannedURL: address.trimmingCharacters(in: .whitespacesAndNewlines))) == nil)))
                 .accessibilityIdentifier("pairing.connect")
             }
             Section {
+                if !choosingWorkspace {
+                    Button(manualConnection ? "使用 ZCode 远程链接" : "自托管连接（高级）") {
+                        manualConnection.toggle(); address = ""; token = ""; certificateSHA256 = ""; relayPayload = nil; failure = nil
+                    }.disabled(connecting).accessibilityIdentifier("pairing.connectionMethod")
+                }
                 DisclosureGroup("在哪里找到连接信息？") {
-                    Text("在 ZCode 的远程控制页面启用连接，扫描或复制连接二维码。\n\n如果使用随本项目提供的 Mac 连接服务，也可以填入服务地址和密钥。")
+                    Text("在电脑 ZCode 左下角点击手机图标，复制远控链接。电脑可以在家里，也可以在外面，但都需要联网且保持 ZCode 运行。\n\n若项目通过 SSH 运行，先在电脑 ZCode 中连接该项目，再从这里接入。手机不会新建 SSH 环境。\n\n自托管方式需要另行部署兼容服务及安全网络，目前不等同于官方桌面远控。")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             }
         }
-        .navigationTitle("添加连接").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(onboarding ? "连接你的电脑" : "添加连接").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if !embedded {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -243,6 +261,7 @@ struct PairingView: View {
         guard !connecting, !choosingWorkspace else { return }
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if let pairing = try? RelayPairing(scannedURL: value) {
+            manualConnection = false
             relayPayload = value; name = pairing.deviceName
             address = ""; token = ""; certificateSHA256 = ""; failure = nil
             return
@@ -254,12 +273,14 @@ struct PairingView: View {
         }
         if let data = raw.data(using: .utf8), let payload = try? JSONDecoder().decode(PairingPayload.self, from: data),
            let url = payload.url ?? payload.baseURL, AppStore.validatedURL(url) != nil {
+            manualConnection = true
             address = url
             token = payload.token
             name = payload.name ?? ""
             certificateSHA256 = payload.certificateSHA256?.lowercased() ?? ""
             failure = nil
         } else if AppStore.validatedURL(raw) != nil {
+            manualConnection = true
             address = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             certificateSHA256 = ""
         } else {

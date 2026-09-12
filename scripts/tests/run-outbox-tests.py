@@ -45,6 +45,9 @@ outbox_fixture_source = root / "scripts/tests/OutboxStateTests.swift"
 test_source = root / "scripts/tests" / {"outbox": "OutboxStateTests.swift", "session-pagination": "SessionPaginationStateTests.swift", "unread": "UnreadStateTests.swift", "metadata-actions": "MetadataActionStateTests.swift", "computer-switch": "ComputerSwitchStateTests.swift", "fork": "ForkStateTests.swift", "file-listing": "FileListingStateTests.swift", "hook-review": "HookReviewStateTests.swift"}[suite]
 relay_stub_source = root / "scripts/tests/HostActivityStateTests.swift"
 sources += [test_source, relay_stub_source]
+sources.append(Path(__file__).resolve())
+if suite == "computer-switch":
+    sources += [root / "scripts/tests/run-computer-switch-tests.py", root / "ios/ZCodeMobile/App/AppShell.swift", root / "ios/ZCodeMobile/Features/ConnectionViews.swift"]
 if uses_shared_fixtures:
     sources.append(outbox_fixture_source)
 contents = {p: p.read_bytes() for p in sources}

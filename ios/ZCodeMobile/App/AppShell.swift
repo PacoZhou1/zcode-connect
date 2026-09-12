@@ -6,7 +6,13 @@ struct AppShell: View {
     var body: some View {
         @Bindable var store = store
         NavigationStack(path: $store.path) {
-            HomeView()
+            Group {
+                if store.requiresInitialConnection {
+                    PairingView(embedded: true, onboarding: true)
+                } else {
+                    HomeView()
+                }
+            }
                 .navigationDestination(for: AppRoute.self) { route in
                     switch route {
                     case .session(let id): ChatView(sessionID: id)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the five bounded computer-selection scenarios; no real I/O or UIKit."""
+"""Run computer selection and persistent first-connection gates; no services or UIKit."""
 from pathlib import Path
 import os
 import sys
