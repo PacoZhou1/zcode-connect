@@ -8,3 +8,4 @@ bridge/.runtime/
 evidence/private/
 *.xcresult/
 *.zip
+delivery/
