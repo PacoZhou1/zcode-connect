@@ -1,0 +1,10 @@
+.DS_Store
+ios/DerivedData/
+**/xcuserdata/
+.build/
+bridge/.env
+bridge/.state/
+bridge/.runtime/
+evidence/private/
+*.xcresult/
+*.zip

@@ -1,0 +1,61 @@
+name: ZCodeMobile
+options:
+  bundleIdPrefix: dev.paco
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "26.6"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_CFBundleDisplayName: ZCode
+    INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+    INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+    INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+    INFOPLIST_KEY_NSLocalNetworkUsageDescription: 连接你的电脑，查看与继续 ZCode 任务。
+    INFOPLIST_KEY_NSCameraUsageDescription: 扫描电脑上的连接二维码，或为任务拍摄照片。
+    INFOPLIST_KEY_NSMicrophoneUsageDescription: 将你的语音转换成任务内容。
+    INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: 将语音转换为可编辑的文字，确认后发送。
+    INFOPLIST_KEY_NSPhotoLibraryUsageDescription: 为任务选择需要的照片。
+    SWIFT_STRICT_CONCURRENCY: complete
+targets:
+  ZCodeMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: ZCodeMobile
+        excludes: ["Core/Relay/*.md", "Core/Relay/*.sh", "Core/RelayAdapter/*.md", "Core/RelayAdapter/*.sh"]
+    info:
+      path: ZCodeMobile/Resources/Info.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.paco.zcode.mobile
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": ZCodeMobile/Resources/Simulator.entitlements
+  ZCodeMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [ZCodeMobileTests]
+    dependencies:
+      - target: ZCodeMobile
+  ZCodeMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [ZCodeMobileUITests]
+    dependencies:
+      - target: ZCodeMobile
+schemes:
+  ZCodeMobile:
+    build:
+      targets:
+        ZCodeMobile: all
+    test:
+      targets:
+        - ZCodeMobileTests
+        - ZCodeMobileUITests
