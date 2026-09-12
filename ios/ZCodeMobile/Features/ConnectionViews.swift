@@ -260,6 +260,8 @@ struct PairingView: View {
     private func parse(_ raw: String) {
         guard !connecting, !choosingWorkspace else { return }
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A replacement payload must never reuse another host's address or credential.
+        address = ""; token = ""; certificateSHA256 = ""; relayPayload = nil; failure = nil
         if let pairing = try? RelayPairing(scannedURL: value) {
             manualConnection = false
             relayPayload = value; name = pairing.deviceName
