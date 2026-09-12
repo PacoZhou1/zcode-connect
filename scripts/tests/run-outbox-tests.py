@@ -15,14 +15,14 @@ import tempfile
 import sys
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--suite", choices=("outbox", "session-pagination", "unread", "metadata-actions", "computer-switch", "fork", "file-listing", "hook-review"), default="outbox")
-parser.add_argument("--app-store-ref", help="For metadata-actions only: compile the real AppStore from a local Git revision, without checking it out")
+parser.add_argument("--suite", choices=("outbox", "session-pagination", "unread", "metadata-actions", "computer-switch", "stream-lifecycle", "fork", "file-listing", "hook-review"), default="outbox")
+parser.add_argument("--app-store-ref", help="For metadata-actions or stream-lifecycle: compile AppStore from a local Git revision without checking it out")
 args = parser.parse_args()
 suite = args.suite
-if args.app_store_ref and suite != "metadata-actions":
-    parser.error("--app-store-ref is limited to metadata-actions")
+if args.app_store_ref and suite not in ("metadata-actions", "stream-lifecycle"):
+    parser.error("--app-store-ref is limited to metadata-actions and stream-lifecycle")
 uses_shared_fixtures = suite != "outbox"
-artifact_prefix = {"outbox": "OUTBOX", "session-pagination": "SESSION_PAGINATION", "unread": "UNREAD", "metadata-actions": "METADATA_ACTION", "computer-switch": "COMPUTER_SWITCH", "fork": "FORK", "file-listing": "FILE_LISTING", "hook-review": "HOOK_REVIEW"}[suite]
+artifact_prefix = {"outbox": "OUTBOX", "session-pagination": "SESSION_PAGINATION", "unread": "UNREAD", "metadata-actions": "METADATA_ACTION", "computer-switch": "COMPUTER_SWITCH", "stream-lifecycle": "STREAM_LIFECYCLE", "fork": "FORK", "file-listing": "FILE_LISTING", "hook-review": "HOOK_REVIEW"}[suite]
 if args.app_store_ref:
     artifact_prefix += "_BASELINE"
 root = Path(__file__).resolve().parents[2]
@@ -42,7 +42,7 @@ if (core / "DraftAttachmentJournal.swift").exists():
     dependencies.append(core / "DraftAttachmentJournal.swift")
 sources += dependencies
 outbox_fixture_source = root / "scripts/tests/OutboxStateTests.swift"
-test_source = root / "scripts/tests" / {"outbox": "OutboxStateTests.swift", "session-pagination": "SessionPaginationStateTests.swift", "unread": "UnreadStateTests.swift", "metadata-actions": "MetadataActionStateTests.swift", "computer-switch": "ComputerSwitchStateTests.swift", "fork": "ForkStateTests.swift", "file-listing": "FileListingStateTests.swift", "hook-review": "HookReviewStateTests.swift"}[suite]
+test_source = root / "scripts/tests" / {"outbox": "OutboxStateTests.swift", "session-pagination": "SessionPaginationStateTests.swift", "unread": "UnreadStateTests.swift", "metadata-actions": "MetadataActionStateTests.swift", "computer-switch": "ComputerSwitchStateTests.swift", "stream-lifecycle": "StreamLifecycleStateTests.swift", "fork": "ForkStateTests.swift", "file-listing": "FileListingStateTests.swift", "hook-review": "HookReviewStateTests.swift"}[suite]
 relay_stub_source = root / "scripts/tests/HostActivityStateTests.swift"
 sources += [test_source, relay_stub_source]
 sources.append(Path(__file__).resolve())

@@ -22,6 +22,7 @@ struct TestEvent: Sendable { let envelope: BridgeEnvelope; let delivered: Checke
 @MainActor enum TestTransport {
     static var requests: [TestRequest] = []
     static var handler: (@MainActor (TestRequest) async throws -> JSONValue?)?
+    static var eventExitHandler: (@MainActor (String) async throws -> Void)?
     static var subscribers: [String: AsyncStream<TestEvent>.Continuation] = [:]
     static var eventSubscriptions: [String: Int] = [:]
     static var status = "idle"
@@ -29,7 +30,7 @@ struct TestEvent: Sendable { let envelope: BridgeEnvelope; let delivered: Checke
     static var created = 0
     static var uploaded = 0
     static var drafts: [String: String] = [:]
-    static func reset() { requests = []; handler = nil; subscribers = [:]; eventSubscriptions = [:]; status = "idle"; title = "Synthetic task"; created = 0; uploaded = 0; drafts = [:] }
+    static func reset() { requests = []; handler = nil; eventExitHandler = nil; subscribers = [:]; eventSubscriptions = [:]; status = "idle"; title = "Synthetic task"; created = 0; uploaded = 0; drafts = [:] }
     static func session(_ id: String = "S", status: String? = nil, title: String? = nil) -> JSONValue {
         .object(["id": .string(id), "title": .string(title ?? self.title), "projectId": .string("P"),
                  "projectName": .string("Synthetic project"), "status": .string(status ?? self.status),
@@ -87,6 +88,9 @@ struct BridgeClient: Sendable {
         TestTransport.eventSubscriptions[baseURL.host!, default: 0] += 1
         let stream = AsyncStream<TestEvent> { TestTransport.subscribers[baseURL.host!] = $0 }
         for await event in stream { await onEvent(event.envelope); event.delivered.resume() }
+        // Tests may delay an exit even after cancellation, as URLSession/transport
+        // cleanup can return normally or throw after a newer connection is ready.
+        try await TestTransport.eventExitHandler?(baseURL.host!)
     }
 }
 

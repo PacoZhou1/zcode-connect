@@ -1410,13 +1410,14 @@ final class AppStore {
                     try await client.events(after: self.eventCursor) { [weak self] event in
                         await self?.handle(event, epoch: epoch)
                     }
+                    guard !Task.isCancelled, epoch == self.connectionEpoch else { return }
                     self.streamConnected = false
                     if self.activeProfile?.isRelay == true {
                         self.connection = .failed("远程连接已结束，请在连接页面重新连接电脑。")
                         return
                     }
                 } catch {
-                    if Task.isCancelled { return }
+                    guard !Task.isCancelled, epoch == self.connectionEpoch else { return }
                     self.streamConnected = false
                     if self.activeProfile?.isRelay == true {
                         self.connection = .failed((error as? BridgeFailure)?.code == "controller_replaced" ? "另一台手机已接管连接。你可以在连接页面手动重新连接。" : "远程连接已断开，草稿已保留。请手动重新连接电脑。")

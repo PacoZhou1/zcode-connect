@@ -1,4 +1,4 @@
-#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS
+#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS || RELAY_RECOVERY_SELF_TESTS
 import Foundation
 
 private struct TestFailure: Error { let message: String }
@@ -65,6 +65,31 @@ actor MockRelaySocket: RelaySocketTransport {
     var serviceCalls: [RelayJSON] = []
     var subagentSnapshots: [String: RelayJSON] = [:]
     var unavailableSubagents = Set<String>()
+    var recoveryBehavior = "normal"
+    var recoveryRequests = 0
+    var socketConnectCount = 0
+    var dropHeartbeats = false
+    func setRecoveryBehavior(_ value: String) { recoveryBehavior = value }
+    func setDropHeartbeats(_ value: Bool) { dropHeartbeats = value }
+    func failReceive() { connected = false; receiver?.resume(throwing: URLError(.networkConnectionLost)); receiver = nil }
+    func sendRecoveryGap(ordinal: Int = 2) throws {
+        let frame = logical(.object(["kind": .string("deltas"), "deltas": .array([])]), from: 99, to: 100)
+        var value = try wire(frame, ordinal: ordinal).requiringObject(); value["deliveryKind"] = .string("online")
+        try sendRPC(.init(header: [.int32(204), .int32(listenerID!)], body: try .object(.object(value))))
+    }
+    func sendOnlineText(from: Int, to: Int, ordinal: Int, text: String) throws {
+        let delta: RelayJSON = .object(["op": .string("row.delta"), "rowId": .int(1), "path": .string("text"), "append": .string(text)])
+        let frame = logical(.object(["kind": .string("deltas"), "deltas": .array([delta])]), from: from, to: to)
+        var value = try wire(frame, ordinal: ordinal).requiringObject(); value["deliveryKind"] = .string("online")
+        try sendRPC(.init(header: [.int32(204), .int32(listenerID!)], body: try .object(.object(value))))
+    }
+    func sendRecoverySnapshot(sequence: Int = 20, ordinal: Int = 3) throws {
+        var projection = try baseProjection().requiringObject()
+        projection["rows"] = .object(["window": .array([.object(["rowId": .int(1), "kind": .string("assistantText"), "text": .string("Recovered complete text")])]), "totalCount": .int(1), "firstRowId": .int(1)])
+        let frame = logical(.object(["kind": .string("snapshot"), "snapshot": .object(projection)]), to: sequence)
+        var value = try wire(frame, ordinal: ordinal).requiringObject(); value["deliveryKind"] = .string("recovery")
+        try sendRPC(.init(header: [.int32(204), .int32(listenerID!)], body: try .object(.object(value))))
+    }
     func useSubagentSnapshot(_ value: RelayJSON, sessionID: String) { subagentSnapshots[sessionID] = value }
     func setSubagentUnavailable(_ sessionID: String, value: Bool) { if value { unavailableSubagents.insert(sessionID) } else { unavailableSubagents.remove(sessionID) } }
     func listSubagentAsTask(_ sessionID: String) { registeredSessions.insert(sessionID) }
@@ -91,7 +116,7 @@ actor MockRelaySocket: RelaySocketTransport {
         let model: RelayJSON = .object(["providerId": .string("host-provider"), "modelId": .string("host-model")])
         return .object(["session": .object(["sessionId": .string(sessionID), "title": .string(titles[sessionID] ?? "Original desktop task"), "status": .string("completed")]), "settings": .object(["model": .object(["current": model, "available": .array([.object(["ref": model, "label": .string("Host model"), "reasoning": .object(["levels": .array([.object(["value": .string("max")]), .object(["value": .string("high")])])]), "supportsImages": .bool(imagesSupported), "supportsPdf": .bool(false)])])]), "thoughtLevel": .object(["current": .string(configurationThought), "available": .array([.object(["value": .string("max")]), .object(["value": .string("high")])])]), "mode": .object(["current": .string(configurationMode)])]), "messages": .array([]), "runtime": .object([:])])
     }
-    func connect(to url: URL) async throws { try require(url.host == "zcode.z.ai", "Wrong host"); connected = true }
+    func connect(to url: URL) async throws { try require(url.host == "zcode.z.ai", "Wrong host"); connected = true; socketConnectCount += 1 }
     func close() async { connected = false; receiver?.resume(throwing: RelayFailure.closed()); receiver = nil; inbox.removeAll() }
     func receive() async throws -> String {
         if !inbox.isEmpty { return inbox.removeFirst() }; guard connected else { throw RelayFailure.closed() }
@@ -117,7 +142,7 @@ actor MockRelaySocket: RelaySocketTransport {
             let pairing = try RelayPairing(scannedURL: "https://zcode.z.ai/remote/v4?sid=mock-desktop&hash=mock-pairing-value-0123456789-abcdef")
             try require(message["proof"].string == pairing.challengeProof(nonce: "nonce-test"), "HMAC proof differs")
             try push(.object(["type": .string("auth_ack"), "pair_status": .string("matched")]))
-        case "pair_status_query": try push(.object(["type": .string("pair_status_ack"), "pair_status": .string("matched")]))
+        case "pair_status_query": if !dropHeartbeats { try push(.object(["type": .string("pair_status_ack"), "pair_status": .string("matched")])) }
         case "data":
             let value = message["payload"]
             if value["zcode_type"].string == "bootstrap-request" || value["zcode_type"].string == "workspace-list-request" {
@@ -206,6 +231,11 @@ actor MockRelaySocket: RelaySocketTransport {
                 try success(id, .object(["nextChunkIndex": .int(params["chunkIndex"].integer! + 1)]))
             case "attachmentCommitV4": try success(id, .object(["ref": .string("attachment-ref")]))
             case "resyncConversationV4":
+                recoveryRequests += 1
+                if recoveryBehavior == "timeout" { return }
+                if recoveryBehavior == "ackOnly" { try success(id, .object([:])); return }
+                if recoveryBehavior == "reject" { try sendRPC(.init(header: [.int32(202), .int32(id)], body: try .object(.object(["message": .string("Recovery unavailable")])))); return }
+                if recoveryBehavior == "snapshotThenDropAck" { try sendRecoverySnapshot(); return }
                 var recovery = try wire(logical(.object(["kind": .string("snapshot"), "snapshot": baseProjection()])), ordinal: 2).requiringObject(); recovery["deliveryKind"] = .string("recovery")
                 try sendRPC(.init(header: [.int32(204), .int32(listenerID!)], body: try .object(.object(recovery))))
                 try success(id, .object([:]))

@@ -85,7 +85,8 @@ public actor RelayClient {
     private var earlyFrameFailures: [String: String] = [:]
     private var subscriptionRequests = Set<String>()
     private var earlyFrameBytes = 0, pendingSubscriptions = 0
-    private var recovering = Set<String>(), stoppedSessions = Set<String>()
+    private var recovering: [String: UUID] = [:]
+    private var stoppedSessions = Set<String>()
     private var commandHashes: [String: Data] = [:]
     private var readOnlySubagents = Set<String>()
 
@@ -455,13 +456,13 @@ public actor RelayClient {
     }
     public func unsubscribe(sessionID: String) async throws {
         let ids = subscriptions.filter { $0.value.sessionID == sessionID }.map(\.key)
-        for id in ids { _ = try await rpc("zcode-agent", "unsubscribeConversationV4", ["subscriptionId": .string(id)]); subscriptions.removeValue(forKey: id); conversationAssembler.discard(subscriptionID: id) }
+        for id in ids { _ = try await rpc("zcode-agent", "unsubscribeConversationV4", ["subscriptionId": .string(id)]); subscriptions.removeValue(forKey: id); recovering.removeValue(forKey: id); conversationAssembler.discard(subscriptionID: id) }
     }
     private func receiveConversation(_ wire: RelayJSON) {
         let id = wire["subscriptionId"].string ?? ""
         do {
             guard subscriptions[id] != nil || pendingSubscriptions > 0 else { return }
-            if recovering.contains(id), wire["deliveryKind"].string != "recovery", wire["deliveryKind"].string != "initial" { return }
+            if recovering[id] != nil, wire["deliveryKind"].string != "recovery", wire["deliveryKind"].string != "initial" { return }
             guard let frame = try conversationAssembler.accept(wire) else { return }
             if subscriptions[id] == nil {
                 let bytes = try frame.data().count
@@ -476,7 +477,7 @@ public actor RelayClient {
         do {
             var reducer = reducers[sessionID] ?? .init()
             if try reducer.apply(frame, expectedSessionID: sessionID), let projection = reducer.projection {
-                reducers[sessionID] = reducer; recovering.remove(subscriptionID)
+                reducers[sessionID] = reducer; recovering.removeValue(forKey: subscriptionID)
                 if !projection.canStop && projection.pendingInteractions.isEmpty { stoppedSessions.remove(sessionID) }
                 emit(.projection(projection))
             }
@@ -487,9 +488,30 @@ public actor RelayClient {
             if !subscriptionID.isEmpty, pendingSubscriptions > 0, earlyFrameFailures.count < 32 { earlyFrameFailures[subscriptionID] = reason }
             return
         }
-        guard recovering.insert(subscriptionID).inserted else { return }
+        guard recovering[subscriptionID] == nil, let selected = bridge, let connection = connectionID else { return }
+        let attempt = UUID(); recovering[subscriptionID] = attempt
         conversationAssembler.discard(subscriptionID: subscriptionID); emit(.resyncRequired(sessionID: sessionID, reason: reason))
-        Task { do { _ = try await self.rpc("zcode-agent", "resyncConversationV4", ["subscriptionId": .string(subscriptionID), "base": .null, "forceSnapshot": .bool(true)]) } catch { self.emit(.failure((error as? RelayFailure) ?? .closed())) } }
+        Task {
+            do {
+                _ = try await self.rpc("zcode-agent", "resyncConversationV4", ["subscriptionId": .string(subscriptionID), "base": .null, "forceSnapshot": .bool(true)])
+                // An RPC acknowledgement is not proof that its recovery snapshot arrived.
+                // Bound that second wait as well; a frozen projection must not remain online.
+                if self.recoveryIsCurrent(subscriptionID, attempt: attempt, connection: connection, bridge: selected) {
+                    try await Task.sleep(for: .seconds(self.requestTimeout))
+                    if self.recoveryIsCurrent(subscriptionID, attempt: attempt, connection: connection, bridge: selected) {
+                        throw RelayFailure("relay_recovery_snapshot_timeout", "The desktop acknowledged recovery but did not send its current task state.")
+                    }
+                }
+            } catch {
+                // A snapshot may precede a lost ACK, or a new workspace/connection may
+                // replace this recovery. Neither case may disconnect the current view.
+                guard self.recoveryIsCurrent(subscriptionID, attempt: attempt, connection: connection, bridge: selected) else { return }
+                await self.transportFailed(RelayFailure("relay_resync_failed", "The desktop task state could not be recovered. Reconnect explicitly; pending command IDs are retained.", outcomeUncertain: true), connectionID: connection)
+            }
+        }
+    }
+    private func recoveryIsCurrent(_ subscriptionID: String, attempt: UUID, connection: UUID, bridge selected: RelayBridge) -> Bool {
+        !closing && connectionID == connection && bridge == selected && recovering[subscriptionID] == attempt && subscriptions[subscriptionID] != nil
     }
     public func rows(sessionID: String, beforeRowID: Int? = nil, limit: Int = 200) async throws -> RelayJSON {
         guard (1...200).contains(limit), beforeRowID.map({ $0 >= 0 }) ?? true else { throw RelayFailure.invalid("Invalid row range.") }

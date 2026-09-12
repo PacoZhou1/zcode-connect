@@ -26,6 +26,7 @@ actor RelayRemoteTransport: RemoteTransport {
     private var busy = Set<String>()
     private var pump: Task<Void, Never>?
     private var closed = false
+    private var lastRelayFailure: RelayFailure?
     private let eventEpoch = UUID().uuidString
     private var eventSequence = 0
     private var replay: [BridgeEnvelope] = []
@@ -648,10 +649,14 @@ actor RelayRemoteTransport: RemoteTransport {
             case .state(let state):
                 if state == .disconnected || state == .replaced {
                     try emit(type: "connection.changed", data: ["connectionStatus": .string("disconnected")])
-                    for sink in sinks.values { sink.finish(throwing: RelayFailure("relay_disconnected", "The desktop relay disconnected. Reconnect explicitly.")) }; sinks.removeAll()
-                }
+                    let failure = state == .replaced
+                        ? RelayFailure("controller_replaced", "Another mobile controller replaced this connection.", outcomeUncertain: true)
+                        : lastRelayFailure ?? RelayFailure("relay_disconnected", "The desktop relay disconnected. Reconnect explicitly.")
+                    for sink in sinks.values { sink.finish(throwing: failure) }; sinks.removeAll()
+                } else { lastRelayFailure = nil }
             case .failure(let failure):
                 if failure.code == "relay_event_overflow" { try emit(type: "resync.required") }
+                else { lastRelayFailure = failure }
             default: break
             }
         } catch {
