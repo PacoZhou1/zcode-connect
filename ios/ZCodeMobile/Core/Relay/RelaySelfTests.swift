@@ -1,4 +1,4 @@
-#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS || RELAY_RECOVERY_SELF_TESTS
+#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS || RELAY_RECOVERY_SELF_TESTS || RELAY_AUTH_SELF_TESTS
 import Foundation
 
 private struct TestFailure: Error { let message: String }
@@ -68,6 +68,7 @@ actor MockRelaySocket: RelaySocketTransport {
     var recoveryBehavior = "normal"
     var recoveryRequests = 0
     var socketConnectCount = 0
+    var serializedOutgoingEnvelopes: [String] = []
     var dropHeartbeats = false
     func setRecoveryBehavior(_ value: String) { recoveryBehavior = value }
     func setDropHeartbeats(_ value: Bool) { dropHeartbeats = value }
@@ -133,6 +134,7 @@ actor MockRelaySocket: RelaySocketTransport {
     }
     func success(_ id: Int32, _ value: RelayJSON) throws { try sendRPC(.init(header: [.int32(201), .int32(id)], body: try .object(value))) }
     func send(text: String) async throws {
+        serializedOutgoingEnvelopes.append(text)
         // An actual suspension makes concurrent-client frame interleaving observable to the server assembler.
         try await Task.sleep(for: .milliseconds(1))
         let message = try RelayJSON(data: Data(text.utf8))

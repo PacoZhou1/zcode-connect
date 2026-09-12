@@ -63,6 +63,18 @@ public struct RelayFailure: Error, LocalizedError, Sendable, Equatable {
     }
     static func invalid(_ message: String) -> Self { .init("relay_invalid_frame", message) }
     static func closed() -> Self { .init("relay_disconnected", "The desktop relay is disconnected.", outcomeUncertain: true) }
+    static func rejected(code: String?, paired: Bool) -> Self {
+        if code == "KICKED" {
+            return .init("controller_replaced", "另一台手机已接管连接，请关闭旧页面后重新连接。", outcomeUncertain: paired)
+        }
+        // Keep only a bounded protocol code, never server text that could echo
+        // pairing material, URLs or other remote content into the interface.
+        let safeCode = code.flatMap { value in
+            value.range(of: #"\A[A-Z][A-Z0-9_]{0,63}\z"#, options: .regularExpression) != nil ? value : nil
+        }
+        let detail = safeCode.map { "（\($0)）" } ?? ""
+        return .init("relay_rejected", "远程服务拒绝了连接\(detail)。请保留此错误代码以便排查。", outcomeUncertain: paired)
+    }
 }
 
 /// Sensitive pairing material is never included in either printable description.

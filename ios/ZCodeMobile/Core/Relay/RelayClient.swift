@@ -141,7 +141,7 @@ public actor RelayClient {
                     Task {
                         do {
                             self.setState(.authenticating)
-                            try await self.sendEnvelope(.object(["type": .string("auth_init"), "role": .string("terminal"), "device_sid": .string(pairing.deviceID), "meta": .object(["platform": .string("web"), "version": .string(pairing.appVersion), "name": .string("zcode-native-ios")]), "client_ts": .number(Date().timeIntervalSince1970 * 1000)]))
+                            try await self.sendEnvelope(.object(["type": .string("auth_init"), "role": .string("terminal"), "device_sid": .string(pairing.deviceID), "meta": .object(["platform": .string("web"), "version": .string(pairing.appVersion), "name": .string("zcode-native-ios")]), "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))]))
                         } catch { await self.transportFailed(error, connectionID: id) }
                     }
                 }
@@ -184,7 +184,7 @@ public actor RelayClient {
     }
     private func sendPayload(_ value: RelayJSON) async throws {
         guard paired else { throw RelayFailure.closed() }
-        try await sendEnvelope(.object(["type": .string("data"), "payload": value, "client_ts": .number(Date().timeIntervalSince1970 * 1000)]))
+        try await sendEnvelope(.object(["type": .string("data"), "payload": value, "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))]))
     }
     private func receive(_ text: String, connectionID id: UUID) async throws {
         guard connectionID == id else { return }
@@ -193,7 +193,7 @@ public actor RelayClient {
         if type == "auth_challenge" {
             guard !paired, let pairing else { throw RelayFailure.invalid("Unexpected authentication challenge.") }
             let proof = try pairing.challengeProof(nonce: value.requiringString("nonce"))
-            try await sendEnvelope(.object(["type": .string("auth_response"), "device_sid": .string(pairing.deviceID), "proof": .string(proof), "client_ts": .number(Date().timeIntervalSince1970 * 1000)])); return
+            try await sendEnvelope(.object(["type": .string("auth_response"), "device_sid": .string(pairing.deviceID), "proof": .string(proof), "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))])); return
         }
         if ["auth_ack", "pair_status_ack"].contains(type) {
             lastHeartbeat = ProcessInfo.processInfo.systemUptime
@@ -206,7 +206,7 @@ public actor RelayClient {
             }; return
         }
         if type == "error" {
-            throw RelayFailure(value["code"].string == "KICKED" ? "controller_replaced" : "relay_rejected", value["code"].string == "KICKED" ? "Another mobile controller replaced this connection." : "The relay rejected this connection.", outcomeUncertain: paired)
+            throw RelayFailure.rejected(code: value["code"].string, paired: paired)
         }
         guard type == "data", paired else { return }
         let payload = value["payload"], subtype = try payload.requiringString("zcode_type")
@@ -250,7 +250,7 @@ public actor RelayClient {
         guard ProcessInfo.processInfo.systemUptime - lastHeartbeat <= 30 else { throw RelayFailure("relay_heartbeat_timeout", "The relay stopped acknowledging heartbeats.", outcomeUncertain: true) }
         try frames?.checkDeadline()
         for subscription in conversationAssembler.expire() { requestRecovery(subscription, reason: "conversation_fragment_timeout") }
-        try await sendEnvelope(.object(["type": .string("pair_status_query"), "device_sid": .string(pairing.deviceID), "client_ts": .number(Date().timeIntervalSince1970 * 1000)]))
+        try await sendEnvelope(.object(["type": .string("pair_status_query"), "device_sid": .string(pairing.deviceID), "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))]))
     }
 
     private func appRequest(type: String, expected: Set<String>, fields: [String: RelayJSON] = [:], workspace: RelayWorkspace? = nil, bridgeID: String? = nil, generation: Int? = nil) async throws -> RelayJSON {
@@ -368,7 +368,7 @@ public actor RelayClient {
     private func sendIPC(_ bytes: Data) async throws {
         guard var current = frames else { throw RelayFailure.closed() }
         let payloads = try current.enqueue(bytes); frames = current
-        try await sendEnvelopes(payloads.map { .object(["type": .string("data"), "payload": $0, "client_ts": .number(Date().timeIntervalSince1970 * 1000)]) })
+        try await sendEnvelopes(payloads.map { .object(["type": .string("data"), "payload": $0, "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))]) })
     }
     private func receiveIPC(_ bytes: Data) async throws {
         let message = try RelayIPCCodec.decode(bytes)
