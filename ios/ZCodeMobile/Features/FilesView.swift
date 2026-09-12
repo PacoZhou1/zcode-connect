@@ -236,7 +236,7 @@ struct FilePreviewView: View {
                     Text(content.isEmpty ? "空文件" : content)
                 .font(.system(size: 14, design: .monospaced)).textSelection(.enabled)
                 .padding(18).frame(maxWidth: .infinity, alignment: .leading)
-                }
+                }.defaultScrollAnchor(.topLeading)
             } else { ProgressView() }
         }.navigationTitle(file.name).navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -275,6 +275,7 @@ struct DiffView: View {
                 }
             }.padding(.vertical, 12)
         }
+        .defaultScrollAnchor(.topLeading)
         .navigationTitle(URL(fileURLWithPath: change.path).lastPathComponent).navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

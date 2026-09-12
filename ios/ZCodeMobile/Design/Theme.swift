@@ -3,6 +3,7 @@ import SwiftUI
 enum ZTheme {
     static var controlGlass: Glass {
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--clear-tinted-glass") { return .clear.tint(.white.opacity(0.6)) }
         if ProcessInfo.processInfo.arguments.contains("--clear-glass") { return .clear }
         #endif
         return .regular

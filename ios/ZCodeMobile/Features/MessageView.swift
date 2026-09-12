@@ -192,7 +192,7 @@ struct RichMessageText: View {
                     let trimmed = content.trimmingCharacters(in: .newlines)
                     if !trimmed.isEmpty {
                         Text((try? AttributedString(markdown: trimmed, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(trimmed))
-                            .font(.system(size: 17)).tracking(user ? 0 : 0.2)
+                            .font(.system(size: 17)).tracking(user ? 0 : 0.6)
                             .lineSpacing(5.333333)
                             .foregroundStyle(user ? ZTheme.userText : .primary)
                             .frame(maxWidth: user ? nil : .infinity, alignment: .leading)
