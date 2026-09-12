@@ -724,8 +724,6 @@ final class AppStore {
             entry = PendingSubmission(draftKey: draftKey, sessionID: sessionID, creation: creation,
                                       text: text, attachments: attachments)
             pendingSubmissions[draftKey] = entry
-            do { try submissionJournal.write(pendingSubmissions, scope: scope) }
-            catch { errorMessage = "无法保存待发送消息：\(error.localizedDescription)"; return nil }
         }
         // Even a retry must have a durable journal before its first network mutation.
         do { try submissionJournal.write(pendingSubmissions, scope: scope) }
@@ -739,8 +737,6 @@ final class AppStore {
             catch { errorMessage = "任务已创建，待发送消息保存失败：\(error.localizedDescription)"; return nil }
         }
         guard let id = entry.sessionID else { return nil }
-        do { try submissionJournal.write(pendingSubmissions, scope: scope) }
-        catch { errorMessage = "无法保存待发送消息：\(error.localizedDescription)"; return nil }
         for (attachmentID, remoteID) in entry.uploadedIDs { uploadedAttachments["\(id):\(attachmentID)"] = remoteID }
         let accepted = await send(entry.text, to: id, inputID: entry.id, attachments: entry.attachments)
         guard epoch == connectionEpoch else { return nil }

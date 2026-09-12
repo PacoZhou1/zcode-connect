@@ -32,7 +32,9 @@ struct InteractionRequestCard: View {
     private var isPlan: Bool { interaction.toolName == "ExitPlanMode" }
     private var questions: [PendingInteraction.Question] { interaction.questions ?? [] }
     private var trimmedFeedback: String { feedback.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var blocksPlanFeedback: Bool { isPlan && trimmedFeedback == "approve" }
     private var canAnswer: Bool {
+        if blocksPlanFeedback { return false }
         if isPermission || isPlan { return true }
         if questions.isEmpty { return !trimmedFeedback.isEmpty }
         return questions.allSatisfy { question in
@@ -70,6 +72,11 @@ struct InteractionRequestCard: View {
                     .lineLimit(2...6).padding(12)
                     .background(.background, in: RoundedRectangle(cornerRadius: 14))
                     .accessibilityIdentifier("interaction.feedback")
+                if blocksPlanFeedback {
+                    Text("请填写具体修改意见。若想执行方案，请清空修改意见，再点“批准并执行”。")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("interaction.feedback.validation")
+                }
             } else if isPermission {
                 if let input = interaction.input {
                     DisclosureGroup("操作详情") {
@@ -178,13 +185,16 @@ struct InteractionRequestCard: View {
     }
 
     private func submit(accept: Bool) {
+        guard !accept || !blocksPlanFeedback else { return }
+        // Freeze the validated feedback before the task can be queued behind another UI update.
+        let submittedFeedback = trimmedFeedback
         busy = true
         Task {
             if isPermission { await store.respond(interaction, allow: accept) }
             else {
                 let content: JSONValue?
                 if !accept { content = nil }
-                else if isPlan { content = .object(["answer": .string(trimmedFeedback.isEmpty ? "approve" : trimmedFeedback)]) }
+                else if isPlan { content = .object(["answer": .string(submittedFeedback.isEmpty ? "approve" : submittedFeedback)]) }
                 else if questions.isEmpty { content = .object(["answer": .string(trimmedFeedback)]) }
                 else {
                     var answers: [String: JSONValue] = [:]
