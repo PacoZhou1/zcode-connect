@@ -14,6 +14,16 @@ enum ConnectionState: Equatable {
     }
 }
 
+/// An in-memory handle for one explicitly confirmed computer pairing.
+/// It carries no connection link or credential and cannot survive reconnecting.
+struct RelayWorkspaceSelectionContext: Identifiable, Equatable, Sendable {
+    let attempt: UUID
+    let epoch: UUID
+    let name: String
+    let reason: String
+    var id: UUID { epoch }
+}
+
 struct RemoteProject: Identifiable, Codable, Hashable {
     var id: String
     var name: String

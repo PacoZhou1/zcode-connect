@@ -86,6 +86,8 @@ struct PairingView: View {
     @State private var choosingWorkspace = false
     @State private var beganRelay = false
     @State private var relayAttempt = UUID()
+    @State private var selectionContext: RelayWorkspaceSelectionContext?
+    @State private var isVisible = false
 
     var body: some View {
         Group {
@@ -96,7 +98,15 @@ struct PairingView: View {
             Button("连接并使用此手机控制") { Task { await connectRelay() } }
             Button("取消", role: .cancel) {}
         } message: { Text("连接 ZCode 远程可能替换另一台手机的控制连接。确认后将读取电脑上的项目，由你选择要打开的项目。") }
-        .onDisappear { if beganRelay && !store.connection.isOnline { store.cancelRelayPairing(attempt: relayAttempt) } }
+        .onAppear { isVisible = true; restoreWorkspaceSelection() }
+        .onChange(of: store.relayWorkspaceSelection?.id) { _, _ in restoreWorkspaceSelection() }
+        .onDisappear {
+            isVisible = false
+            if beganRelay && !store.connection.isOnline {
+                if let selectionContext { store.cancelRelayPairing(context: selectionContext) }
+                else { store.cancelRelayPairing(attempt: relayAttempt) }
+            }
+        }
         .sheet(isPresented: $scanner) {
             QRScanner { payload in
                 scanner = false
@@ -111,18 +121,18 @@ struct PairingView: View {
                     Image(systemName: "laptopcomputer.and.iphone").font(.system(size: 42, weight: .light))
                         .foregroundStyle(ZTheme.accent).padding(.vertical, 8)
                     Text("连接你的电脑").font(.title2.weight(.semibold))
-                    Text(onboarding ? "先连接一台电脑，再查看和继续你的任务。电脑需要保持运行和联网。" : "在电脑的 ZCode 左下角点击手机图标，开启远程控制，然后扫描或粘贴连接链接。")
+                    Text(choosingWorkspace ? (selectionContext?.reason.isEmpty == false ? selectionContext!.reason : "已连接这台电脑，请选择要继续的项目。") : onboarding ? "先连接一台电脑，再查看和继续你的任务。电脑需要保持运行和联网。" : "在电脑的 ZCode 左下角点击手机图标，开启远程控制，然后扫描或粘贴连接链接。")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }.listRowBackground(Color.clear)
             }
-            Section {
+            if !choosingWorkspace { Section {
                 Button { scanner = true } label: {
                     Label("扫描连接二维码", systemImage: "qrcode.viewfinder")
                 }.disabled(!DataScannerViewController.isSupported || !DataScannerViewController.isAvailable)
                 Button {
                     if let value = UIPasteboard.general.string { parse(value) }
                 } label: { Label("粘贴连接信息", systemImage: "doc.on.clipboard") }
-            }
+            } }
             if onboarding, !store.profiles.isEmpty {
                 Section {
                     Button("选择已添加的电脑", systemImage: "laptopcomputer") { store.sheet = .connections }
@@ -144,16 +154,24 @@ struct PairingView: View {
                                 Image(systemName: "chevron.right").font(.caption)
                             }
                         }.disabled(connecting || !workspace.canAttach)
+                            .accessibilityIdentifier("pairing.workspace.\(workspace.id)")
                     }
                     if store.relayWorkspaces.isEmpty { Text("电脑尚未打开项目，请先在 ZCode 中打开一个项目。") }
                     Button {
+                        guard isVisible, !connecting, let context = selectionContext else { return }
                         connecting = true
                         failure = nil
                         Task {
-                            defer { connecting = false }
-                            do { try await store.refreshRelayWorkspaces() }
+                            defer { if selectionContext == context { connecting = false } }
+                            guard isVisible else { return }
+                            do { try await store.refreshRelayWorkspaces(context: context) }
                             catch is CancellationError { }
-                            catch { failure = error.localizedDescription }
+                            catch {
+                                if selectionContext == context {
+                                    failure = error.localizedDescription
+                                    if !store.isCurrentRelaySelection(context) { choosingWorkspace = false }
+                                }
+                            }
                         }
                     } label: {
                         Label("刷新项目", systemImage: "arrow.clockwise")
@@ -164,7 +182,9 @@ struct PairingView: View {
             Section {
                 TextField("电脑名称（可选）", text: $name).textContentType(.name)
                     .accessibilityIdentifier("pairing.name")
-                if relayPayload != nil {
+                if choosingWorkspace {
+                    Label("已连接电脑，等待选择项目", systemImage: "checkmark.shield").foregroundStyle(.secondary)
+                } else if relayPayload != nil {
                     Label("已识别 ZCode 官方远程连接", systemImage: "checkmark.shield").foregroundStyle(.secondary)
                 } else {
                 TextField(manualConnection ? "服务地址（https://…）" : "ZCode 连接链接", text: $address)
@@ -182,14 +202,14 @@ struct PairingView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             } header: {
-                Text(manualConnection ? "自托管连接" : "ZCode 远程控制（推荐）")
+                Text(choosingWorkspace ? "电脑连接" : manualConnection ? "自托管连接" : "ZCode 远程控制（推荐）")
             } footer: {
-                Text(manualConnection ? "需要已运行的兼容连接服务。SSH 地址本身不是 ZCode 远控链接。密钥保存在钥匙串中。" : "电脑左下角手机图标 → 移动端远程控制 → 复制链接。首次连接后选择项目。")
+                Text(choosingWorkspace ? "选择其它项目不会删除原项目的任务或草稿。" : manualConnection ? "需要已运行的兼容连接服务。SSH 地址本身不是 ZCode 远控链接。密钥保存在钥匙串中。" : "电脑左下角手机图标 → 移动端远程控制 → 复制链接。首次连接后选择项目。")
             }
             if let failure {
                 Section { Text(failure).foregroundStyle(.red).font(.subheadline) }
             }
-            Section {
+            if !choosingWorkspace { Section {
                 Button {
                     if relayPayload != nil { confirmRelay = true }
                     else if !manualConnection { parse(address); if relayPayload != nil { confirmRelay = true } }
@@ -206,7 +226,7 @@ struct PairingView: View {
                     ? (AppStore.validatedURL(address) == nil || token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     : (try? RelayPairing(scannedURL: address.trimmingCharacters(in: .whitespacesAndNewlines))) == nil)))
                 .accessibilityIdentifier("pairing.connect")
-            }
+            } }
             Section {
                 if !choosingWorkspace {
                     Button(manualConnection ? "使用 ZCode 远程链接" : "自托管连接（高级）") {
@@ -226,33 +246,59 @@ struct PairingView: View {
             }
         }
     }
+    private func restoreWorkspaceSelection() {
+        if let selectionContext, !store.isCurrentRelaySelection(selectionContext) {
+            choosingWorkspace = false
+        }
+        guard let context = store.relayWorkspaceSelection,
+              store.isCurrentRelaySelection(context),
+              !onboarding || store.sheet == nil else { return }
+        selectionContext = context
+        relayAttempt = context.attempt
+        name = context.name
+        beganRelay = true; choosingWorkspace = true; connecting = false; failure = nil
+        relayPayload = nil; address = ""; token = ""; certificateSHA256 = ""
+    }
     private func connectRelay() async {
-        guard let raw = relayPayload else { return }
+        guard isVisible, !connecting, let raw = relayPayload else { return }
+        let attempt = UUID(); relayAttempt = attempt
+        selectionContext = nil
         connecting = true; failure = nil; beganRelay = true
         do {
-            try await store.beginRelayPairing(raw, confirmedControllerReplacement: true, attempt: relayAttempt)
+            let context = try await store.beginRelayPairing(raw, confirmedControllerReplacement: true, attempt: attempt)
+            guard isVisible, relayAttempt == attempt, store.isCurrentRelaySelection(context) else { return }
+            selectionContext = context
             choosingWorkspace = true
-        } catch { if !(error is CancellationError) { failure = error.localizedDescription } }
-        connecting = false
+        } catch { if relayAttempt == attempt, !(error is CancellationError) { failure = error.localizedDescription } }
+        if relayAttempt == attempt { connecting = false }
     }
     private func chooseWorkspace(_ workspace: RelayWorkspace) async {
+        guard isVisible, !connecting, let context = selectionContext, store.isCurrentRelaySelection(context) else { return }
         connecting = true; failure = nil
         do {
-            try await store.completeRelayPairing(workspaceKey: workspace.id, name: name)
+            try await store.completeRelayPairing(workspaceKey: workspace.id, name: name, context: context)
+            guard isVisible, selectionContext == context, store.isCurrentRelaySelection(context) else { return }
             store.sheet = nil; dismiss()
+        } catch is CancellationError {
         } catch {
-            failure = error.localizedDescription
-            store.cancelRelayPairing(attempt: relayAttempt); choosingWorkspace = false
+            if selectionContext == context {
+                failure = error.localizedDescription
+                if !["relay_workspace_unavailable", "relay_busy"].contains((error as? BridgeFailure)?.code ?? "") {
+                    store.cancelRelayPairing(context: context); choosingWorkspace = false
+                }
+            }
         }
-        connecting = false
+        if selectionContext == context { connecting = false }
     }
     private func connect() async {
+        guard isVisible, !connecting else { return }
         connecting = true
         failure = nil
         let profile = ConnectionProfile(id: UUID().uuidString,
             name: name.isEmpty ? URL(string: address)?.host ?? "我的电脑" : name, baseURL: address,
             certificateSHA256: certificateSHA256.isEmpty ? nil : certificateSHA256)
         await store.connect(profile, token: token.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard isVisible else { return }
         connecting = false
         if store.connection.isOnline { store.sheet = nil; dismiss() }
         else if case .failed(let reason) = store.connection { failure = reason; store.errorMessage = nil }

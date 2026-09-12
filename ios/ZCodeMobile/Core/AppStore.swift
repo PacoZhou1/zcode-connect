@@ -69,6 +69,8 @@ final class AppStore {
     @ObservationIgnored private var refreshRequest = UUID()
 
     var relayWorkspaces: [RelayWorkspace] = []
+    private(set) var relayWorkspaceSelection: RelayWorkspaceSelectionContext?
+    @ObservationIgnored private var relaySelectionOperation: UUID?
     @ObservationIgnored private var relayClient: RelayClient?
     @ObservationIgnored private var relayBootstrap: RelayBootstrap?
     @ObservationIgnored private var relayPairingText: String?
@@ -250,10 +252,21 @@ final class AppStore {
             }
             let attempt = UUID()
             do {
-                try await beginRelayPairing(raw, confirmedControllerReplacement: true, attempt: attempt)
-                try await completeRelayPairing(workspaceKey: workspace, name: profile.name)
+                let context = try await beginRelayPairing(raw, confirmedControllerReplacement: true, attempt: attempt, reportFailure: true)
+                guard isCurrentRelaySelection(context) else { return }
+                if !relayWorkspaces.contains(where: { $0.id == workspace && $0.canAttach }) {
+                    offerRelayWorkspaceSelection(context, name: profile.name)
+                    sheet = .pairing
+                    return
+                }
+                try await completeRelayPairing(workspaceKey: workspace, name: profile.name, context: context, reportFailure: true)
             } catch {
+                if error is CancellationError { return }
                 guard relayConnectionAttempt == attempt else { return }
+                if (error as? BridgeFailure)?.code == "relay_workspace_unavailable", relayWorkspaceSelection != nil {
+                    sheet = .pairing
+                    return
+                }
                 disconnect()
                 let message = Self.connectionErrorMessage(error)
                 connection = .failed(message); errorMessage = message
@@ -333,79 +346,136 @@ final class AppStore {
         }
     }
 
-    func refreshRelayWorkspaces() async throws {
-        guard let relayClient, relayBootstrap != nil else {
-            throw BridgeFailure(message: "连接已结束，请重新扫描电脑的连接码。", code: "relay_not_paired")
-        }
-        let epoch = connectionEpoch
-        let bootstrap = try await relayClient.workspaces()
-        guard epoch == connectionEpoch else { throw CancellationError() }
-        relayBootstrap = bootstrap
-        relayWorkspaces = bootstrap.workspaces
+    func isCurrentRelaySelection(_ context: RelayWorkspaceSelectionContext) -> Bool {
+        context.attempt == relayConnectionAttempt && context.epoch == connectionEpoch
     }
 
-    func beginRelayPairing(_ raw: String, confirmedControllerReplacement: Bool, attempt: UUID = UUID()) async throws {
-        let pairing = try RelayPairing(scannedURL: raw)
-        guard confirmedControllerReplacement else { throw BridgeFailure(message: "请先确认连接这台电脑。", code: "controller_confirmation_required") }
-        disconnect()
-        relayConnectionAttempt = attempt
-        let epoch = connectionEpoch
+    private func offerRelayWorkspaceSelection(_ context: RelayWorkspaceSelectionContext, name: String) {
+        guard isCurrentRelaySelection(context) else { return }
+        relayWorkspaceSelection = .init(attempt: context.attempt, epoch: context.epoch, name: name,
+            reason: "原项目已关闭或暂不可连接，请选择这台电脑上已打开的项目。")
         connection = .connecting
-        let installationID = defaults.string(forKey: "relayInstallationID") ?? UUID().uuidString
-        defaults.set(installationID, forKey: "relayInstallationID")
-        let paired = try RelayClient(clientID: installationID)
-        relayClient = paired
+        errorMessage = nil
+    }
+
+    private func failRelaySelection(_ error: Error, context: RelayWorkspaceSelectionContext, reportFailure: Bool = false) {
+        guard isCurrentRelaySelection(context) else { return }
+        disconnect()
+        guard !(error is CancellationError) else { return }
+        let message = Self.connectionErrorMessage(error)
+        connection = .failed(message)
+        if reportFailure { errorMessage = message }
+    }
+
+    func refreshRelayWorkspaces(context: RelayWorkspaceSelectionContext) async throws {
+        guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+        guard relaySelectionOperation == nil else { throw BridgeFailure(message: "正在连接项目，请稍后再刷新。", code: "relay_busy") }
+        let operation = UUID(); relaySelectionOperation = operation
+        defer { if relaySelectionOperation == operation { relaySelectionOperation = nil } }
         do {
-            try await paired.connect(pairing: pairing, confirmedControllerReplacement: true)
-            let bootstrap = try await paired.bootstrap()
-            guard epoch == connectionEpoch else { await paired.disconnect(); throw CancellationError() }
+            guard let relayClient, relayBootstrap != nil else {
+                throw BridgeFailure(message: "连接已结束，请重新扫描电脑的连接码。", code: "relay_not_paired")
+            }
+            let bootstrap = try await relayClient.workspaces()
+            guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
             relayBootstrap = bootstrap
             relayWorkspaces = bootstrap.workspaces
-            relayPairingText = raw
-            hostName = pairing.deviceName
         } catch {
-            guard epoch == connectionEpoch else { throw CancellationError() }
-            connection = .failed(error.localizedDescription)
-            await paired.disconnect()
+            guard isCurrentRelaySelection(context) else { throw CancellationError() }
+            failRelaySelection(error, context: context)
             throw error
         }
     }
 
-    func completeRelayPairing(workspaceKey: String, name: String) async throws {
-        guard let paired = relayClient, let bootstrap = relayBootstrap, let raw = relayPairingText,
-              bootstrap.workspaces.contains(where: { $0.id == workspaceKey && $0.canAttach }) else {
-            throw BridgeFailure(message: "这个项目当前无法连接，请在电脑上激活后重试。", code: "relay_workspace_unavailable")
-        }
-        let epoch = connectionEpoch
-        if let old = client as? RelayRemoteTransport { await old.shutdown() }
-        guard epoch == connectionEpoch else { throw CancellationError() }
-        streamTask?.cancel(); refreshTask?.cancel()
-        let bridge = try await paired.openWorkspace(key: workspaceKey)
+    @discardableResult
+    func beginRelayPairing(_ raw: String, confirmedControllerReplacement: Bool, attempt: UUID = UUID(), reportFailure: Bool = false) async throws -> RelayWorkspaceSelectionContext {
         let pairing = try RelayPairing(scannedURL: raw)
-        let adapter = try await RelayRemoteTransport(client: paired, bootstrap: bootstrap, bridge: bridge,
-                                                     hostName: name.isEmpty ? pairing.deviceName : name)
-        guard epoch == connectionEpoch else { await adapter.shutdown(); throw CancellationError() }
-        let existing = profiles.first { $0.relayDeviceID == pairing.deviceID && $0.relayWorkspaceKey == workspaceKey }
-        let profile = ConnectionProfile(id: existing?.id ?? UUID().uuidString,
-            name: name.isEmpty ? pairing.deviceName : name, baseURL: "https://zcode.z.ai/remote/v4",
-            relayDeviceID: pairing.deviceID, relayWorkspaceKey: workspaceKey)
-        try CredentialStore.save(raw, id: profile.id)
-        client = adapter
-        sessions = []; transcripts = [:]; histories = [:]; loadingHistory = []; pendingInteractions = [:]
-        modelSelections = [:]; remoteSettings = [:]; uploadedAttachments = [:]
-        projectSettings = [:]; newModelSelection = nil; options = SessionOptions()
-        path = []; isReferenceMode = false; referenceReview = false
-        activeProfileID = profile.id
-        if let index = profiles.firstIndex(where: { $0.id == profile.id }) { profiles[index] = profile }
-        else { profiles.append(profile) }
-        try loadScopedState()
-        save(profiles, key: "connections")
-        defaults.set(profile.id, forKey: "activeConnection")
-        hostName = profile.name; bridgeVersion = pairing.appVersion
-        connection = .connected
-        try await loadRemoteIndex()
-        guard epoch == connectionEpoch else { throw CancellationError() }
-        beginStreaming()
+        guard confirmedControllerReplacement else { throw BridgeFailure(message: "请先确认连接这台电脑。", code: "controller_confirmation_required") }
+        guard !Task.isCancelled else { throw CancellationError() }
+        disconnect()
+        relayConnectionAttempt = attempt
+        let context = RelayWorkspaceSelectionContext(attempt: attempt, epoch: connectionEpoch, name: pairing.deviceName, reason: "")
+        connection = .connecting
+        let installationID = defaults.string(forKey: "relayInstallationID") ?? UUID().uuidString
+        defaults.set(installationID, forKey: "relayInstallationID")
+        do {
+            let paired = try RelayClient(clientID: installationID)
+            relayClient = paired
+            try await paired.connect(pairing: pairing, confirmedControllerReplacement: true)
+            guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+            let bootstrap = try await paired.bootstrap()
+            guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+            relayBootstrap = bootstrap
+            relayWorkspaces = bootstrap.workspaces
+            relayPairingText = raw
+            hostName = pairing.deviceName
+            return context
+        } catch {
+            guard isCurrentRelaySelection(context) else { throw CancellationError() }
+            failRelaySelection(error, context: context, reportFailure: reportFailure)
+            throw error
+        }
+    }
+
+    func completeRelayPairing(workspaceKey: String, name: String, context: RelayWorkspaceSelectionContext, reportFailure: Bool = false) async throws {
+        guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+        guard relaySelectionOperation == nil else { throw BridgeFailure(message: "正在连接项目，请稍后重试。", code: "relay_busy") }
+        let operation = UUID(); relaySelectionOperation = operation
+        defer { if relaySelectionOperation == operation { relaySelectionOperation = nil } }
+        do {
+            guard let paired = relayClient, let bootstrap = relayBootstrap, let raw = relayPairingText else {
+                throw BridgeFailure(message: "连接已结束，请重新扫描电脑的连接码。", code: "relay_not_paired")
+            }
+            guard bootstrap.workspaces.contains(where: { $0.id == workspaceKey && $0.canAttach }) else {
+                throw BridgeFailure(message: "这个项目当前无法连接，请在电脑上激活后重试。", code: "relay_workspace_unavailable")
+            }
+            if let old = client as? RelayRemoteTransport { await old.shutdown() }
+            guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+            streamTask?.cancel(); refreshTask?.cancel()
+            let bridge = try await paired.openWorkspace(key: workspaceKey)
+            guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+            let pairing = try RelayPairing(scannedURL: raw)
+            let adapter = try await RelayRemoteTransport(client: paired, bootstrap: bootstrap, bridge: bridge,
+                                                         hostName: name.isEmpty ? pairing.deviceName : name)
+            guard !Task.isCancelled, isCurrentRelaySelection(context) else { await adapter.shutdown(); throw CancellationError() }
+            let existing = profiles.first { $0.relayDeviceID == pairing.deviceID && $0.relayWorkspaceKey == workspaceKey }
+            let profile = ConnectionProfile(id: existing?.id ?? UUID().uuidString,
+                name: name.isEmpty ? pairing.deviceName : name, baseURL: "https://zcode.z.ai/remote/v4",
+                relayDeviceID: pairing.deviceID, relayWorkspaceKey: workspaceKey)
+            try CredentialStore.save(raw, id: profile.id)
+            client = adapter
+            sessions = []; transcripts = [:]; histories = [:]; loadingHistory = []; pendingInteractions = [:]
+            modelSelections = [:]; remoteSettings = [:]; uploadedAttachments = [:]
+            projectSettings = [:]; newModelSelection = nil; options = SessionOptions()
+            path = []; isReferenceMode = false; referenceReview = false
+            activeProfileID = profile.id
+            if let index = profiles.firstIndex(where: { $0.id == profile.id }) { profiles[index] = profile }
+            else { profiles.append(profile) }
+            try loadScopedState()
+            save(profiles, key: "connections")
+            defaults.set(profile.id, forKey: "activeConnection")
+            hostName = profile.name; bridgeVersion = pairing.appVersion
+            connection = .connected
+            try await loadRemoteIndex()
+            guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+            relayWorkspaceSelection = nil
+            beginStreaming()
+        } catch {
+            guard isCurrentRelaySelection(context) else { throw CancellationError() }
+            let unavailable = (error as? BridgeFailure)?.code == "relay_workspace_unavailable"
+                || (error as? RelayFailure)?.code == "workspace_unavailable"
+            if unavailable {
+                offerRelayWorkspaceSelection(context, name: name.isEmpty ? context.name : name)
+                // Normalize the client's local workspace guard to the Store/UI contract.
+                throw BridgeFailure(message: "这个项目当前无法连接，请在电脑上激活后重试。", code: "relay_workspace_unavailable")
+            }
+            failRelaySelection(error, context: context, reportFailure: reportFailure)
+            throw error
+        }
+    }
+
+    func cancelRelayPairing(context: RelayWorkspaceSelectionContext) {
+        if isCurrentRelaySelection(context) { disconnect() }
     }
 
     func cancelRelayPairing(attempt: UUID) {
@@ -437,6 +507,8 @@ final class AppStore {
         relayBootstrap = nil
         relayPairingText = nil
         relayWorkspaces = []
+        relayWorkspaceSelection = nil
+        relaySelectionOperation = nil
         client = nil
         eventCursor = nil
         streamConnected = false
