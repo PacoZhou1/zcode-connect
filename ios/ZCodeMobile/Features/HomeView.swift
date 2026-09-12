@@ -20,9 +20,21 @@ struct HomeView: View {
     }
 
     private func beginRename(_ session: RemoteSession) {
+        guard menuItems(for: session).contains(where: { $0.id == .rename && $0.isEnabled }) else { return }
         renameScope = connectionScope
         renameText = session.title
         renameSession = session
+    }
+
+    private func menuItems(for session: RemoteSession) -> [SessionMenuItem] {
+        SessionMenuPolicy.items(for: session, isReferenceMode: store.isReferenceMode,
+                                isRelay: store.activeProfile?.isRelay == true,
+                                isOnline: store.connection.isOnline, isUnread: store.isUnread(session.id))
+    }
+
+    private var renameAvailable: Bool {
+        guard renameScope == connectionScope, let id = renameSession?.id, let session = store.session(id) else { return false }
+        return menuItems(for: session).contains { $0.id == .rename && $0.isEnabled }
     }
 
     private var groups: [SessionGroup] {
@@ -139,11 +151,11 @@ struct HomeView: View {
             TextField("任务名称", text: $renameText)
             Button("取消", role: .cancel) { renameSession = nil }
             Button("保存") {
-                if renameScope == connectionScope, let id = renameSession?.id {
+                if renameAvailable, let id = renameSession?.id {
                     store.rename(id, title: renameText)
                 }
                 renameSession = nil
-            }.disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }.disabled(!renameAvailable || renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .onChange(of: connectionScope) { _, _ in
             renameSession = nil; renameScope = nil
@@ -151,6 +163,9 @@ struct HomeView: View {
         }
         .onChange(of: store.sessions.map(\.id)) { _, ids in
             if let id = renameSession?.id, !ids.contains(id) { renameSession = nil; renameScope = nil }
+        }
+        .onChange(of: renameAvailable) { _, available in
+            if !available { renameSession = nil; renameScope = nil }
         }
     }
 
@@ -217,7 +232,8 @@ struct HomeView: View {
     }
 
     private func sessionRow(_ session: RemoteSession) -> some View {
-        Button { store.setUnread(false, sessionID: session.id); store.path.append(.session(session.id)) } label: {
+        let actions = sessionActions(for: session)
+        return Button { store.setUnread(false, sessionID: session.id); store.path.append(.session(session.id)) } label: {
             VStack(alignment: .leading, spacing: 6.666667) {
                 HStack(spacing: 8) {
                     if session.status == .running || session.status == .waiting { StatusDot(status: session.status) }
@@ -249,20 +265,35 @@ struct HomeView: View {
             SessionContextInteraction(title: session.title,
                 identity: "\(store.isReferenceMode)|\(store.activeProfileID ?? "")|\(store.activeProfile?.baseURL ?? "")|\(session.id)",
                 preview: AnyView(ConversationPreview(sessionID: session.id).environment(store)),
-                actions: [
-                    SessionContextAction(title: session.isPinned ? "取消置顶" : "置顶", symbol: session.isPinned ? "pin.slash" : "pin", perform: { [pinned = !session.isPinned] in store.setPinned(pinned, sessionID: session.id) }),
-                    SessionContextAction(title: "重命名", symbol: "pencil", perform: { beginRename(session) }),
-                    SessionContextAction(title: store.isUnread(session.id) ? "标记为已读" : "标记为未读", symbol: "circle.fill", perform: { [unread = !store.isUnread(session.id)] in store.setUnread(unread, sessionID: session.id) }),
-                    SessionContextAction(title: "复制对话串 ID", symbol: "square.on.square", perform: { store.copy(session.id) }),
-                    SessionContextAction(title: session.isArchived ? "取消归档" : "归档", symbol: "archivebox", destructive: !session.isArchived, perform: { store.archive(session.id, archived: !session.isArchived) })
-                ], open: { store.setUnread(false, sessionID: session.id); store.path.append(.session(session.id)) })
+                actions: actions, open: { store.setUnread(false, sessionID: session.id); store.path.append(.session(session.id)) })
                 .accessibilityHidden(true)
         }
-        .accessibilityAction(named: Text(session.isPinned ? "取消置顶" : "置顶")) { store.togglePin(session.id) }
-        .accessibilityAction(named: Text("重命名")) { beginRename(session) }
-        .accessibilityAction(named: Text(store.isUnread(session.id) ? "标记为已读" : "标记为未读")) { store.setUnread(!store.isUnread(session.id), sessionID: session.id) }
-        .accessibilityAction(named: Text("复制对话串 ID")) { store.copy(session.id) }
-        .accessibilityAction(named: Text(session.isArchived ? "取消归档" : "归档")) { store.archive(session.id, archived: !session.isArchived) }
+        .accessibilityActions {
+            ForEach(actions, id: \.accessibilityIdentity) { action in
+                Button(action.item.title) { action.perform() }.disabled(!action.item.isEnabled)
+            }
+        }
+        // Refresh the AX owner, whose custom actions can outlive their builder.
+        // The outer ForEach still identifies and orders rows by session.id.
+        .id(actions.map(\.accessibilityIdentity))
+    }
+
+    private func sessionActions(for session: RemoteSession) -> [SessionContextAction] {
+        let scope = connectionScope
+        let pinned = !session.isPinned, archived = !session.isArchived, unread = !store.isUnread(session.id)
+        return menuItems(for: session).map { item in
+            SessionContextAction(item: item) {
+                guard item.isEnabled, scope == connectionScope, let current = store.session(session.id),
+                      menuItems(for: current).contains(item) else { return }
+                switch item.id {
+                case .pin: store.setPinned(pinned, sessionID: session.id)
+                case .rename: beginRename(current)
+                case .unread: store.setUnread(unread, sessionID: session.id)
+                case .copyID: store.copy(session.id)
+                case .archive: store.archive(session.id, archived: archived)
+                }
+            }
+        }
     }
 
     private var homeMenu: some View {

@@ -393,6 +393,27 @@ struct TestResult: Codable { let name: String; let passed: Bool; let detail: Str
             let accepted = await f.store.submitDraft("corrected", attachments: [], draftKey: "S", sessionID: "S")
             try check(accepted == "S", "corrected payload stayed blocked")
         }
+        await run("query-confirmed admission rejection releases original pending and preserves edited draft") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            TestTransport.handler = { r in if r.path.hasSuffix("/messages") { throw BridgeFailure(message: "ACK unavailable", code: "input_pending") }; return nil }
+            _ = await f.store.submitDraft("original", attachments: [], draftKey: "S", sessionID: "S")
+            guard let original = f.store.pendingSubmissions["S"] else { throw TestFailure(message: "missing uncertain submission") }
+            f.store.setDraft("edited draft", for: "S")
+            TestTransport.handler = { r in
+                if r.path.hasSuffix("/messages") {
+                    try check(r.body["inputId"] == .string(original.id) && r.body["text"] == .string("original"), "reconciliation changed original envelope")
+                    throw BridgeFailure(message: "host rejected admission", code: "input_rejected")
+                }
+                return nil
+            }
+            let rejected = await f.store.submitDraft("edited draft", attachments: [], draftKey: "S", sessionID: "S", retryPending: true)
+            try check(rejected == nil && f.store.pendingSubmissions.isEmpty, "confirmed rejection kept submission locked")
+            try check(f.store.drafts["S"] == "edited draft", "reconciliation erased edited draft")
+            TestTransport.handler = nil
+            let accepted = await f.store.submitDraft("edited draft", attachments: [], draftKey: "S", sessionID: "S")
+            let sends = TestTransport.requests.filter { $0.path.hasSuffix("/messages") }
+            try check(accepted == "S" && sends.last?.body["inputId"] != .string(original.id), "deliberate corrected send reused rejected input identity")
+        }
         await run("waiting task blocks new input while explicit stop preserves typed draft") {
             let f = Fixture(); defer { f.close() }; await f.connect()
             TestTransport.status = "waiting"; await f.store.loadTranscript("S")

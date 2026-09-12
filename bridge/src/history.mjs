@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { hash, iso, projectId, readJSON } from './util.mjs';
 import { TranscriptPages, MAX_TRANSCRIPT_ROWS, MAX_TRANSCRIPT_BYTES, historyLimit } from './transcript-pages.mjs';
 
@@ -62,10 +62,52 @@ export class HistoryReader {
         statusSource: 'persisted', createdAt: iso(row.time_created), updatedAt: iso(row.time_updated), source: 'desktop',
         mode: meta?.mode ?? 'build', ...(meta?.model ? { model: meta.model } : {}), workspacePath: path,
         unread: typeof meta?.unread_at === 'number', unreadAt: meta?.unread_at ?? null, unreadScope: 'desktop',
-        capabilities: { read: true, send: false, stop: false, approve: false, changes: true, markUnread: false } }];
+        capabilities: { read: true, send: false, stop: false, approve: false, hookReview: false, changes: true, markUnread: false } }];
     }), []);
   }
   session(id) { return this.sessions(1, id)[0]; }
+  subagentSession(id, ownedSessions) {
+    if (typeof id !== 'string' || !id || !ownedSessions) return undefined;
+    return dbRead(this.sessionDb, db => {
+      if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").get()) return undefined;
+      db.exec('BEGIN');
+      try {
+        const read = db.prepare('SELECT * FROM session WHERE id = ?');
+        const child = read.get(id);
+        if (child?.task_type !== 'subagent_child') return undefined;
+        const visited = new Set(), paths = [];
+        let current = child;
+        // The host's persisted ancestry, not a caller-supplied ID/prefix, grants
+        // read access. Intermediate children never become bridge-owned tasks.
+        for (let depth = 0; depth < 32; depth++) {
+          if (current.task_type !== 'subagent_child' || visited.has(current.id) || !current.parent_id) return undefined;
+          const currentPaths = [current.path, current.directory].filter(path => path !== null && path !== undefined && path !== '');
+          if (!currentPaths.length) return undefined;
+          visited.add(current.id); paths.push(...currentPaths);
+          const parent = read.get(current.parent_id);
+          if (!parent) return undefined;
+          if (Object.hasOwn(ownedSessions, parent.id)) {
+            const owner = ownedSessions[parent.id], workspace = owner.path;
+            if (owner.id !== parent.id || !['interactive', 'fork'].includes(parent.task_type)
+              || typeof workspace !== 'string' || !isAbsolute(workspace)
+              || [...paths, parent.path || parent.directory, ...(parent.directory ? [parent.directory] : [])].some(path => typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== resolve(workspace))) return undefined;
+            const latest = parse(db.prepare('SELECT data FROM message WHERE session_id = ? ORDER BY sequence DESC,time_created DESC,id DESC LIMIT 1').get(id)?.data);
+            const completed = latest.role === 'assistant' && (latest.finish || latest.time?.completed);
+            return { id, title: child.title || 'Subagent', projectId: projectId(workspace), projectName: basename(workspace),
+              parentSessionId: child.parent_id, rootSessionId: owner.id, source: 'bridge-subagent',
+              status: latest.error ? 'error' : completed ? 'completed' : 'idle', statusSource: 'persisted',
+              createdAt: iso(child.time_created), updatedAt: iso(child.time_updated), archived: !!child.time_archived,
+              ...(typeof latest.modelID === 'string' ? { model: latest.modelID } : {}),
+              ...(typeof latest.providerID === 'string' ? { providerId: latest.providerID } : {}),
+              capabilities: { read: true, send: false, stop: false, approve: false, hookReview: false, changes: false, settings: false, attachments: false,
+                rename: false, archive: false, pin: false, markUnread: false, fork: false } };
+          }
+          current = parent;
+        }
+        return undefined;
+      } finally { db.exec('ROLLBACK'); }
+    }, undefined);
+  }
   sessionIndex(limit = 5000) {
     const rawCount = dbRead(this.sessionDb, db => db.prepare("SELECT COUNT(*) AS count FROM session WHERE parent_id IS NULL AND time_archived IS NULL AND task_type = 'interactive'").get().count, 0);
     const sessions = this.sessions(limit + 1);

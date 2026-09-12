@@ -42,6 +42,39 @@ enum RelayBridgeMapping {
         if let thought = settings["thoughtLevel"]["current"].string { model["thoughtLevel"] = .string(thought) }
         return .object(model)
     }
+    static func subagentSession(_ snapshot: RelaySessionSnapshot, parentID: String, bridge: RelayBridge, projectID: String) -> RelayJSON {
+        var value = session(id: snapshot.sessionID, meta: nil, snapshot: snapshot, projection: nil, bridge: bridge, projectID: projectID).object!
+        value["source"] = .string("official-relay-subagent"); value["parentSessionId"] = .string(parentID); value["rootSessionId"] = .string(parentID)
+        value["statusSource"] = .string("host-existing-runtime")
+        value["capabilities"] = .object(["read": .bool(true), "send": .bool(false), "stop": .bool(false), "approve": .bool(false), "changes": .bool(false), "settings": .bool(false), "attachments": .bool(false), "markUnread": .bool(false), "rename": .bool(false), "pin": .bool(false), "archive": .bool(false), "fork": .bool(false), "hookReview": .bool(false)])
+        return .object(value)
+    }
+    /// Legacy session/read is the only verified existing-runtime-only child history service.
+    /// Visibility metadata, original message IDs and every visible content part are preserved.
+    static func snapshotMessages(_ rows: [RelayJSON]) -> [RelayJSON] {
+        func visible(_ value: RelayJSON) -> Bool {
+            let semantics = value["semantics"].object != nil ? value["semantics"] : value["metadata"]["semantics"]
+            return semantics["uiVisibility"].string != "hidden" && semantics["transcriptVisibility"].string != "hidden" && value["visibility"].string != "model-only" && value["metadata"]["visibility"].string != "model-only"
+        }
+        return rows.compactMap { row in
+            let info = row["info"], parts = (row["parts"].array ?? []).filter(visible)
+            guard visible(row), visible(info), let id = info["messageId"].string ?? info["id"].string else { return nil }
+            let text = parts.filter { $0["type"].string == "text" }.compactMap { $0["text"].string }.joined(separator: "\n")
+            let reasoning = parts.filter { $0["type"].string == "reasoning" }.compactMap { $0["text"].string }.joined(separator: "\n")
+            let tools: [RelayJSON] = parts.filter { $0["type"].string == "tool" }.compactMap { part in
+                guard let toolID = part["callID"].string ?? part["callId"].string ?? part["partId"].string ?? part["id"].string else { return nil }
+                let output = part["state"]["output"].string ?? part["state"]["error"].string ?? part["output"].string
+                return .object(["id": .string(toolID), "name": .string(part["tool"].string ?? part["name"].string ?? "Tool"), "status": .string(part["state"]["status"].string ?? part["status"].string ?? "completed"), "input": part["state"]["input"] == .null ? part["input"] : part["state"]["input"], "output": output.map(RelayJSON.string) ?? .null])
+            }
+            let attachments: [RelayJSON] = parts.filter { $0["type"].string == "file" }.compactMap { part in
+                guard let attachmentID = part["partId"].string ?? part["id"].string else { return nil }
+                return .object(["id": .string(attachmentID), "fileName": .string(part["filename"].string ?? "Attachment"), "mimeType": part["mime"]])
+            }
+            guard !text.isEmpty || !reasoning.isEmpty || !tools.isEmpty || !attachments.isEmpty else { return nil }
+            let role = info["role"].string ?? "system"
+            return .object(["id": .string(id), "role": .string(["user", "assistant", "system", "tool"].contains(role) ? role : "system"), "text": .string(text), "reasoning": .string(reasoning), "toolCalls": .array(tools), "attachments": .array(attachments), "createdAt": date(info["time"]["created"].number ?? info["time_created"].number), "isStreaming": .bool(false)])
+        }
+    }
     static func models(_ options: [RelayJSON]) -> RelayJSON {
         .object(["models": .array(options.compactMap { option in
             guard let provider = option["ref"]["providerId"].string, let model = option["ref"]["modelId"].string else { return nil }
@@ -60,6 +93,9 @@ enum RelayBridgeMapping {
     }
     static func interaction(_ pending: RelayPendingInteraction, sessionID: String) -> RelayJSON {
         let p = pending.payload
+        if pending.kind == "workspaceHookReview", let review = try? pending.workspaceHookReview() {
+            return .object(["id": .string(pending.id), "sessionId": .string(sessionID), "kind": .string(pending.kind), "title": .string("审查工作区钩子"), "reason": .string("所选钩子的信任会持久保存。"), "hookReview": review.wire])
+        }
         return .object(["id": .string(pending.id), "sessionId": .string(sessionID), "kind": .string(pending.kind), "title": p["toolName"].string.map(RelayJSON.string) ?? .string("需要你的回答"), "reason": p["reason"].string.map(RelayJSON.string) ?? p["prompt"], "toolName": p["toolName"], "questions": p["questions"], "input": p["input"]])
     }
     static func history(_ projection: RelayConversationProjection) -> RelayJSON {

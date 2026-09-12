@@ -43,6 +43,7 @@ public actor RelayClient {
     public private(set) var bridge: RelayBridge?
     public var pairedDeviceID: String? { paired ? lastDeviceID : nil }
     public var connectedAppVersion: String? { pairing?.appVersion }
+    public private(set) var workspaceHookReviewSupported = false
     public nonisolated let liveVerified = false
     private let eventSink: AsyncStream<RelayEvent>.Continuation
     private var observers: [UUID: AsyncStream<RelayEvent>.Continuation] = [:]
@@ -75,6 +76,8 @@ public actor RelayClient {
     private var initializeWaiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
     private var initializeTimeouts: [UUID: Task<Void, Never>] = [:]
     private var conversationListener: Int32?
+    private var conversationInitialization: (id: UUID, task: Task<Bool, any Error>)?
+    private var conversationReady = false
     private var subscriptions: [String: (sessionID: String, ack: RelaySubscription)] = [:]
     private var reducers: [String: RelayProjectionReducer] = [:]
     private var snapshots: [String: RelaySessionSnapshot] = [:]
@@ -84,6 +87,7 @@ public actor RelayClient {
     private var earlyFrameBytes = 0, pendingSubscriptions = 0
     private var recovering = Set<String>(), stoppedSessions = Set<String>()
     private var commandHashes: [String: Data] = [:]
+    private var readOnlySubagents = Set<String>()
 
     public init(clientID: String, transport: any RelaySocketTransport = RelayURLSessionSocket(), requestTimeout: TimeInterval = 15) throws {
         guard RelayWire.validID(clientID), requestTimeout.isFinite, (0.05...120).contains(requestTimeout) else { throw RelayFailure.invalid("Invalid relay client configuration.") }
@@ -157,6 +161,9 @@ public actor RelayClient {
         for request in rpcRequests.values { request.timeout.cancel(); request.continuation.resume(throwing: error) }; rpcRequests.removeAll()
         for waiter in initializeWaiters.values { waiter.resume(throwing: error) }; initializeWaiters.removeAll()
         for timeout in initializeTimeouts.values { timeout.cancel() }; initializeTimeouts.removeAll()
+        conversationInitialization?.task.cancel(); conversationInitialization = nil
+        conversationReady = false; workspaceHookReviewSupported = false
+        readOnlySubagents.removeAll()
         paired = false; rpcReady = false; pairing = nil; bridge = nil; frames = nil; conversationListener = nil
         subscriptions.removeAll(); earlyFrames.removeAll(); earlyFrameFailures.removeAll(); subscriptionRequests.removeAll(); earlyFrameBytes = 0; pendingSubscriptions = 0; recovering.removeAll(); conversationAssembler = .init()
         await transport.close(); closing = false; setState(next)
@@ -219,6 +226,9 @@ public actor RelayClient {
                       attached.workspacePath == workspace.workspacePath, attached.workspaceKey == workspace.id, attached.workspaceIdentity == workspace.workspaceIdentity else { throw RelayFailure.invalid("The attached workspace differs from the selected workspace.") }
                 if workspaceScopeID != attached.workspaceKey { reducers.removeAll(); snapshots.removeAll(); stoppedSessions.removeAll(); workspaceScopeID = attached.workspaceKey }
                 frames = try RelayFrameTransport(identity: attached.identity); bridge = attached; rpcReady = false; conversationListener = nil
+                conversationInitialization?.task.cancel(); conversationInitialization = nil
+                conversationReady = false; workspaceHookReviewSupported = false
+                readOnlySubagents.removeAll()
                 subscriptions.removeAll(); earlyFrames.removeAll(); earlyFrameFailures.removeAll(); earlyFrameBytes = 0; recovering.removeAll(); conversationAssembler = .init(); setState(.attached(attached))
             }
             completeApp(requestID, result: .success(payload)); return
@@ -264,7 +274,7 @@ public actor RelayClient {
         let result = try response["result"].decode(RelayBootstrap.self); knownWorkspaces = result.workspaces; return result
     }
     public func openWorkspace(key: String, taskID: String? = nil) async throws -> RelayBridge {
-        guard !workspaceOpening, rpcRequests.isEmpty, pendingSubscriptions == 0 else { throw RelayFailure("relay_busy", "Wait for pending desktop requests before switching workspaces.") }
+        guard !workspaceOpening, rpcRequests.isEmpty, pendingSubscriptions == 0, conversationInitialization == nil || conversationReady else { throw RelayFailure("relay_busy", "Wait for pending desktop requests before switching workspaces.") }
         guard let workspace = knownWorkspaces.first(where: { $0.id == key }), workspace.canAttach else { throw RelayFailure("workspace_unavailable", "Choose an opened and connected desktop workspace.") }
         workspaceOpening = true; defer { workspaceOpening = false }
         let bridgeID = UUID().uuidString; bridgeGeneration += 1
@@ -289,11 +299,61 @@ public actor RelayClient {
         if let error { waiter.resume(throwing: error) } else { waiter.resume() }
     }
     private func nextRPCID() throws -> Int32 { guard rpcSequence < Int32.max else { throw RelayFailure.invalid("RPC request ID exhausted; reconnect explicitly.") }; defer { rpcSequence += 1 }; return rpcSequence }
+    private func initializeConversation() async throws {
+        if conversationReady { return }
+        guard let selected = bridge, let connection = connectionID else { throw RelayFailure.closed() }
+        let initialization: (id: UUID, task: Task<Bool, any Error>)
+        if let existing = conversationInitialization { initialization = existing }
+        else {
+            initialization = (UUID(), Task {
+                try await RelayWorkspaceOperation.$expectedBridge.withValue(selected) {
+                    let hello = try await self.rpc("zcode-agent", "helloConversationV4")
+                    let mode = hello["clientMode"].string
+                    guard hello["kind"].string == "hello", hello["protocolVersion"].integer == 3,
+                          hello["connectionId"].string?.isEmpty == false,
+                          ["desktop-continuous", "web-remote-replayable"].contains(mode ?? ""),
+                          hello["deliveryProfile"].string == (mode == "desktop-continuous" ? "continuous" : "replayable"),
+                          hello["serverTime"].number?.isFinite == true,
+                          hello["capabilities"]["nativeDialogs"].bool != nil,
+                          hello["capabilities"]["localTerminal"].bool != nil,
+                          hello["capabilities"]["binaryFrames"].bool != nil,
+                          ["none", "permessage-deflate"].contains(hello["capabilities"]["compression"].string ?? "") else {
+                        throw RelayFailure("relay_protocol_unsupported", "The desktop conversation protocol is incompatible with this client.")
+                    }
+                    _ = try await self.rpc("zcode-agent", "initializeConversationV4", [
+                        "kind": .string("clientHello"), "protocolVersion": .int(3), "clientId": .string(self.clientID),
+                        "clientKind": .string("mobileApp"),
+                        "appVersion": .string(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"),
+                        "capabilities": .object(["workspaceHookReviewUi": .bool(true)])
+                    ])
+                    return hello["capabilities"]["workspaceHookReview"].bool == true
+                }
+            })
+            conversationInitialization = initialization
+        }
+        let supported: Bool
+        do { supported = try await initialization.task.value }
+        catch {
+            if conversationInitialization?.id == initialization.id { conversationInitialization = nil }
+            throw error
+        }
+        guard connectionID == connection, bridge == selected, conversationInitialization?.id == initialization.id else { throw RelayFailure.closed() }
+        conversationReady = true; workspaceHookReviewSupported = supported
+        try Task.checkCancellation()
+    }
     func rpc(_ channel: String, _ method: String, _ params: [String: RelayJSON] = [:], timeout: TimeInterval? = nil) async throws -> RelayJSON {
         guard !workspaceOpening else { throw RelayFailure("relay_busy", "Wait for the selected desktop workspace to finish opening.") }
+        let target = params["sessionId"]?.string ?? params["taskId"]?.string ?? params["envelope"]?["sessionId"].string
+        if let target, readOnlySubagents.contains(target), !(channel == "zcode-agent" && method == "readSession" && params["runtimePolicy"]?.string == "existing-only") {
+            throw RelayFailure("session_read_only", "Subagent records can only be read through their existing host runtime.")
+        }
         try await waitForIPC(); try Task.checkCancellation(); guard let bridge else { throw RelayFailure.closed() }
         if let expected = RelayWorkspaceOperation.expectedBridge, expected != bridge { throw RelayFailure("relay_workspace_changed", "The workspace changed before this operation completed.") }
-        let id = try nextRPCID(), scope = params.merging(bridge.scope) { _, host in host }
+        let handshake = channel == "zcode-agent" && ["helloConversationV4", "initializeConversationV4"].contains(method)
+        if channel == "zcode-agent", !handshake { try await initializeConversation() }
+        guard self.bridge == bridge else { throw RelayFailure("relay_workspace_changed", "The workspace changed before this operation completed.") }
+        // ClientHello has a strict schema. Workspace routing is already bound by the relay frame identity.
+        let id = try nextRPCID(), scope = handshake ? params : params.merging(bridge.scope) { _, host in host }
         let bytes = try RelayIPCCodec.encode(.init(header: [.int32(100), .int32(id), .string(channel), .string(method)], body: .array([try .object(.object(scope))])))
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -334,14 +394,47 @@ public actor RelayClient {
         if result.activeTurnID == nil, !["running", "waiting"].contains(result.status) { stoppedSessions.remove(sessionID) }
         return result
     }
+    /// Child authorization comes from an already loaded original-parent projection.
+    /// Never subscribe/rowsRange/cold-resume a child merely to make its history readable.
+    public func readSubagentSession(_ sessionID: String, parentSessionID: String) async throws -> RelaySessionSnapshot {
+        guard RelayWire.validID(sessionID), sessionID != parentSessionID, let selected = bridge,
+              let parent = reducers[parentSessionID]?.projection, parent.referencedSubagentIDs.contains(sessionID) else {
+            throw RelayFailure("session_not_found", "The selected parent's activity does not reference this subagent.")
+        }
+        readOnlySubagents.insert(sessionID)
+        let raw: RelayJSON
+        do { raw = try await rpc("zcode-agent", "readSession", ["sessionId": .string(sessionID), "runtimePolicy": .string("existing-only")]) }
+        catch let failure as RelayFailure where failure.code == "desktop_rpc_error" {
+            throw RelayFailure("relay_subagent_history_unavailable", "The host has no readable active runtime for this subagent. Loading a cold record would restore a runtime, so open it on the computer.")
+        }
+        let result = try RelaySessionSnapshot(raw: raw), workspace = raw["session"]["workspace"]
+        guard bridge == selected, result.sessionID == sessionID, raw["session"]["sessionKind"].string == "subagent_child",
+              raw["session"]["parentSessionId"].string == parentSessionID,
+              workspace["workspacePath"].string == selected.workspacePath,
+              workspace["workspaceIdentity"].string == selected.workspaceIdentity,
+              workspace["remoteSessionId"].string == selected.remoteSessionId else {
+            throw RelayFailure("relay_subagent_scope_mismatch", "The host's subagent ancestry or workspace differs from the parent's activity.")
+        }
+        guard raw["messages"].array != nil, result.messages.allSatisfy({ ($0["info"]["messageId"].string ?? $0["info"]["id"].string)?.isEmpty == false }) else {
+            throw RelayFailure.invalid("The host omitted subagent history or original message identities.")
+        }
+        let messageIDs = result.messages.compactMap { $0["info"]["messageId"].string ?? $0["info"]["id"].string }
+        guard Set(messageIDs).count == messageIDs.count else { throw RelayFailure.invalid("The host returned duplicate subagent message identities.") }
+        guard result.messages.count <= 10_000, try raw.data().count <= 16 * 1024 * 1024 else {
+            throw RelayFailure("relay_history_limit", "This subagent history exceeds the native read limit. No truncated history was returned.")
+        }
+        return result
+    }
     public func currentProjection(sessionID: String) -> RelayConversationProjection? { reducers[sessionID]?.projection }
     public func subscribe(sessionID: String, resume: Bool = true) async throws -> RelaySubscription {
         guard !workspaceOpening else { throw RelayFailure("relay_busy", "Wait for the selected desktop workspace to finish opening.") }
+        guard !readOnlySubagents.contains(sessionID) else { throw RelayFailure("session_read_only", "Subagent history uses an existing-runtime read, not a new conversation subscription.") }
         guard !sessionID.isEmpty, subscriptionRequests.insert(sessionID).inserted else { throw RelayFailure("relay_subscription_in_progress", "This task subscription is already opening.") }
         defer { subscriptionRequests.remove(sessionID) }
         try await waitForIPC(); guard let bridge else { throw RelayFailure.closed() }
         if let existing = subscriptions.values.first(where: { $0.sessionID == sessionID }) { return existing.ack }
         pendingSubscriptions += 1; defer { pendingSubscriptions = max(0, pendingSubscriptions - 1) }
+        try await initializeConversation()
         if conversationListener == nil {
             let id = try nextRPCID(); conversationListener = id
             try await sendIPC(RelayIPCCodec.encode(.init(header: [.int32(102), .int32(id), .string("zcode-agent"), .string("onDynamicConversationFrame")], body: try .object(.object(bridge.scope)))))
@@ -436,9 +529,9 @@ public actor RelayClient {
         let projection = reducers[sessionID]?.projection
         return .init(commandId: commandID, clientId: clientID, sessionId: sessionID, type: type, payload: payload, baseRevision: projection?.revision, baseLogEpoch: projection?.logEpoch)
     }
-    public func submit(_ command: RelayCommandEnvelope, explicitUserAction: Bool, confirmFullAccess: Bool = false) async throws -> RelayCommandAck {
+    public func submit(_ command: RelayCommandEnvelope, explicitUserAction: Bool, confirmFullAccess: Bool = false, hookReviewAuthorization: RelayHookReviewAuthorization? = nil) async throws -> RelayCommandAck {
         try RelayWire.requireAction(explicitUserAction)
-        try validate(command, confirmFullAccess: confirmFullAccess)
+        try validate(command, confirmFullAccess: confirmFullAccess, hookReviewAuthorization: hookReviewAuthorization)
         let key = command.commandId, digest = Data(SHA256.hash(data: try command.json().data()))
         if let previous = commandHashes[key], previous != digest { throw RelayFailure("command_conflict", "The command ID was reused with different content.") }
         commandHashes[key] = digest
@@ -451,7 +544,7 @@ public actor RelayClient {
             emit(.command(ack)); return ack
         } catch { emit(.commandUncertain(.init(sessionId: command.sessionId, commandId: command.commandId))); throw error }
     }
-    private func validate(_ command: RelayCommandEnvelope, confirmFullAccess: Bool) throws {
+    private func validate(_ command: RelayCommandEnvelope, confirmFullAccess: Bool, hookReviewAuthorization: RelayHookReviewAuthorization?) throws {
         guard command.clientId == clientID, RelayWire.validID(command.commandId), command.issuedAt.isFinite else { throw RelayFailure.invalid("Invalid command identity.") }
         let payload = try command.payload.requiringObject()
         if command.type == "createSession" {
@@ -459,6 +552,9 @@ public actor RelayClient {
             return
         }
         guard let sessionID = command.sessionId, !sessionID.isEmpty else { throw RelayFailure.invalid("Missing command session.") }
+        if ["requestWorkspaceHookReview", "respondWorkspaceHookReview", "toggleWorkspaceHookReviewItem", "revokeWorkspaceHookTrust"].contains(command.type) {
+            try validateHookReviewCommand(command, authorization: hookReviewAuthorization); return
+        }
         let keys: [String: Set<String>] = ["sendText": ["text", "attachments", "requestedDelivery"], "stop": ["expectedForegroundExecutionId"], "forkAssistant": ["target"], "renameSession": ["title"], "resolveInteraction": ["interactionId", "answer"], "switchModelConfig": ["provider", "model", "thought"], "switchCollaborationMode": ["mode"], "pauseGoal": [], "resumeGoal": []]
         guard let allowed = keys[command.type], Set(payload.keys).isSubset(of: allowed) else { throw RelayFailure("relay_command_unsupported", "This command or payload field is not exposed by the native adapter.") }
         switch command.type {
@@ -484,13 +580,64 @@ public actor RelayClient {
         default: break
         }
     }
+    public func currentHookReview(sessionID: String) throws -> RelayHookReviewRequest? {
+        guard let projection = reducers[sessionID]?.projection else { return nil }
+        let pending = projection.pendingInteractions.filter { $0.kind == "workspaceHookReview" }
+        guard pending.count <= 1 else { throw RelayFailure("hook_review_invalid", "The desktop supplied conflicting hook reviews.") }
+        return try pending.first?.workspaceHookReview()
+    }
+    private func validateHookReviewCommand(_ command: RelayCommandEnvelope, authorization: RelayHookReviewAuthorization?) throws {
+        guard workspaceHookReviewSupported else { throw RelayFailure("workspace_hooks_require_trust_capable_host", "The attached desktop has not advertised workspace hook review support.") }
+        guard let sessionID = command.sessionId, let bridge, let projection = reducers[sessionID]?.projection else { throw RelayFailure("hook_review_not_pending", "Read the attached task before reviewing workspace hooks.") }
+        let payload = try command.payload.requiringObject(), workspace = bridge.workspaceIdentity ?? bridge.workspacePath
+        guard payload["sessionId"]?.string == sessionID, payload["workspaceIdentity"]?.string == workspace, payload["remoteSessionId"]?.string == bridge.remoteSessionId else { throw RelayFailure("workspace_hooks_snapshot_mismatch", "The hook review targets another workspace, remote host or task.") }
+        if command.type == "requestWorkspaceHookReview" {
+            let allowed: Set<String> = ["sessionId", "workspaceIdentity", "bundleDigest", "remoteSessionId"]
+            guard Set(payload.keys).isSubset(of: allowed), let digest = payload["bundleDigest"]?.string,
+                  digest == (try currentHookReview(sessionID: sessionID))?.bundleDigest || digest == projection.raw["workspaceHookAdmission"]["bundleDigest"].string else { throw RelayFailure("workspace_hooks_snapshot_mismatch", "The requested hook bundle is no longer current.") }
+            return
+        }
+        guard let authorization else { throw RelayFailure("hook_review_confirmation_required", "Use the dedicated workspace hook review confirmation.") }
+        let request = authorization.request
+        try request.validateConfirmation(authorization.confirmation, operation: authorization.operation)
+        guard command.type == authorization.operation.commandType, command.payload == (try authorization.operation.payload(target: request.target)) else { throw RelayFailure("hook_review_confirmation_required", "The command differs from the confirmed hook operation.") }
+        guard let current = try currentHookReview(sessionID: sessionID), current.target == request.target else { throw RelayFailure("workspace_hooks_review_superseded", "The workspace hook review has been replaced or settled.") }
+        guard current == request else { throw RelayFailure("workspace_hooks_snapshot_mismatch", "The displayed hook review content changed. Review the new commands before confirming.") }
+        guard Date().timeIntervalSince1970 * 1000 < current.deadlineAt else { throw RelayFailure("hook_review_expired", "The workspace hook review has expired.") }
+    }
+    /// The caller must journal this complete envelope before submitting it.
+    public func makeHookReviewCommand(authorization: RelayHookReviewAuthorization, commandID: String) throws -> RelayCommandEnvelope {
+        let command = makeCommand(sessionID: authorization.request.sessionId, type: authorization.operation.commandType, payload: try authorization.operation.payload(target: authorization.request.target), commandID: commandID)
+        try validateHookReviewCommand(command, authorization: authorization); return command
+    }
+    public func makeRequestHookReviewCommand(sessionID: String, workspaceIdentity: String, bundleDigest: String, remoteSessionID: String? = nil, commandID: String) throws -> RelayCommandEnvelope {
+        var fields: [String: RelayJSON] = ["sessionId": .string(sessionID), "workspaceIdentity": .string(workspaceIdentity), "bundleDigest": .string(bundleDigest)]
+        if let remoteSessionID { fields["remoteSessionId"] = .string(remoteSessionID) }
+        let command = makeCommand(sessionID: sessionID, type: "requestWorkspaceHookReview", payload: .object(fields), commandID: commandID)
+        try validateHookReviewCommand(command, authorization: nil); return command
+    }
+    public func requestHookReview(sessionID: String, workspaceIdentity: String, bundleDigest: String, remoteSessionID: String? = nil, commandID: String, explicitUserAction: Bool) async throws -> RelayCommandAck {
+        try await submit(makeRequestHookReviewCommand(sessionID: sessionID, workspaceIdentity: workspaceIdentity, bundleDigest: bundleDigest, remoteSessionID: remoteSessionID, commandID: commandID), explicitUserAction: explicitUserAction)
+    }
+    public func trustHookReview(request: RelayHookReviewRequest, selectedItemIDs: [String], confirmation: RelayHookReviewConfirmation, commandID: String, explicitUserAction: Bool) async throws -> RelayCommandAck {
+        let authorization = try RelayHookReviewAuthorization(request: request, operation: .trustSelected(itemIDs: selectedItemIDs), confirmation: confirmation)
+        return try await submit(makeHookReviewCommand(authorization: authorization, commandID: commandID), explicitUserAction: explicitUserAction, hookReviewAuthorization: authorization)
+    }
+    public func revokeHookTrust(request: RelayHookReviewRequest, selectedItemIDs: [String], confirmation: RelayHookReviewConfirmation, commandID: String, explicitUserAction: Bool) async throws -> RelayCommandAck {
+        let authorization = try RelayHookReviewAuthorization(request: request, operation: .revokeSelected(itemIDs: selectedItemIDs), confirmation: confirmation)
+        return try await submit(makeHookReviewCommand(authorization: authorization, commandID: commandID), explicitUserAction: explicitUserAction, hookReviewAuthorization: authorization)
+    }
+    public func toggleHookReviewItem(request: RelayHookReviewRequest, itemID: String, enabled: Bool, confirmation: RelayHookReviewConfirmation, commandID: String, explicitUserAction: Bool) async throws -> RelayCommandAck {
+        let authorization = try RelayHookReviewAuthorization(request: request, operation: .setEnabled(itemID: itemID, enabled: enabled), confirmation: confirmation)
+        return try await submit(makeHookReviewCommand(authorization: authorization, commandID: commandID), explicitUserAction: explicitUserAction, hookReviewAuthorization: authorization)
+    }
     private func validateAnswer(_ answer: RelayJSON, interaction: RelayPendingInteraction) throws {
         let fields = try answer.requiringObject()
         guard Set(fields.keys).isSubset(of: ["optionId", "action", "content", "freeText"]) else { throw RelayFailure.invalid("Unsupported interaction answer field.") }
         if interaction.kind == "permission" {
             guard fields.count == 1, let id = answer["optionId"].string, interaction.oneTimeOptions.contains(where: { $0["optionId"].string == id }) else { throw RelayFailure("persistent_permissions_unsupported", "Choose an exact pending one-time permission option.") }; return
         }
-        guard interaction.kind == "userInput" else { throw RelayFailure("interaction_unsupported", "Workspace hook review is not implemented by this adapter.") }
+        guard interaction.kind == "userInput" else { throw RelayFailure("interaction_unsupported", "Use the dedicated workspace hook review and persistent-change confirmation.") }
         if let id = answer["optionId"].string {
             guard fields.count == 1, interaction.oneTimeOptions.contains(where: { $0["optionId"].string == id }) else { throw RelayFailure.invalid("Choose a pending user-input option.") }; return
         }

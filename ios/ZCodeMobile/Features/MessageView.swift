@@ -1,4 +1,5 @@
 import SwiftUI
+import Observation
 
 struct MessageView: View {
     @Environment(AppStore.self) private var store
@@ -59,7 +60,7 @@ struct MessageView: View {
                         }
                     }
                 }
-                RichMessageText(text: message.text, user: false).equatable()
+                RichMessageText(text: message.text, user: false, streaming: message.isStreaming).equatable()
                 attachmentLabels
                 if !message.changes.isEmpty {
                     changeSummary.padding(.top, -4)
@@ -152,10 +153,16 @@ struct MessageView: View {
     }
 }
 
-enum MessageTextBlock: Identifiable, Equatable {
+enum MessageTextBlock: Identifiable, Equatable, Sendable {
     case prose(Int, AttributedString), code(Int, String), table(Int, [[String]])
     var id: Int {
         switch self { case .prose(let id, _), .code(let id, _), .table(let id, _): id }
+    }
+    static func layoutBlocks(_ blocks: [Self]) -> [Self] {
+        blocks.filter { block in
+            if case .prose(_, let content) = block { return !content.characters.isEmpty }
+            return true
+        }
     }
 }
 
@@ -181,11 +188,11 @@ final class MessageTextCache {
         cache.setObject(Entry(result), forKey: key, cost: text.utf16.count * 8 + 256)
         return result
     }
-    private static func attributed(_ text: String) -> AttributedString {
+    nonisolated private static func attributed(_ text: String) -> AttributedString {
         let trimmed = text.trimmingCharacters(in: .newlines)
         return (try? AttributedString(markdown: trimmed, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(trimmed)
     }
-    static func parse(text: String, user: Bool) -> [MessageTextBlock] {
+    nonisolated static func parse(text: String, user: Bool) -> [MessageTextBlock] {
         if user { return [.prose(0, attributed(text))] }
         let fence = String(repeating: String(UnicodeScalar(96)!), count: 3)
         let segments = text.components(separatedBy: fence)
@@ -215,41 +222,154 @@ final class MessageTextCache {
     }
 }
 
+struct MessageTextParseRequest: Equatable, Sendable {
+    let text: String
+    let user: Bool
+}
+
+/// Transient stream prefixes never enter the completed-message cache.
+private actor StreamingMessageTextParser {
+    static let shared = StreamingMessageTextParser()
+
+    func parse(_ request: MessageTextParseRequest) async throws -> [MessageTextBlock] {
+        try Task.checkCancellation()
+        let blocks = MessageTextCache.parse(text: request.text, user: request.user)
+        try Task.checkCancellation()
+        return blocks
+    }
+}
+
+@MainActor @Observable
+final class StreamingMessageTextState {
+    typealias Parser = @Sendable (MessageTextParseRequest) async throws -> [MessageTextBlock]
+    private(set) var blocks: [MessageTextBlock] = []
+    @ObservationIgnored private(set) var renderedRequest: MessageTextParseRequest?
+    @ObservationIgnored private var latest: MessageTextParseRequest?
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var generation: UUID?
+    @ObservationIgnored private let parser: Parser
+    @ObservationIgnored private let interval: Duration
+
+    init(interval: Duration = .milliseconds(50),
+         parser: @escaping Parser = { try await StreamingMessageTextParser.shared.parse($0) }) {
+        self.interval = interval
+        self.parser = parser
+    }
+
+    func update(text: String, user: Bool) {
+        let request = MessageTextParseRequest(text: text, user: user)
+        guard latest != request else { return }
+        latest = request
+        guard task == nil else { return }
+        let current = UUID()
+        generation = current
+        task = Task { [weak self] in
+            guard let self else { return }
+            defer { if generation == current { task = nil } }
+            while !Task.isCancelled, generation == current, let request = latest {
+                let parsed: [MessageTextBlock]
+                do { parsed = try await parser(request) }
+                catch { return }
+                guard !Task.isCancelled, generation == current, let newest = latest else { return }
+                // Publish progress even while append-only output continues. A rewritten
+                // or shortened answer cannot receive a result from its old content.
+                if newest.user == request.user, newest.text.utf8.starts(with: request.text.utf8) {
+                    blocks = parsed
+                    renderedRequest = request
+                }
+                // A fixed interval between batches, never restarted by incoming tokens.
+                do { try await Task.sleep(for: interval) }
+                catch { return }
+                guard latest != request else { return }
+            }
+        }
+    }
+
+    func cancel() {
+        generation = nil
+        task?.cancel()
+        task = nil
+        latest = nil
+        renderedRequest = nil
+        blocks = []
+    }
+}
+
 struct RichMessageText: View, Equatable {
     var text: String
     var user: Bool
+    var streaming = false
+
+    var body: some View {
+        if streaming {
+            StreamingRichMessageText(text: text, user: user)
+        } else {
+            MessageTextContent(blocks: MessageTextCache.shared.blocks(text: text, user: user), user: user)
+        }
+    }
+}
+
+private struct StreamingRichMessageText: View {
+    let text: String
+    let user: Bool
+    @State private var renderer = StreamingMessageTextState()
+
+    var body: some View {
+        MessageTextContent(blocks: renderer.blocks, user: user)
+            .onAppear { renderer.update(text: text, user: user) }
+            .onChange(of: MessageTextParseRequest(text: text, user: user)) { _, request in
+                renderer.update(text: request.text, user: request.user)
+            }
+            .onDisappear { renderer.cancel() }
+    }
+}
+
+private struct MessageTextContent: View {
+    let blocks: [MessageTextBlock]
+    let user: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(MessageTextCache.shared.blocks(text: text, user: user)) { block in
-                switch block {
-                case .prose(_, let content):
-                    if !content.characters.isEmpty {
-                        Text(content)
-                            .font(.system(size: 17)).tracking(user ? 0 : 0.6)
-                            .lineSpacing(5.333333)
-                            .foregroundStyle(user ? ZTheme.userText : .primary)
-                            .frame(maxWidth: user ? nil : .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    }
-                case .code(_, let content):
-                    CodeBlockView(code: content)
-                case .table(_, let rows):
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                                HStack(alignment: .top, spacing: 20) {
-                                    ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                                        Text(cell).font(.system(size: 16, weight: index == 0 ? .semibold : .regular))
-                                            .frame(width: 150, alignment: .leading)
-                                    }
-                                }.padding(.vertical, 14)
-                                Divider()
-                            }
-                        }
-                    }.padding(.vertical, 8).accessibilityLabel("数据表格，可横向滚动")
-                }
+            ForEach(MessageTextBlock.layoutBlocks(blocks)) { block in
+                MessageTextBlockRow(block: block, user: user).equatable()
             }
+        }
+    }
+}
+
+/// Full block values participate in equality: an unchanged ID alone must not
+/// retain an old streaming tail, Markdown attributes, or role-dependent style.
+private struct MessageTextBlockRow: View, Equatable {
+    let block: MessageTextBlock
+    let user: Bool
+
+    var body: some View {
+        switch block {
+        case .prose(_, let content):
+            if !content.characters.isEmpty {
+                Text(content)
+                    .font(.system(size: 17)).tracking(user ? 0 : 0.6)
+                    .lineSpacing(5.333333)
+                    .foregroundStyle(user ? ZTheme.userText : .primary)
+                    .frame(maxWidth: user ? nil : .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+        case .code(_, let content):
+            CodeBlockView(code: content)
+        case .table(_, let rows):
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        HStack(alignment: .top, spacing: 20) {
+                            ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                                Text(cell).font(.system(size: 16, weight: index == 0 ? .semibold : .regular))
+                                    .frame(width: 150, alignment: .leading)
+                            }
+                        }.padding(.vertical, 14)
+                        Divider()
+                    }
+                }
+            }.padding(.vertical, 8).accessibilityLabel("数据表格，可横向滚动")
         }
     }
 }

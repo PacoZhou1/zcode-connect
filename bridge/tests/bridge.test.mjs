@@ -27,7 +27,7 @@ class FakeProtocol extends EventEmitter {
     this.calls.push({ method, params });
     if (method === 'session/create') return { session: { sessionId: `owned_${this.calls.length}`, createdAt: Date.now(), status: 'idle' }, messages: [] };
     if (method === 'session/read' || method === 'session/resume') return { session: { sessionId: params.sessionId, status: 'idle' }, messages: [] };
-    if (method === 'v4/command') { await new Promise(resolve => setTimeout(resolve, 5)); return { status: 'accepted' }; }
+    if (method === 'v4/command') { await new Promise(resolve => setTimeout(resolve, 5)); return { commandId: params.commandId, status: 'accepted', revisionAtDecision: 1 }; }
     await new Promise(resolve => setTimeout(resolve, 5)); return {};
   }
 }

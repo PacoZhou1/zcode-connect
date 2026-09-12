@@ -73,6 +73,9 @@ public struct RelayHostAgents: Sendable, Equatable {
 }
 
 public extension RelayConversationProjection {
+    var referencedSubagentIDs: Set<String> {
+        Set((hostAgents?.childSessionIDs ?? []) + (hostAgents?.running.map(\.childSessionID) ?? []) + rows.filter { $0["kind"].string == "subagent" }.compactMap { $0["childSessionId"].string })
+    }
     var hostGoal: RelayHostGoal? { .init(projection: raw) }
     var hostAgents: RelayHostAgents? { .init(projection: raw) }
     var showsHostGoal: Bool { hostGoal != nil }

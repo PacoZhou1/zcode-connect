@@ -52,6 +52,50 @@ struct RemoteSession: Identifiable, Codable, Hashable {
     var unreadScope: String?
     var canMarkUnread: Bool?
     var canFork: Bool?
+    var canReviewHooks: Bool?
+    var canRename: Bool?
+    var canPin: Bool?
+    var canArchive: Bool?
+}
+
+enum SessionMenuActionID: String, Sendable {
+    case pin, rename, unread, copyID, archive
+}
+
+struct SessionMenuItem: Identifiable, Equatable, Sendable {
+    var id: SessionMenuActionID
+    var title: String
+    var symbol: String
+    var destructive = false
+    var isEnabled = true
+}
+
+enum SessionMenuPolicy {
+    static func items(for session: RemoteSession, isReferenceMode: Bool, isRelay: Bool,
+                      isOnline: Bool, isUnread: Bool) -> [SessionMenuItem] {
+        // Older owned-session payloads omit these optional flags. Their metadata
+        // support is independent of send, including archived tasks that can be restored.
+        let owned = ["bridge", "official-relay"].contains(session.source)
+        let remoteEnabled = isReferenceMode || isOnline
+        var items: [SessionMenuItem] = []
+        if isReferenceMode || (owned && session.canPin != false) {
+            items.append(.init(id: .pin, title: session.isPinned ? "取消置顶" : "置顶",
+                               symbol: session.isPinned ? "pin.slash" : "pin", isEnabled: remoteEnabled))
+        }
+        if isReferenceMode || (owned && session.canRename != false) {
+            items.append(.init(id: .rename, title: "重命名", symbol: "pencil", isEnabled: remoteEnabled))
+        }
+        let syncsUnread = !isReferenceMode && (session.canMarkUnread ?? (session.unreadScope == "bridge" || isRelay))
+        let localSuffix = !isReferenceMode && !syncsUnread ? "（仅此手机）" : ""
+        items.append(.init(id: .unread, title: (isUnread ? "标记为已读" : "标记为未读") + localSuffix,
+                           symbol: "circle.fill", isEnabled: !syncsUnread || isOnline))
+        items.append(.init(id: .copyID, title: "复制对话串 ID", symbol: "square.on.square"))
+        if isReferenceMode || (owned && session.canArchive != false) {
+            items.append(.init(id: .archive, title: session.isArchived ? "取消归档" : "归档", symbol: "archivebox",
+                               destructive: !session.isArchived, isEnabled: remoteEnabled))
+        }
+        return items
+    }
 }
 
 struct MessageForkTarget: Codable, Hashable, Sendable {
@@ -98,13 +142,18 @@ struct FileChange: Identifiable, Codable, Hashable {
     var truncated: Bool? = nil
 }
 
-struct RemoteFile: Identifiable, Codable, Hashable {
+struct RemoteFile: Identifiable, Codable, Hashable, Sendable {
     var id: String { path }
     var name: String
     var path: String
     var isDirectory: Bool
     var children: [RemoteFile]? = nil
     var content: String? = nil
+}
+
+struct RemoteFileListing: Equatable, Sendable {
+    var files: [RemoteFile]
+    var truncated: Bool = false
 }
 
 struct AgentTask: Identifiable, Codable, Hashable {

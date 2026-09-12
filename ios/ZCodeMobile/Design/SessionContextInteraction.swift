@@ -1,11 +1,25 @@
 import SwiftUI
 import UIKit
 
-struct SessionContextAction {
-    var title: String
-    var symbol: String
-    var destructive = false
+struct SessionContextAction: Identifiable {
+    var item: SessionMenuItem
     var perform: @MainActor () -> Void
+    var id: SessionMenuActionID { item.id }
+
+    struct AccessibilityIdentity: Hashable {
+        var action: SessionMenuActionID
+        var title: String
+        var symbol: String
+        var destructive: Bool
+        var isEnabled: Bool
+    }
+
+    // Complete semantics for AX-owner lifetime and action identity. Changing
+    // only a child action key did not refresh the registered iOS 26 AX actions.
+    var accessibilityIdentity: AccessibilityIdentity {
+        .init(action: item.id, title: item.title, symbol: item.symbol,
+              destructive: item.destructive, isEnabled: item.isEnabled)
+    }
 }
 
 /// UIKit owns the lift, dimming, menu glass, dismissal and preview commit animation.
@@ -28,7 +42,10 @@ struct SessionContextInteraction: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: UIView, context: Context) {
-        if context.coordinator.parent.identity != identity { context.coordinator.invalidate() }
+        let previous = context.coordinator.parent
+        if previous.identity != identity || previous.actions.map(\.item) != actions.map(\.item) {
+            context.coordinator.invalidate()
+        }
         context.coordinator.parent = self
     }
     static func dismantleUIView(_ view: UIView, coordinator: Coordinator) { coordinator.invalidate() }
@@ -63,9 +80,11 @@ struct SessionContextInteraction: UIViewRepresentable {
                 return controller
             }, actionProvider: { _ in
                 UIMenu(title: current.title, children: current.actions.map { action in
-                    UIAction(title: action.title, image: UIImage(systemName: action.symbol),
-                             attributes: action.destructive ? .destructive : []) { [weak self] _ in
-                        guard self?.generation == generation, self?.parent.identity == current.identity else { return }
+                    var attributes: UIMenuElement.Attributes = action.item.destructive ? .destructive : []
+                    if !action.item.isEnabled { attributes.insert(.disabled) }
+                    return UIAction(title: action.item.title, image: UIImage(systemName: action.item.symbol),
+                             attributes: attributes) { [weak self] _ in
+                        guard action.item.isEnabled, self?.generation == generation, self?.parent.identity == current.identity else { return }
                         action.perform()
                     }
                 })

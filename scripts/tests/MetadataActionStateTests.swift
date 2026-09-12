@@ -28,6 +28,22 @@ import Foundation
             ("togglePin", ["pinned": .bool(true)], { $0.togglePin("S") }),
             ("archive", ["archived": .bool(true)], { $0.archive("S") })
         ]
+        for (name, _, perform) in actions {
+            await run("explicit metadata capability rejects \(name) without optimistic state or network") {
+                let f = Fixture(); defer { f.close() }; await f.connect()
+                guard let index = f.store.sessions.firstIndex(where: { $0.id == "S" }) else { throw TestFailure(message: "missing fixture task") }
+                f.store.sessions[index].canRename = false
+                f.store.sessions[index].canPin = false
+                f.store.sessions[index].canArchive = false
+                let before = f.store.sessions[index]
+                TestTransport.requests = []
+                perform(f.store); await drainActor()
+                try check(!TestTransport.requests.contains { $0.method == "PATCH" }, "unsupported action reached host")
+                let after = f.store.session("S")!
+                try check(after.title == before.title && after.isPinned == before.isPinned && after.isArchived == before.isArchived, "unsupported action changed visible state")
+                try check(f.store.errorMessage != nil, "unsupported action did not explain refusal")
+            }
+        }
         for (name, expected, perform) in actions {
             await run("\(name) queued on A cannot start against same-ID B; fresh B action still works") {
                 let f = Fixture(); defer { f.close() }

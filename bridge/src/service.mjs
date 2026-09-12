@@ -14,6 +14,7 @@ import { listWorkspaceFiles, readWorkspaceFile, searchWorkspaceFiles } from './f
 import { AttachmentStore } from './attachments.mjs';
 import { HostActivity, activityFromProjection, emptyHostActivity } from './host-activity.mjs';
 import { forkSession, forkRows, withForkTargets } from './fork.mjs';
+import { HookReviewManager } from './hook-review.mjs';
 
 export class BridgeService extends EventEmitter {
   constructor({ runtimeDir, zcodeRoot, cliPath, acceptanceWorkspace, protocol, history, ownedHistory }) {
@@ -26,17 +27,22 @@ export class BridgeService extends EventEmitter {
     this.registry = readJSON(this.registryPath, { sessions: {}, inputs: {}, drafts: {} });
     this.registry.sessions = Object.assign(Object.create(null), this.registry.sessions); this.registry.inputs = Object.assign(Object.create(null), this.registry.inputs); this.registry.drafts = Object.assign(Object.create(null), this.registry.drafts);
     this.registry.forks = Object.assign(Object.create(null), this.registry.forks);
+    this.registry.hookCommands = Object.assign(Object.create(null), this.registry.hookCommands);
     for (const record of Object.values(this.registry.sessions)) if (['running', 'waiting'].includes(record.status)) { record.status = 'error'; record.recoveryReason = 'The bridge restarted before the previous turn was confirmed complete.'; }
     for (const draft of Object.values(this.registry.drafts)) if (draft.status === 'pending') draft.status = 'uncertain';
     this.snapshots = new Map(); this.initialized = new Set(); this.initializing = new Map(); this.refreshing = new Map(); this.refreshTimers = new Map(); this.mutations = new Map();
     this.events = new EventJournal();
+    this.inputRuntimeEpoch = randomUUID();
     this.sessionPages = new SessionPages();
     this.protocol = protocol ?? new ZCodeProtocol({ cliPath, runtimeDir, cwd: acceptanceWorkspace, preferences: readJSON(join(zcodeRoot, 'v2/setting.json')) });
-    this.hostActivity = new HostActivity({ protocol: this.protocol, events: this.events, isOwned: id => Object.hasOwn(this.registry.sessions, id) });
+    this.hostActivity = new HostActivity({ protocol: this.protocol, events: this.events, isOwned: id => Object.hasOwn(this.registry.sessions, id),
+      onProjection: (id, after, before) => this.hooks.observe(id, after, before) });
+    this.hooks = new HookReviewManager(this);
     this.protocol.on('sessionEvent', event => this.onRuntimeEvent(event));
     this.protocol.on('interaction', ({ id, frame }) => this.onInteraction(id, frame));
     this.protocol.on('ready', () => this.events.publish('connection.changed', { connectionStatus: 'connected' }));
     this.protocol.on('disconnected', message => {
+      this.inputRuntimeEpoch = randomUUID();
       this.initialized.clear();
       this.hostActivity.reset();
       for (const record of Object.values(this.registry.sessions)) if (record.status === 'running' || record.status === 'waiting') record.status = 'error';
@@ -50,7 +56,7 @@ export class BridgeService extends EventEmitter {
     try { const model = this.history.latestModel(this.acceptanceWorkspace); selectedModel = model && { providerId: model.providerId, modelId: model.modelId, thoughtLevel: model.thoughtLevel }; } catch {}
     return { hostName: hostname().replace(/\.local$/, ''), connectionStatus: this.protocol.ready ? 'connected' : 'disconnected', version: '0.1.0',
       zcodeVersion: '3.11.2', cliVersion: '0.16.5', selectedModel,
-      capabilities: { projects: true, sessions: true, history: true, createSession: true, send: true, stop: true, approvals: true, changes: true, sse: true, models: true, sessionSettings: true, attachments: true, files: true, rename: true, archive: true, pin: true, markUnread: true, hostActivity: true, goalPause: true, goalResume: true, goalRemove: false, desktopControl: false, remoteRelay: false },
+      capabilities: { projects: true, sessions: true, history: true, createSession: true, send: true, stop: true, approvals: true, hookReview: true, changes: true, sse: true, models: true, sessionSettings: true, attachments: true, files: true, rename: true, archive: true, pin: true, markUnread: true, hostActivity: true, goalPause: true, goalResume: true, goalRemove: false, desktopControl: false, remoteRelay: false },
       limitations: ['Desktop-owned sessions are read-only.', 'New mobile tasks run in an isolated ZCode session store.', 'External network and physical-device routing are not verified.'] };
   }
   projects() {
@@ -69,7 +75,7 @@ export class BridgeService extends EventEmitter {
       createdAt: record.createdAt, updatedAt: record.updatedAt, source: 'bridge', mode: record.mode, recoveryReason: record.recoveryReason,
       model: record.selection.modelId, providerId: record.selection.providerId, thoughtLevel: record.selection.thoughtLevel, pinned: record.pinned ?? false, archived: record.archived ?? false,
       unread: typeof record.unreadAt === 'number', unreadAt: record.unreadAt ?? null, unreadScope: 'bridge',
-      capabilities: { read: true, send: active && !record.archived, stop: active && ['running', 'waiting'].includes(record.status), approve: active, changes: true, settings: active && !record.archived, attachments: active && !record.archived, rename: true, archive: true, pin: true, markUnread: true, fork: active && !record.archived && forkRows(this.hostActivity.projections.get(record.id)).length > 0 } };
+      capabilities: { read: true, send: active && !record.archived, stop: active && ['running', 'waiting'].includes(record.status), approve: active, hookReview: active && !record.archived, changes: true, settings: active && !record.archived, attachments: active && !record.archived, rename: true, archive: true, pin: true, markUnread: true, fork: active && !record.archived && forkRows(this.hostActivity.projections.get(record.id)).length > 0 } };
   }
   sessions({ project, limit = 100, includeArchived = false } = {}) {
     const desktop = this.history.sessions(1000).map(({ workspacePath, ...rest }) => rest);
@@ -95,23 +101,29 @@ export class BridgeService extends EventEmitter {
   files(project, path, search) { return search === undefined ? listWorkspaceFiles(this.workspace(project).path, path) : searchWorkspaceFiles(this.workspace(project).path, search, path); }
   file(project, path) { return readWorkspaceFile(this.workspace(project).path, path); }
   getDesktop(id) { return this.history.session ? this.history.session(id) : this.history.sessions(5000).find(session => session.id === id); }
+  getSubagent(id) { return this.ownedHistory.subagentSession?.(id, this.registry.sessions); }
   requireOwned(id) {
     const record = this.registry.sessions[id];
     if (record) return record;
     if (this.getDesktop(id)) throw new BridgeError(409, 'session_read_only', 'This task is owned by the desktop. Mobile control is available for tasks created by this bridge.');
+    if (this.getSubagent(id)) throw new BridgeError(409, 'session_read_only', 'This subagent is managed by its parent task. Its saved history is read-only.');
     throw new BridgeError(404, 'not_found', 'Task not found.');
   }
   pendingInteractions(sessionId) {
-    return [...this.protocol.interactions].filter(([, frame]) => frame.params.sessionId === sessionId).map(([id, frame]) => {
+    const legacy = [...this.protocol.interactions].filter(([, frame]) => frame.params.sessionId === sessionId).map(([id, frame]) => {
       const p = frame.params;
       return { id, sessionId, kind: frame.method.endsWith('requestPermission') ? 'permission' : 'userInput', title: p.toolName || 'Answer needed',
         reason: p.reason ?? p.prompt, toolName: p.toolName, input: sanitize(p.input), questions: sanitize(p.questions),
         freeText: p.freeText, sensitive: p.sensitive, schema: sanitize(p.schema), options: sanitize(p.options?.filter(option => !option.response?.permissionUpdates)), createdAt: frame.receivedAt ?? iso() };
     });
+    return [...new Map([...legacy, ...this.hooks.pending(sessionId)].map(item => [item.id, item])).values()];
   }
+  hookReview(id, action, body) { return this.hooks.perform(id, action, body); }
   async detail(id) {
     const record = this.registry.sessions[id];
     if (!record) {
+      const child = this.getSubagent(id);
+      if (child) return { session: child, ...this.ownedHistory.transcript(id), pendingInteractions: [], hostActivity: emptyHostActivity('subagentReadOnly') };
       const desktop = this.getDesktop(id);
       if (!desktop) throw new BridgeError(404, 'not_found', 'Task not found.');
       const { workspacePath, ...session } = desktop;
@@ -124,8 +136,9 @@ export class BridgeService extends EventEmitter {
   }
   transcript(id, options = {}) {
     const record = this.registry.sessions[id];
-    if (!record && !this.getDesktop(id)) throw new BridgeError(404, 'not_found', 'Task not found.');
-    const reader = record ? this.ownedHistory : this.history;
+    const child = record ? undefined : this.getSubagent(id);
+    if (!record && !child && !this.getDesktop(id)) throw new BridgeError(404, 'not_found', 'Task not found.');
+    const reader = record || child ? this.ownedHistory : this.history;
     const result = reader.transcript(id, options, record ? this.snapshots.get(id)?.messages ?? [] : []);
     return record ? { ...result, messages: withForkTargets(result.messages, this.hostActivity.projections.get(id)) } : result;
   }
@@ -312,31 +325,101 @@ export class BridgeService extends EventEmitter {
     try { await initialize; } finally { this.initializing.delete(id); }
   }
   async send(id, text, inputId = randomUUID(), attachmentIds = []) { return this.mutate(id, () => this.sendUnlocked(id, text, inputId, attachmentIds)); }
+  inputPending(id, inputId, reasonCode, acknowledgement) {
+    return new BridgeError(409, 'input_pending', 'The original input outcome is unconfirmed. Retry the same input ID to reconcile it; do not create a replacement input.', true,
+      { sessionId: id, inputId, requiresReconciliation: true, reasonCode, ...(acknowledgement ? { commandStatus: acknowledgement.status, hostReasonCode: acknowledgement.reasonCode } : {}) });
+  }
+  inputConfiguration(record) { return hash(JSON.stringify({ selection: record.selection, mode: record.mode })); }
+  validateInputAck(id, inputId, value) {
+    if (!value || value.commandId !== inputId || !['accepted', 'duplicate', 'noop', 'rejected', 'stale', 'failed'].includes(value.status)
+      || !Number.isFinite(value.revisionAtDecision)) throw this.inputPending(id, inputId, 'invalid_acknowledgement');
+    // The inbox reports lookup errors as "failed"; that is not a command outcome.
+    if (value.reasonCode === 'fault.command.queryUnavailable') throw this.inputPending(id, inputId, value.reasonCode);
+    return sanitize(value);
+  }
+  async finishInput(id, inputId, input, recovered) {
+    const acknowledgement = input.acknowledgement, record = this.requireOwned(id);
+    if (['accepted', 'duplicate', 'noop'].includes(acknowledgement.status)) {
+      input.status = 'accepted';
+      if (!recovered) { record.status = 'running'; record.updatedAt = iso(); }
+      if (!record.customTitle && record.title === 'New task' && input.envelope?.payload.text) record.title = input.envelope.payload.text.slice(0, 80);
+      this.persist(); this.events.publish('session.updated', { session: this.ownedDTO(record) }, id);
+      // Query recovery must not turn an already completed task back into running,
+      // or resume it solely to discover the result of an old input.
+      if (recovered && this.initialized.has(id)) await this.refresh(id).catch(() => {});
+      return { accepted: true, sessionId: id, inputId, ...(recovered ? { duplicate: true } : {}) };
+    }
+    if (['rejected', 'stale'].includes(acknowledgement.status)) {
+      input.status = 'rejected'; this.persist();
+      throw new BridgeError(acknowledgement.status === 'stale' ? 409 : 422, 'input_rejected', acknowledgement.message || 'ZCode rejected this input before execution.', false,
+        { sessionId: id, inputId, commandStatus: acknowledgement.status, reasonCode: acknowledgement.reasonCode });
+    }
+    // Execution can have side effects before returning failed. Preserve the final
+    // ACK, but do not release this input for automatic replacement or replay.
+    input.status = 'uncertain'; this.persist();
+    throw this.inputPending(id, inputId, acknowledgement.reasonCode || 'command_failed', acknowledgement);
+  }
+  async submitInput(id, inputId, input, recovered = false) {
+    input.attempted = true; input.status = 'pending'; this.persist();
+    let acknowledgement;
+    try {
+      // This exact envelope (including issuedAt and attachment refs) is on disk
+      // before the first stdio write and remains unchanged on every retry.
+      acknowledgement = await this.protocol.request('v4/command', structuredClone(input.envelope), 60000);
+      input.acknowledgement = this.validateInputAck(id, inputId, acknowledgement);
+    } catch (error) {
+      input.status = 'uncertain'; this.persist();
+      if (['runtime_timeout', 'runtime_unavailable', 'input_pending'].includes(error.code)) throw error;
+      throw this.inputPending(id, inputId, 'command_ack_unavailable');
+    }
+    this.persist(); return this.finishInput(id, inputId, input, recovered);
+  }
+  async recoverInput(id, inputId, input) {
+    if (input.acknowledgement) {
+      input.acknowledgement = this.validateInputAck(id, inputId, input.acknowledgement);
+      return this.finishInput(id, inputId, input, true);
+    }
+    input.status = 'uncertain'; this.persist();
+    let query;
+    try {
+      await this.protocol.start();
+      query = await this.protocol.request('v4/commands/query', { commands: [{ sessionId: id, commandId: inputId }] });
+    } catch { throw this.inputPending(id, inputId, 'command_query_unavailable'); }
+    const item = query?.results?.length === 1 ? query.results[0] : undefined;
+    if (item?.key?.sessionId !== id || item?.key?.commandId !== inputId) throw this.inputPending(id, inputId, 'invalid_query_response');
+    if (item.result !== 'unknown') {
+      input.acknowledgement = this.validateInputAck(id, inputId, item.result); this.persist();
+      return this.finishInput(id, inputId, input, true);
+    }
+    const record = this.requireOwned(id), envelope = input.envelope;
+    if (!envelope || envelope.sessionId !== id || envelope.commandId !== inputId || envelope.type !== 'sendText') throw this.inputPending(id, inputId, 'legacy_envelope_unavailable');
+    // An unknown query is not proof of non-execution. Only the same live CLI may
+    // deduplicate a frozen replay; do not resume an old task to make it writable.
+    if (input.runtimeEpoch !== this.inputRuntimeEpoch || !this.initialized.has(id) || !this.protocol.ready) throw this.inputPending(id, inputId, 'runtime_changed');
+    if (record.archived || ['running', 'waiting'].includes(record.status)) throw this.inputPending(id, inputId, 'session_not_ready');
+    if (input.configurationHash !== this.inputConfiguration(record)) throw this.inputPending(id, inputId, 'configuration_changed');
+    return this.submitInput(id, inputId, input, true);
+  }
   async sendUnlocked(id, text, inputId, attachmentIds) {
     const record = this.requireOwned(id), key = `${id}:${inputId}`, contentHash = hash(JSON.stringify({ text, attachmentIds }));
-    if (record.archived) throw new BridgeError(409, 'session_archived', 'Unarchive this task before sending a message.');
     const previous = this.registry.inputs[key];
     if (previous) {
       if (previous.hash !== contentHash && !(attachmentIds.length === 0 && previous.hash === hash(text))) throw new BridgeError(409, 'input_conflict', 'Input ID was already used with different content.');
       if (previous.status === 'accepted') return { accepted: true, sessionId: id, inputId, duplicate: true };
-      if (previous.status === 'pending' || previous.status === 'uncertain') throw new BridgeError(409, 'input_pending', 'This input may already be running. Refresh the task before sending again.', true);
+      return this.recoverInput(id, inputId, previous);
     }
+    if (record.archived) throw new BridgeError(409, 'session_archived', 'Unarchive this task before sending a message.');
+    const unresolved = Object.entries(this.registry.inputs).find(([inputKey, input]) => inputKey.startsWith(`${id}:`) && !['accepted', 'rejected'].includes(input.status));
+    if (unresolved) throw this.inputPending(id, unresolved[0].slice(id.length + 1), 'previous_input_unresolved');
     if (['running', 'waiting'].includes(record.status)) throw new BridgeError(409, 'session_busy', 'This task is still running. Stop it or wait for completion before sending another message.');
     const model = modelCatalog(this.zcodeRoot).find(model => model.providerId === record.selection.providerId && model.modelId === record.selection.modelId);
     const attachments = this.attachments.resolve(id, attachmentIds, { supportsImages: model?.supportsImages ?? false, supportsPDF: model?.supportsPDF ?? false });
     await this.ensureInitialized(id);
     const refs = await this.runtimeAttachments(id, attachments, attachmentIds);
-    this.registry.inputs[key] = { hash: contentHash, status: 'pending', at: iso() }; this.persist();
-    try {
-      record.stopRequestedAt = undefined;
-      await this.command(id, 'sendText', { text, ...(refs.length ? { attachments: refs } : {}) }, inputId);
-      this.registry.inputs[key].status = 'accepted'; record.status = 'running'; record.updatedAt = iso();
-      if (!record.customTitle && record.title === 'New task') record.title = text.slice(0, 80);
-      this.persist(); this.events.publish('session.updated', { session: this.ownedDTO(record) }, id);
-      return { accepted: true, sessionId: id, inputId };
-    } catch (error) {
-      this.registry.inputs[key].status = error.code === 'runtime_timeout' || error.code === 'runtime_unavailable' ? 'uncertain' : 'failed'; this.persist(); throw error;
-    }
+    const input = { hash: contentHash, status: 'pending', at: iso(), runtimeEpoch: this.inputRuntimeEpoch, configurationHash: this.inputConfiguration(record),
+      envelope: { commandId: inputId, clientId: 'zcode-mobile-bridge', sessionId: id, type: 'sendText', payload: { text, ...(refs.length ? { attachments: refs } : {}) }, issuedAt: Date.now() }, attempted: false };
+    this.registry.inputs[key] = input; record.stopRequestedAt = undefined; this.persist();
+    return this.submitInput(id, inputId, input);
   }
   async stop(id) {
     const record = this.requireOwned(id);
@@ -357,6 +440,7 @@ export class BridgeService extends EventEmitter {
     throw new BridgeError(504, 'stop_not_confirmed', 'The stop request was accepted, but the runtime has not confirmed the turn ended.', true, { sessionId: id, stopRequested: true });
   }
   respond(id, body) {
+    if ([...this.hostActivity.projections.values()].some(projection => projection.pendingInteractions?.some(item => item.kind === 'workspaceHookReview' && item.interactionId === id))) throw new BridgeError(422, 'hook_review_route_required', 'Workspace hook reviews require their dedicated persistent-trust operation.');
     const frame = this.protocol.interactions.get(id);
     if (!frame) throw new BridgeError(404, 'not_found', 'This request is no longer pending.');
     const record = this.requireOwned(frame.params.sessionId), sessionId = this.protocol.respond(id, body);
@@ -365,6 +449,7 @@ export class BridgeService extends EventEmitter {
     this.events.publish('session.updated', { session: this.ownedDTO(record) }, sessionId); return { accepted: true };
   }
   async changes(id) {
+    if (!this.registry.sessions[id] && this.getSubagent(id)) throw new BridgeError(409, 'session_read_only', 'Subagent history does not expose an independent workspace diff. Open its parent project to inspect files.');
     const path = this.registry.sessions[id]?.path ?? this.getDesktop(id)?.workspacePath;
     if (!path) throw new BridgeError(404, 'not_found', 'Task not found.');
     return workspaceChanges(path);

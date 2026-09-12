@@ -44,7 +44,7 @@ harness = r'''
 '''
 with tempfile.TemporaryDirectory(prefix='zcode-message-cache-') as temp:
     path=Path(temp)
-    (path/'main.swift').write_text('import Foundation\n'+extracted+harness)
+    (path/'main.swift').write_text('import Foundation\nimport Observation\n'+extracted+harness)
     sdk = subprocess.check_output(['xcrun','--sdk','macosx','--show-sdk-path'], text=True).strip()
     subprocess.run(['xcrun','swiftc','-sdk',sdk,'-O','-swift-version','6','-parse-as-library',str(path/'main.swift'),'-o',str(path/'test')],check=True)
     subprocess.run([str(path/'test'),str(root/'evidence/message-cache-benchmark.json')],check=True)

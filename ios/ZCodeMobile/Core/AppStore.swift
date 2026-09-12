@@ -33,6 +33,7 @@ final class AppStore {
     var hostGoals: [String: RelayHostGoal] = [:]
     var hostAgents: [String: RelayHostAgents] = [:]
     var changingGoals: Set<String> = []
+    @ObservationIgnored private var changingHookReviews: Set<String> = []
     var profiles: [ConnectionProfile] = []
     var activeProfileID: String?
     var selectedProjectID: String?
@@ -108,6 +109,10 @@ final class AppStore {
                 case "chat", "goal", "agents", "keyboard", "reasoning", "permissions", "attachments", "thread-menu", "rename":
                     path = [.session(ReferenceData.conversationID)]
                 case "new", "voice": path = [.newSession]
+                case "hooks", "hooks-expired":
+                    path = [.session(ReferenceData.conversationID)]
+                    do { pendingInteractions[ReferenceData.conversationID] = [try ReferenceData.hookReviewInteraction(expired: args[index + 1] == "hooks-expired")] }
+                    catch { errorMessage = "无法读取审查体验数据：\(error.localizedDescription)" }
                 case "files": path = [.session(ReferenceData.conversationID)]; sheet = .files(ReferenceData.conversationID, false)
                 case "advanced": path = [.session(ReferenceData.conversationID)]; sheet = .advanced
                 case "offline": connection = .disconnected; sessions = []
@@ -151,7 +156,16 @@ final class AppStore {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--bridge-acceptance"),
            let token = ProcessInfo.processInfo.environment["ZCODE_ACCEPTANCE_TOKEN"] {
-            await connect(ConnectionProfile(id: "simulator-acceptance", name: "Example-Mac.local", baseURL: "http://127.0.0.1:18789"), token: token)
+            let baseURL = ProcessInfo.processInfo.environment["ZCODE_ACCEPTANCE_BASE_URL"] ?? "http://127.0.0.1:18789"
+            let name = ProcessInfo.processInfo.environment["ZCODE_ACCEPTANCE_HOST_NAME"] ?? "Example-Mac.local"
+            guard let endpoint = URL(string: baseURL), endpoint.scheme == "http", endpoint.host == "127.0.0.1",
+                  endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
+                  endpoint.path.isEmpty || endpoint.path == "/", let port = endpoint.port else {
+                errorMessage = "验收入口仅支持本机专用测试端口。"
+                return
+            }
+            let profileID = port == 18789 ? "simulator-acceptance" : "simulator-acceptance-\(port)"
+            await connect(ConnectionProfile(id: profileID, name: name, baseURL: baseURL), token: token)
             if let project = projects.first(where: { $0.name == "Mobile Acceptance" }) { selectedProjectID = project.id }
             return
         }
@@ -534,7 +548,7 @@ final class AppStore {
         return detail.messages.map(\.local)
     }
 
-    func loadTranscript(_ id: String) async {
+    func loadTranscript(_ id: String, onFailure: ((String) -> Void)? = nil) async {
         guard !isReferenceMode, let client else { return }
         let epoch = connectionEpoch
         let request = UUID()
@@ -565,8 +579,9 @@ final class AppStore {
                 modelSelections[id] = ModelSelection(providerId: provider, modelId: model, thoughtLevel: detail.session.thoughtLevel)
             }
         } catch {
-            guard epoch == connectionEpoch else { return }
-            errorMessage = error.localizedDescription
+            guard epoch == connectionEpoch, transcriptRequests[id] == request else { return }
+            if let onFailure { onFailure(error.localizedDescription) }
+            else { errorMessage = error.localizedDescription }
         }
     }
 
@@ -798,7 +813,7 @@ final class AppStore {
             return result.accepted
         } catch {
             guard epoch == connectionEpoch else { return false }
-            if let failure = error as? BridgeFailure, failure.code == "invalid_request" {
+            if let failure = error as? BridgeFailure, ["invalid_request", "input_rejected"].contains(failure.code) {
                 rejectedSubmissionIDs.insert(inputID)
                 errorMessage = "\(failure.localizedDescription) 请修改后重新发送，草稿已保留。"
             } else if let failure = error as? BridgeFailure, ["invalid_attachment", "attachment_too_large", "attachment_type_unsupported", "invalid_file_name", "attachment_type_mismatch", "attachment_not_found", "attachment_changed", "model_does_not_support_images", "model_does_not_support_pdf"].contains(failure.code) {
@@ -827,6 +842,64 @@ final class AppStore {
         } catch { if epoch == connectionEpoch { errorMessage = error.localizedDescription } }
     }
 
+    /// Called only by the dedicated review sheet after its operation-specific confirmation.
+    var hookReviewGeneration: UUID { connectionEpoch }
+    func performHookReview(_ review: RelayHookReviewRequest, action: WorkspaceHookReviewAction, expectedGeneration: UUID, onFailure: ((String) -> Void)? = nil) async -> Bool {
+        func reportFailure(_ message: String) {
+            if let onFailure { onFailure(message) } else { errorMessage = message }
+        }
+        guard expectedGeneration == connectionEpoch else { return false }
+        guard !isReferenceMode, let target = session(review.sessionId),
+              target.source == "official-relay" || (target.source == "bridge" && target.canReviewHooks == true),
+              let client else {
+            reportFailure("此连接尚不支持工作区命令审查，请回到电脑端处理。")
+            return false
+        }
+        guard pendingInteractions[review.sessionId]?.first(where: { $0.id == review.interactionId })?.hookReview == review,
+              Date.now.timeIntervalSince1970 * 1000 < Double(review.deadlineAt) else {
+            reportFailure("审查内容已更新或过期，请查看电脑的最新请求。")
+            return false
+        }
+        let epoch = connectionEpoch
+        let key = scopedKey("hook:\(epoch):\(review.sessionId):\(review.interactionId)")
+        guard changingHookReviews.insert(key).inserted else { return false }
+        defer { changingHookReviews.remove(key) }
+        struct Accepted: Decodable, Sendable { let accepted: Bool; let sessionId: String }
+        func json<T: Encodable>(_ value: T) throws -> JSONValue {
+            try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
+        }
+        do {
+            var body: [String: JSONValue] = ["clientCommandId": .string(UUID().uuidString), "request": try json(review)]
+            let route: String
+            switch action {
+            case .trust(let ids):
+                route = "respond"
+                body["reviewItemIds"] = .array(ids.map(JSONValue.string))
+                body["confirmation"] = try json(review.confirmation(for: .trustSelected(itemIDs: ids), userConfirmed: true))
+            case .revoke(let ids):
+                route = "revoke"
+                body["reviewItemIds"] = .array(ids.map(JSONValue.string))
+                body["confirmation"] = try json(review.confirmation(for: .revokeSelected(itemIDs: ids), userConfirmed: true))
+            case .setEnabled(let id, let enabled):
+                route = "toggle"
+                body["reviewItemId"] = .string(id)
+                body["enabled"] = .bool(enabled)
+                body["confirmation"] = try json(review.confirmation(for: .setEnabled(itemID: id, enabled: enabled), userConfirmed: true))
+            }
+            let result: Accepted = try await client.mutate("v1/sessions/\(review.sessionId)/hooks/review/\(route)", body: body)
+            guard epoch == connectionEpoch else { return false }
+            guard result.accepted, result.sessionId == review.sessionId else {
+                reportFailure("电脑尚未确认这项操作，请刷新审查状态。")
+                return false
+            }
+            await loadTranscript(review.sessionId, onFailure: onFailure)
+            return epoch == connectionEpoch
+        } catch {
+            if epoch == connectionEpoch { reportFailure(error.localizedDescription) }
+            return false
+        }
+    }
+
     func respond(_ interaction: PendingInteraction, allow: Bool) async {
         guard let client else { return }
         let epoch = connectionEpoch
@@ -853,33 +926,46 @@ final class AppStore {
         } catch { if epoch == connectionEpoch { errorMessage = error.localizedDescription }; return false }
     }
 
-    func files(projectID: String, path: String = "") async throws -> [RemoteFile] {
-        if isReferenceMode { return ReferenceData.files }
-        guard let client else { throw BridgeFailure(message: "连接已断开。", code: "offline") }
-        struct Files: Decodable, Sendable { var files: [BridgeFile] }
+    var fileListingGeneration: UUID { connectionEpoch }
+
+    func fileListing(projectID: String, path: String = "") async throws -> RemoteFileListing {
+        if isReferenceMode { return RemoteFileListing(files: ReferenceData.files) }
         let escaped = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+#?"))) ?? ""
-        let response: Files = try await client.get("v1/projects/\(projectID)/files?path=\(escaped)")
-        return response.files.map(\.local)
+        let response: BridgeFileListing = try await readFileResource("v1/projects/\(projectID)/files?path=\(escaped)")
+        return RemoteFileListing(files: response.files.map(\.local),
+                                 truncated: response.truncated == true || response.searchComplete == false)
     }
 
     func searchFiles(projectID: String, query: String) async throws -> BridgeFileListing {
-        guard let client else { throw BridgeFailure(message: "连接已断开。", code: "offline") }
         let escaped = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+#?"))) ?? ""
-        return try await client.get("v1/projects/\(projectID)/files?search=\(escaped)")
+        return try await readFileResource("v1/projects/\(projectID)/files?search=\(escaped)")
     }
 
     func changeSummary(_ id: String) async throws -> BridgeChanges {
         if isReferenceMode { return BridgeChanges(files: ReferenceData.messages.flatMap(\.changes)) }
-        guard let client else { throw BridgeFailure(message: "连接已断开。", code: "offline") }
-        return try await client.get("v1/sessions/\(id)/changes")
+        return try await readFileResource("v1/sessions/\(id)/changes")
     }
 
     func fileContent(projectID: String, path: String) async throws -> String {
-        guard let client else { throw BridgeFailure(message: "连接已断开。", code: "offline") }
         struct File: Decodable, Sendable { var content: String }
         let escaped = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+#?"))) ?? ""
-        let response: File = try await client.get("v1/projects/\(projectID)/file?path=\(escaped)")
+        let response: File = try await readFileResource("v1/projects/\(projectID)/file?path=\(escaped)")
         return response.content
+    }
+
+    private func readFileResource<T: Decodable & Sendable>(_ path: String) async throws -> T {
+        try Task.checkCancellation()
+        guard let client else { throw BridgeFailure(message: "连接已断开。", code: "offline") }
+        let epoch = connectionEpoch
+        do {
+            let response: T = try await client.get(path)
+            guard epoch == connectionEpoch else { throw CancellationError() }
+            try Task.checkCancellation()
+            return response
+        } catch {
+            guard epoch == connectionEpoch, !Task.isCancelled else { throw CancellationError() }
+            throw error
+        }
     }
 
     func loadSettings(_ id: String) async {
@@ -1121,6 +1207,7 @@ final class AppStore {
                 errorMessage = "这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。"
                 return
             }
+            guard sessions[i].canRename != false else { errorMessage = "当前主机不支持此操作。"; return }
             let epoch = connectionEpoch
             Task { guard epoch == connectionEpoch else { return }; _ = await mutateMetadata(id, body: ["title": .string(value)]) }
             return
@@ -1141,6 +1228,7 @@ final class AppStore {
                 return
             }
             let pinned = !sessions[i].isPinned
+            guard sessions[i].canPin != false else { errorMessage = "当前主机不支持此操作。"; return }
             let epoch = connectionEpoch
             Task { guard epoch == connectionEpoch else { return }; _ = await mutateMetadata(id, body: ["pinned": .bool(pinned)]) }
             return
@@ -1157,6 +1245,7 @@ final class AppStore {
                 errorMessage = "这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。"
                 return
             }
+            guard sessions[i].canArchive != false else { errorMessage = "当前主机不支持此操作。"; return }
             let epoch = connectionEpoch
             Task {
                 guard epoch == connectionEpoch else { return }

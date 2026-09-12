@@ -12,6 +12,14 @@ actor RelayRemoteTransport: RemoteTransport {
     private let journal: RelayAdapterJournal
     private var metadata: [String: RelayTaskMetadata] = [:]
     private var snapshots: [String: RelaySessionSnapshot] = [:]
+    private struct SubagentHistory {
+        let parentID: String
+        let snapshot: RelaySessionSnapshot
+        let epoch: String
+        var loadedCount: Int
+    }
+    private var subagentParents: [String: String] = [:]
+    private var subagentHistories: [String: SubagentHistory] = [:]
     private var sessionPages = RelaySessionPages()
     private var projections: [String: RelayConversationProjection] = [:]
     private var loads: [String: Task<RelayConversationProjection, any Error>] = [:]
@@ -144,6 +152,12 @@ actor RelayRemoteTransport: RemoteTransport {
         }
         if p.count >= 3, p[1] == "sessions" {
             let id = p[2]; try await ensureTask(id)
+            if subagentParents[id] != nil {
+                guard method == "GET", p.count == 3 || (p.count == 4 && p[3] == "messages") else {
+                    throw RelayFailure("session_read_only", "Subagent records are read-only; control remains with their parent task.")
+                }
+                return p.count == 3 ? try await subagentDetail(id) : try subagentMessages(id, query: q)
+            }
             if p.count == 3 {
                 if method == "GET" { return try await detail(id) }
                 if method == "PATCH" { return try await metadataMutation(id, body) }
@@ -162,6 +176,9 @@ actor RelayRemoteTransport: RemoteTransport {
                 case ("GET", "changes"): return try await changes(id)
                 default: break
                 }
+            }
+            if p.count == 6, p[3] == "hooks", p[4] == "review", method == "POST" {
+                return try await hookReview(id, action: p[5], body: body)
             }
             if p.count == 5, p[3] == "goal", method == "POST" {
                 guard ["pause", "resume"].contains(p[4]) else { throw RelayFailure("goal_remove_unsupported", "The desktop protocol has no goal removal command.") }
@@ -186,9 +203,14 @@ actor RelayRemoteTransport: RemoteTransport {
             "metadata": ["title": "string", "pinned": "bool", "archived": "bool", "unread": "bool", "expectedUnreadAt": "number"],
             "fork": ["clientForkId": "string", "target": "object"],
             "respond": ["decision": "string", "reason": "string", "action": "string", "content": "object"],
+            "hook.respond": ["clientCommandId": "string", "request": "object", "reviewItemIds": "array", "confirmation": "object"],
+            "hook.revoke": ["clientCommandId": "string", "request": "object", "reviewItemIds": "array", "confirmation": "object"],
+            "hook.toggle": ["clientCommandId": "string", "request": "object", "reviewItemId": "string", "enabled": "bool", "confirmation": "object"],
+            "hook.request": ["clientCommandId": "string", "workspaceIdentity": "string", "bundleDigest": "string", "remoteSessionId": "string"],
             "stop": [:], "pause": [:], "resume": [:]
         ]
-        let route = path == ["v1", "sessions"] ? "create" : path.count == 3 && method == "PATCH" ? "metadata" : path.last ?? ""
+        let hookRoute = path.count == 6 && path[3] == "hooks" && path[4] == "review"
+        let route = hookRoute ? "hook." + (path.last ?? "") : path == ["v1", "sessions"] ? "create" : path.count == 3 && method == "PATCH" ? "metadata" : path.last ?? ""
         guard let schema = schemas[route] else { return }
         guard Set(fields.keys).isSubset(of: Set(schema.keys)) else { throw RelayFailure.invalid("An unsupported request field was provided.") }
         for (key, value) in fields {
@@ -218,22 +240,35 @@ actor RelayRemoteTransport: RemoteTransport {
             }
         }
         var unique: [String: RelayTaskMetadata] = [:]
-        for task in tasks where Self.belongs(task, to: bridge) { unique[task.id] = task; metadata[task.id] = task }
+        for task in tasks where Self.belongs(task, to: bridge) && subagentParents[task.id] == nil { unique[task.id] = task; metadata[task.id] = task }
         return unique.values.sorted { ($0.pinned == true) != ($1.pinned == true) ? $0.pinned == true : ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
     }
     private func ensureTask(_ id: String) async throws {
         guard RelayWire.validID(id) else { throw RelayFailure.invalid("Invalid session ID.") }
+        // A parent projection, including ended rows, grants only child read access.
+        // It must take precedence even if another desktop view indexed that child.
+        let parents = projections.values.filter { projection in
+            projection.sessionID != id && metadata[projection.sessionID].map { Self.belongs($0, to: bridge) && ($0.provider == nil || $0.provider == "glm") } == true && projection.referencedSubagentIDs.contains(id)
+        }.map(\.sessionID)
+        if parents.count == 1 {
+            subagentParents[id] = parents[0]; metadata.removeValue(forKey: id); snapshots.removeValue(forKey: id); return
+        }
+        guard parents.isEmpty else { throw RelayFailure("relay_subagent_scope_mismatch", "Multiple parent activities claimed this subagent. Reload the original parent.") }
+        if subagentParents[id] != nil { return }
         if metadata[id] == nil && snapshots[id] == nil { _ = try await taskList(includeArchived: true) }
         guard metadata[id] != nil || snapshots[id] != nil else { throw RelayFailure("session_not_found", "This task is not in the selected desktop workspace.") }
         if let provider = metadata[id]?.provider, provider != "glm" { throw RelayFailure("relay_provider_unsupported", "The verified native session service supports the ZCode engine only.") }
     }
     private func ensureWritable(_ id: String) throws {
+        guard subagentParents[id] == nil else { throw RelayFailure("session_read_only", "Subagent records are read-only.") }
         guard metadata[id]?.archived != true else { throw RelayFailure("session_archived", "Restore the task before changing it.") }
     }
     private func sessionJSON(_ id: String) -> RelayJSON {
-        RelayBridgeMapping.session(id: id, meta: metadata[id], snapshot: snapshots[id], projection: projections[id], bridge: bridge, projectID: projectID)
+        if let child = subagentHistories[id] { return RelayBridgeMapping.subagentSession(child.snapshot, parentID: child.parentID, bridge: bridge, projectID: projectID) }
+        return RelayBridgeMapping.session(id: id, meta: metadata[id], snapshot: snapshots[id], projection: projections[id], bridge: bridge, projectID: projectID)
     }
     private func loadProjection(_ id: String) async throws -> RelayConversationProjection {
+        guard subagentParents[id] == nil else { throw RelayFailure("session_read_only", "Subagent history must not create or resume a conversation subscription.") }
         startPump()
         if let loading = loads[id] { return try await loading.value }
         guard projections.count + loads.count < 32 || projections[id] != nil else { throw RelayFailure("relay_subscription_limit", "Close and reopen this workspace to inspect more tasks.") }
@@ -257,6 +292,37 @@ actor RelayRemoteTransport: RemoteTransport {
         snapshots[id] = snapshot
         return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.messages(projection)), "pendingInteractions": .array(projection.pendingInteractions.map { RelayBridgeMapping.interaction($0, sessionID: id) }), "hostActivity": RelayBridgeMapping.activity(projection), "history": RelayBridgeMapping.history(projection)])
     }
+    private func subagentDetail(_ id: String) async throws -> RelayJSON {
+        guard let parentID = subagentParents[id] else { throw RelayFailure("session_not_found", "Open the original parent's subagent activity first.") }
+        guard subagentHistories[id] != nil || subagentHistories.count < 32 else { throw RelayFailure("relay_history_limit", "Reopen this workspace before reading more subagent histories.") }
+        let snapshot = try await client.readSubagentSession(id, parentSessionID: parentID)
+        try await checkScope()
+        let epoch = "relay-subagent-" + relayDigest(try RelayJSON.object(["sessionId": .string(id), "messages": .array(snapshot.messages)]).data())
+        let loaded = subagentHistories[id].flatMap { $0.epoch == epoch ? $0.loadedCount : nil } ?? min(500, snapshot.messages.count)
+        let history = SubagentHistory(parentID: parentID, snapshot: snapshot, epoch: epoch, loadedCount: loaded)
+        subagentHistories[id] = history
+        return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.snapshotMessages(Array(snapshot.messages.suffix(loaded)))),
+                        "pendingInteractions": .array([]), "history": subagentHistoryJSON(history),
+                        "hostActivity": .object(["supported": .bool(false), "reasonCode": .string("subagentReadOnly"), "goal": .null,
+                                                 "subagents": .object(["revision": .int(0), "childSessionIds": .array([]), "running": .array([]), "endedTotal": .int(0)]), "availability": .object([:]), "rows": .object(["window": .array([])])])])
+    }
+    private func subagentHistoryJSON(_ value: SubagentHistory) -> RelayJSON {
+        let total = value.snapshot.messages.count, before = total > 0 ? total - value.loadedCount : nil
+        return .object(["hasMore": .bool(value.loadedCount < total), "beforeRowId": before.map(RelayJSON.int) ?? .null,
+                        "firstRowId": total > 0 ? .int(0) : .null, "logEpoch": .string(value.epoch),
+                        "atSeq": value.snapshot.raw["runtime"]["eventSeq"].integer.map(RelayJSON.int) ?? .int(0),
+                        "loadedRowCount": .int(value.loadedCount), "totalRowCount": .int(total)])
+    }
+    private func subagentMessages(_ id: String, query: [String: String]) throws -> RelayJSON {
+        guard query.keys.allSatisfy({ ["beforeRowId", "logEpoch", "limit"].contains($0) }),
+              let before = query["beforeRowId"].flatMap(Int.init), let epoch = query["logEpoch"],
+              let limit = Int(query["limit"] ?? "200"), (1...200).contains(limit) else { throw RelayFailure.invalid("Use the current subagent history cursor and a limit from 1 to 200.") }
+        guard var value = subagentHistories[id], value.epoch == epoch, before == value.snapshot.messages.count - value.loadedCount else {
+            throw RelayFailure("relay_history_changed", "Reload the subagent history before requesting an older page.")
+        }
+        value.loadedCount = min(value.snapshot.messages.count, value.loadedCount + limit); subagentHistories[id] = value
+        return .object(["messages": .array(RelayBridgeMapping.snapshotMessages(Array(value.snapshot.messages.suffix(value.loadedCount)))), "history": subagentHistoryJSON(value)])
+    }
     private func olderMessages(_ id: String, query: [String: String]) async throws -> RelayJSON {
         guard query.keys.allSatisfy({ ["beforeRowId", "logEpoch", "limit"].contains($0) }),
               let before = query["beforeRowId"].flatMap(Int.init), before >= 0,
@@ -279,14 +345,18 @@ actor RelayRemoteTransport: RemoteTransport {
         throw RelayFailure("host_change_not_confirmed", "The command was acknowledged, but its resulting state is not yet confirmed.", outcomeUncertain: true)
     }
 
-    private func durableCommand(key: String, intent: RelayJSON, sessionID: String?, type: String, payload: RelayJSON, context: RelayJSON? = nil, confirmFullAccess: Bool = false) async throws -> RelayCommandAck {
+    private func durableCommand(key: String, intent: RelayJSON, sessionID: String?, type: String, payload: RelayJSON, context: RelayJSON? = nil, confirmFullAccess: Bool = false, hookReviewAuthorization: RelayHookReviewAuthorization? = nil) async throws -> RelayCommandAck {
         let hash = relayDigest(try intent.data())
         if let saved = journal.state.commands[key] {
-            guard saved.intentHash == hash, saved.envelope.sessionId == sessionID, saved.envelope.type == type else { throw RelayFailure(type == "createSession" ? "draft_conflict" : type == "forkAssistant" ? "fork_conflict" : "input_conflict", "This request ID was already used with different content.") }
+            guard saved.intentHash == hash, saved.envelope.sessionId == sessionID, saved.envelope.type == type else { throw RelayFailure(type == "createSession" ? "draft_conflict" : type == "forkAssistant" ? "fork_conflict" : type.contains("WorkspaceHook") ? "hook_review_conflict" : "input_conflict", "This request ID was already used with different content.") }
         } else {
             let envelope: RelayCommandEnvelope
             if type == "createSession" { envelope = try await client.makeCreateSessionCommand(commandID: key) }
             else if type == "forkAssistant" { envelope = try await client.makeForkCommand(sessionID: sessionID!, target: payload["target"] == .null ? nil : RelayRowTarget(wire: payload["target"]), commandID: key) }
+            else if let hookReviewAuthorization { envelope = try await client.makeHookReviewCommand(authorization: hookReviewAuthorization, commandID: key) }
+            else if type == "requestWorkspaceHookReview" {
+                envelope = try await client.makeRequestHookReviewCommand(sessionID: sessionID!, workspaceIdentity: payload.requiringString("workspaceIdentity"), bundleDigest: payload.requiringString("bundleDigest"), remoteSessionID: payload["remoteSessionId"].string, commandID: key)
+            }
             else { envelope = await client.makeCommand(sessionID: sessionID!, type: type, payload: payload, commandID: key) }
             try journal.commit { $0.commands[key] = .init(intentHash: hash, envelope: envelope, context: context) }
         }
@@ -304,7 +374,7 @@ actor RelayRemoteTransport: RemoteTransport {
         }
         // Persist before submitting. Retries retain the original issuedAt, base revision, epoch and attachment refs.
         try journal.commit { $0.commands[key]?.attempted = true }; record = journal.state.commands[key]!
-        let ack = try await client.submit(record.envelope, explicitUserAction: true, confirmFullAccess: confirmFullAccess)
+        let ack = try await client.submit(record.envelope, explicitUserAction: true, confirmFullAccess: confirmFullAccess, hookReviewAuthorization: hookReviewAuthorization)
         try journal.commit { $0.commands[key]?.acknowledgement = ack }; return try admitted(ack, type: type)
     }
     private func admitted(_ ack: RelayCommandAck, type: String) throws -> RelayCommandAck {
@@ -376,6 +446,44 @@ actor RelayRemoteTransport: RemoteTransport {
         let session = sessionJSON(child)
         try emit(type: "session.created", sessionID: child, data: ["session": session])
         return .object(["session": session, "parentSessionId": .string(id), "forkedSessionId": .string(child)])
+    }
+    private func hookReview(_ id: String, action: String, body: RelayJSON) async throws -> RelayJSON {
+        guard ["request", "respond", "toggle", "revoke"].contains(action), let requestID = body["clientCommandId"].string, RelayWire.validID(requestID) else { throw RelayFailure("hook_review_invalid", "Use a stable command ID and a dedicated hook review action.") }
+        let type: String, payload: RelayJSON, authorization: RelayHookReviewAuthorization?, intent: RelayJSON
+        if action == "request" {
+            type = "requestWorkspaceHookReview"; authorization = nil
+            var fields: [String: RelayJSON] = ["sessionId": .string(id), "workspaceIdentity": .string(try body.requiringString("workspaceIdentity")), "bundleDigest": .string(try body.requiringString("bundleDigest"))]
+            if let remote = body["remoteSessionId"].string { fields["remoteSessionId"] = .string(remote) }
+            payload = .object(fields); intent = .object(["type": .string(type), "payload": payload])
+        } else {
+            let request = try RelayHookReviewRequest(wire: body["request"])
+            guard request.sessionId == id else { throw RelayFailure("workspace_hooks_snapshot_mismatch", "The review belongs to another task.") }
+            let operation: RelayHookReviewOperation
+            if action == "toggle" {
+                guard let enabled = body["enabled"].bool else { throw RelayFailure("hook_review_invalid", "A configuration toggle needs an explicit enabled value.") }
+                operation = .setEnabled(itemID: try body.requiringString("reviewItemId"), enabled: enabled)
+            } else {
+                guard let values = body["reviewItemIds"].array, values.count <= 1000, values.allSatisfy({ $0.string != nil }) else { throw RelayFailure("hook_review_selection_invalid", "Use exact selected hook item IDs.") }
+                let ids = values.compactMap(\.string)
+                operation = action == "respond" ? .trustSelected(itemIDs: ids) : .revokeSelected(itemIDs: ids)
+            }
+            let confirmation = try body["confirmation"].decode(RelayHookReviewConfirmation.self)
+            authorization = try .init(request: request, operation: operation, confirmation: confirmation)
+            type = operation.commandType; payload = try operation.payload(target: request.target)
+            intent = .object(["request": request.wire, "operation": operation.canonical])
+        }
+        let fingerprint = relayDigest(try intent.data())
+        // A new explicit UI action after relaunch must recover an unresolved identical operation,
+        // not allocate another command. Scope is already bound by this journal's desktop/workspace/client.
+        let prior = journal.state.commands.filter { $0.value.envelope.sessionId == id && $0.value.envelope.type == type && $0.value.intentHash == fingerprint && ($0.value.acknowledgement == nil || (action != "request" && $0.value.acknowledgement?.admitted == true)) }.sorted {
+            if ($0.value.acknowledgement == nil) != ($1.value.acknowledgement == nil) { return $0.value.acknowledgement == nil }
+            return $0.value.envelope.issuedAt < $1.value.envelope.issuedAt
+        }.first
+        let key = prior?.key ?? "hook-" + requestID
+        if journal.state.commands[key] == nil { try ensureWritable(id); _ = try await loadProjection(id) }
+        let ack = try await durableCommand(key: key, intent: intent, sessionID: id, type: type, payload: payload,
+                                          context: .object(["hookReviewRequest": body["request"]]), hookReviewAuthorization: authorization)
+        return .object(["accepted": .bool(true), "sessionId": .string(id), "acknowledgement": try RelayJSON(data: JSONEncoder().encode(ack))])
     }
     private func respond(_ interactionID: String, _ body: RelayJSON) async throws -> RelayJSON {
         if let (key, saved) = journal.state.commands.first(where: { $0.value.envelope.type == "resolveInteraction" && $0.value.envelope.payload["interactionId"].string == interactionID }) {

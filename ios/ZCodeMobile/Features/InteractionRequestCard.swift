@@ -4,6 +4,7 @@ struct InteractionRequestCard: View {
     @Environment(AppStore.self) private var store
     let interaction: PendingInteraction
     @State private var busy = false
+    @State private var showHookReview = false
     @State private var selections: [String: Set<String>] = [:]
     @State private var otherAnswers: [String: String] = [:]
     @State private var feedback = ""
@@ -41,16 +42,23 @@ struct InteractionRequestCard: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label(isPermission ? "需要你的批准" : isPlan ? "确认方案" : "需要你的回答",
-                  systemImage: isPermission ? "hand.raised" : isPlan ? "list.bullet.clipboard" : "text.bubble")
+            Label(requiresDesktop ? "需要审查工作区命令" : isPermission ? "需要你的批准" : isPlan ? "确认方案" : "需要你的回答",
+                  systemImage: requiresDesktop ? "terminal" : isPermission ? "hand.raised" : isPlan ? "list.bullet.clipboard" : "text.bubble")
                 .font(.headline)
             if interaction.title != interaction.toolName { Text(interaction.title).font(.body) }
             if let reason = interaction.reason, !reason.isEmpty, !reason.hasPrefix("Tool ") {
                 Text(reason).font(.subheadline).foregroundStyle(.secondary)
             }
             if requiresDesktop {
-                Label("此操作需要在电脑端确认，请回到 ZCode 处理。", systemImage: "desktopcomputer")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                if interaction.hookReview != nil {
+                    Text("工作区命令需要逐项审查。信任会持久保存，不能按一次性审批处理。")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Button("审查工作区命令") { showHookReview = true }
+                        .buttonStyle(NativeGlassButtonStyle()).accessibilityIdentifier("hooks.openReview")
+                } else {
+                    Label("此操作需要在电脑端确认，请回到 ZCode 处理。", systemImage: "desktopcomputer")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
             } else if isPlan {
                 if let plan = interaction.input?.objectValue?["plan"]?.stringValue, !plan.isEmpty {
                     DisclosureGroup("查看完整方案") {
@@ -95,6 +103,9 @@ struct InteractionRequestCard: View {
         .background(isPermission ? Color.orange.opacity(0.08) : ZTheme.accent.opacity(0.07),
                     in: RoundedRectangle(cornerRadius: 22))
         .accessibilityElement(children: .contain)
+        .sheet(isPresented: $showHookReview) {
+            WorkspaceHookReviewSheet(sessionID: interaction.sessionId, interactionID: interaction.id)
+        }
         .onAppear { restoreAnswerDraft() }
         .onChange(of: [draftScope, draftKey] + questionSignature) { restoreAnswerDraft() }
         .onChange(of: selections) { persistAnswerDraft() }

@@ -5,7 +5,13 @@ import CryptoKit
 struct BridgeFailure: LocalizedError {
     let message: String
     let code: String
-    var errorDescription: String? { message }
+    var errorDescription: String? {
+        switch code {
+        case "input_pending": "电脑尚未确认上一条消息的结果。请重试确认，避免重复发送。"
+        case "input_rejected": "电脑未接收这条消息。"
+        default: message
+        }
+    }
 }
 
 enum JSONValue: Codable, Sendable, Equatable {
@@ -123,6 +129,10 @@ struct BridgeSession: Decodable, Sendable {
         var changes: Bool
         var markUnread: Bool?
         var fork: Bool?
+        var hookReview: Bool?
+        var rename: Bool?
+        var pin: Bool?
+        var archive: Bool?
     }
     var id: String
     var title: String
@@ -145,7 +155,8 @@ struct BridgeSession: Decodable, Sendable {
         RemoteSession(id: id, title: title, projectID: projectId, projectName: projectName,
                       updatedAt: Date.fromBridge(updatedAt), status: SessionStatus(rawValue: status) ?? (status == "error" ? .failed : .idle),
                       isPinned: pinned ?? false, isArchived: archived ?? false,
-                      canControl: capabilities.send, source: source, unread: unread, unreadAt: unreadAt, unreadScope: unreadScope, canMarkUnread: capabilities.markUnread, canFork: capabilities.fork)
+                      canControl: capabilities.send, source: source, unread: unread, unreadAt: unreadAt, unreadScope: unreadScope, canMarkUnread: capabilities.markUnread, canFork: capabilities.fork, canReviewHooks: capabilities.hookReview,
+                      canRename: capabilities.rename, canPin: capabilities.pin, canArchive: capabilities.archive)
     }
 }
 
@@ -179,6 +190,12 @@ struct BridgeMessage: Decodable, Sendable {
     }
 }
 
+enum WorkspaceHookReviewAction: Equatable, Sendable {
+    case trust([String])
+    case revoke([String])
+    case setEnabled(String, Bool)
+}
+
 struct PendingInteraction: Identifiable, Decodable, Sendable {
     struct Question: Decodable, Sendable, Identifiable {
         struct Option: Decodable, Sendable, Identifiable {
@@ -201,6 +218,7 @@ struct PendingInteraction: Identifiable, Decodable, Sendable {
     var toolName: String?
     var questions: [Question]?
     var input: JSONValue?
+    var hookReview: RelayHookReviewRequest?
 }
 
 struct ConversationHistory: Decodable, Sendable, Equatable {

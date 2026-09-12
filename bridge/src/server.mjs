@@ -78,6 +78,8 @@ export function createBridgeServer({ service, token }) {
         return json(response, 201, { session });
       }
       if (path === '/v1/events' && request.method === 'GET') return streamEvents(request, response, service, url);
+      const hookReview = path.match(/^\/v1\/sessions\/([^/]+)\/hooks\/review\/(request|respond|toggle|revoke)$/);
+      if (hookReview && request.method === 'POST') return json(response, 200, await service.hookReview(decodeURIComponent(hookReview[1]), hookReview[2], await readBody(request, 768 * 1024)));
       const goal = path.match(/^\/v1\/sessions\/([^/]+)\/goal\/([^/]+)$/);
       if (goal && request.method === 'POST') {
         const body = await readBody(request);

@@ -54,6 +54,8 @@
 		F1F4B0822D142B22A56246F6 /* SubmissionJournalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F07B279DDFBC2047FE23F32 /* SubmissionJournalTests.swift */; };
 		F59C958C6A269E3249983DCA /* GlassCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 913761FD591B8C9B396E94BF /* GlassCalibrationView.swift */; };
 		F5D6176169CEF477127BCC0C /* RelayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17ADF86538C2ABF99B736DA8 /* RelayClient.swift */; };
+		A73B1422E7C56AB86C831D52 /* RelayHookReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C8D6CA24A76D581F71AAF33 /* RelayHookReview.swift */; };
+		6457C5DEA281F5D0D8F1F8D8 /* WorkspaceHookReviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 507297C044C5A0024D6FC1AE /* WorkspaceHookReviewSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -118,6 +120,8 @@
 		ED36A886DB0711EDF88E6749 /* NativeTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeTransportTests.swift; sourceTree = "<group>"; };
 		F16C7E9BD1B7CAD906C4B521 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		F6DEB58E9F6876A8D7EC2FC3 /* RelayRemoteTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayRemoteTransport.swift; sourceTree = "<group>"; };
+		1C8D6CA24A76D581F71AAF33 /* RelayHookReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayHookReview.swift; sourceTree = "<group>"; };
+		507297C044C5A0024D6FC1AE /* WorkspaceHookReviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceHookReviewSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -131,6 +135,7 @@
 				4A4D7C8E7CE4761317F95DCD /* FilesView.swift */,
 				45ABF471E89EC2926E7D9F24 /* HomeView.swift */,
 				B0CD8F37F99DAEF744330653 /* InteractionRequestCard.swift */,
+				507297C044C5A0024D6FC1AE /* WorkspaceHookReviewSheet.swift */,
 				E4264777A6D6711FC4B96C08 /* MessageAttachmentView.swift */,
 				5861D83CD29B540184294273 /* MessageView.swift */,
 				6393EF946CB87187784F0720 /* SettingsViews.swift */,
@@ -174,6 +179,7 @@
 				17A6E3792041A4C193271AAE /* RelaySelfTests.swift */,
 				D3D13F9B01591B9FAC71ECB7 /* RelayTypes.swift */,
 				A17A9C7254E170E6779A1066 /* RelayFork.swift */,
+				1C8D6CA24A76D581F71AAF33 /* RelayHookReview.swift */,
 				0AB24A5994BDE127973CE1D1 /* RelayWorkspaceServices.swift */,
 			);
 			path = Relay;
@@ -366,6 +372,7 @@
 				EE8B9B906DE67AF2C735A3FD /* HomeView.swift in Sources */,
 				9A8C4C3EE5C16F9C8284476B /* InlineVoiceControls.swift in Sources */,
 				A181415D339C84655032CB8C /* InteractionRequestCard.swift in Sources */,
+				6457C5DEA281F5D0D8F1F8D8 /* WorkspaceHookReviewSheet.swift in Sources */,
 				DF0A2A83B77CE537BC92B685 /* LayoutMeasurement.swift in Sources */,
 				A5CB4A81B801A88E3930D646 /* MessageAttachmentView.swift in Sources */,
 				76BD669C7149B7D0B2346BA5 /* MessageView.swift in Sources */,
@@ -387,6 +394,7 @@
 				A9CFFE490BAF1DEBB03A4252 /* RelaySessionPages.swift in Sources */,
 				238958683848FE83A2C4EF99 /* RelayTypes.swift in Sources */,
 				6D2911829DCD7351BD2DFE41 /* RelayFork.swift in Sources */,
+				A73B1422E7C56AB86C831D52 /* RelayHookReview.swift in Sources */,
 				09B37C8610DD0512F16A8EA7 /* RelayWorkspaceServices.swift in Sources */,
 				98F6A79CD0AAA11960B4E25F /* RemoteTransport.swift in Sources */,
 				ADF7266D8A3EF03743B5B147 /* ServerSentEvents.swift in Sources */,
@@ -472,6 +480,8 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ZCode;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
@@ -594,6 +604,8 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				MARKETING_VERSION = 1.0;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = ZCode;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";

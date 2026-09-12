@@ -12,6 +12,7 @@ export function emptyHostActivity(reasonCode = 'projectionUnavailable') {
 }
 export function activityFromProjection(projection) {
   return sanitize({ goal: projection.goal ?? null, subagents: projection.subagents ?? { revision: 0, childSessionIds: [], running: [], endedTotal: 0 }, availability: projection.availability ?? {},
+    workspaceHookAdmission: projection.workspaceHookAdmission ?? null,
     rows: { window: (projection.rows?.window ?? []).filter(row => row.kind === 'subagent') }, supported: true,
     revision: projection.revision, logEpoch: projection.logEpoch, seq: projection.seq });
 }
@@ -107,8 +108,8 @@ export function reduceConversation(current, frame, sessionId) {
 }
 
 export class HostActivity {
-  constructor({ protocol, events, isOwned }) {
-    Object.assign(this, { protocol, events, isOwned }); this.connectionId = events.epoch;
+  constructor({ protocol, events, isOwned, onProjection }) {
+    Object.assign(this, { protocol, events, isOwned, onProjection }); this.connectionId = events.epoch;
     this.assembler = new ConversationAssembler(); this.projections = new Map(); this.subscriptions = new Map(); this.opening = new Map(); this.early = new Map(); this.earlyBytes = 0; this.recovering = new Set(); this.stale = new Set();
     this.listener = wire => this.receive(wire); protocol.on('conversationFrame', this.listener);
     this.timer = setInterval(() => { for (const subscriptionId of this.assembler.expire()) this.recover(subscriptionId, 'fragmentExpired'); }, 2500); this.timer.unref();
@@ -161,7 +162,8 @@ export class HostActivity {
       const before = this.projections.get(sessionId), after = reduceConversation(before, frame, sessionId);
       this.projections.set(sessionId, after); if (frame.payload.kind === 'snapshot') this.stale.delete(sessionId);
       const a = before && activityFromProjection(before), b = activityFromProjection(after);
-      if (!a || JSON.stringify([a.goal, a.subagents, a.availability, a.rows]) !== JSON.stringify([b.goal, b.subagents, b.availability, b.rows])) this.events.publish('host.activity', { hostActivity: b }, sessionId);
+      if (!a || JSON.stringify([a.goal, a.subagents, a.availability, a.rows, a.workspaceHookAdmission]) !== JSON.stringify([b.goal, b.subagents, b.availability, b.rows, b.workspaceHookAdmission])) this.events.publish('host.activity', { hostActivity: b }, sessionId);
+      this.onProjection?.(sessionId, after, before);
     } catch { this.recover(wire.subscriptionId, 'projectionGap'); }
   }
   recover(subscriptionId, reason) {

@@ -23,6 +23,9 @@ private actor AdapterEvents {
         let bootstrap = try await client.bootstrap(), bridge = try await client.openWorkspace(key: "/workspace")
         let adapter = try await RelayRemoteTransport(client: client, bootstrap: bootstrap, bridge: bridge, hostName: "Mock desktop", journalDirectory: folder)
         var checks: [String] = []
+        checks += try runHookReviewDTOTests()
+        checks += try await runHookReviewFacadeTests(directory: folder)
+        checks += try await runSubagentFacadeTests(directory: folder)
         var pager = RelaySessionPages()
         let filters: RelayJSON = .object(["includeArchived": .bool(true)]), records: [RelayJSON] = (0..<205).map { .object(["id": .string(String($0))]) }
         let firstPage = try pager.page(records: records, filters: filters, limit: 100, cursor: nil, now: 0)

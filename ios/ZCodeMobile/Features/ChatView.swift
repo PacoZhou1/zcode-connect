@@ -9,6 +9,7 @@ struct ChatView: View {
     @State private var showJump = false
     @State private var userScrolling = false
     @State private var didInitialScroll = false
+    @State private var pendingHistoryAnchor: String?
     @State private var position = ScrollPosition(edge: .bottom)
 
     private var session: RemoteSession? { store.session(sessionID) }
@@ -27,7 +28,9 @@ struct ChatView: View {
                         InlineNotice(symbol: "archivebox", text: "此任务已归档。可在右上角菜单取消归档后继续。")
                     } else if let session, !session.canControl {
                         InlineNotice(symbol: "desktopcomputer",
-                                     text: "此任务由电脑上的 ZCode 管理。你可以查看记录，或新建一个手机可控制的任务。")
+                                     text: ["bridge-subagent", "official-relay-subagent"].contains(session.source)
+                                        ? "此智能体由父任务管理，这里显示电脑上已保存的记录。"
+                                        : "此任务由电脑上的 ZCode 管理。你可以查看记录，或新建一个手机可控制的任务。")
                     }
                     if store.messages(sessionID).isEmpty {
                         if store.isLoading { ProgressView().frame(maxWidth: .infinity).padding(.top, 70) }
@@ -39,10 +42,10 @@ struct ChatView: View {
                     if store.histories[sessionID]?.hasMore == true {
                         Button {
                             let anchor = store.messages(sessionID).first?.id
-                            showJump = true
+                            pendingHistoryAnchor = anchor
                             Task {
                                 await store.loadEarlierMessages(sessionID)
-                                if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+                                if store.messages(sessionID).first?.id == anchor { pendingHistoryAnchor = nil }
                             }
                         } label: {
                             HStack(spacing: 8) {
@@ -72,39 +75,46 @@ struct ChatView: View {
             .onScrollGeometryChange(for: CGSize.self) { geometry in
                 CGSize(width: geometry.containerSize.height, height: geometry.contentInsets.bottom)
             } action: { _, _ in
-                if !showJump && !userScrolling { position.scrollTo(edge: .bottom) }
+                if !showJump && !userScrolling && pendingHistoryAnchor == nil { position.scrollTo(edge: .bottom) }
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 80
+                geometry.visibleRect.maxY - geometry.contentInsets.bottom >= geometry.contentSize.height - 80
             } action: { _, atBottom in
-                if userScrolling || atBottom { showJump = !atBottom }
+                showJump = !atBottom
             }
             .onScrollPhaseChange { _, phase in
                 #if DEBUG
                 if MotionPerformanceProbe.shared.isRunning { MotionPerformanceProbe.shared.setStage("chat-\(phase)") }
                 #endif
-                userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+                userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating || phase == .animating
             }
             .simultaneousGesture(TapGesture().onEnded { dismissOverlaysSignal += 1 })
             .accessibilityIdentifier("chat.transcript")
             .overlay(alignment: .bottom) {
                 if showJump {
                     Button {
+                        pendingHistoryAnchor = nil
                         withAnimation { position.scrollTo(edge: .bottom) }
-                        showJump = false
                     } label: { Image(systemName: "arrow.down").font(.system(size: 21, weight: .medium)).frame(width: 24, height: 24) }
                         .buttonStyle(NativeGlassButtonStyle()).buttonBorderShape(.circle)
                         .padding(.bottom, 8).accessibilityLabel("跳到最新消息")
                 }
             }
-            .onChange(of: store.messages(sessionID).last?.id) { _, _ in
-                if !showJump && !userScrolling { position.scrollTo(edge: .bottom) }
+            .task(id: store.messages(sessionID).first?.id) {
+                guard let anchor = pendingHistoryAnchor else { return }
+                await Task.yield()
+                guard !Task.isCancelled, pendingHistoryAnchor == anchor else { return }
+                proxy.scrollTo(anchor, anchor: .top)
+                pendingHistoryAnchor = nil
             }
-            .onChange(of: store.messages(sessionID).last?.text.count) { _, _ in
-                if !showJump && !userScrolling { position.scrollTo(edge: .bottom) }
+            .onChange(of: store.messages(sessionID).last?.id) { _, _ in
+                if !showJump && !userScrolling && pendingHistoryAnchor == nil { position.scrollTo(edge: .bottom) }
+            }
+            .onChange(of: store.messages(sessionID).last?.text) { _, _ in
+                if !showJump && !userScrolling && pendingHistoryAnchor == nil { position.scrollTo(edge: .bottom) }
             }
             .onChange(of: store.pendingInteractions[sessionID]?.count) { _, _ in
-                if !showJump && !userScrolling { position.scrollTo(edge: .bottom) }
+                if !showJump && !userScrolling && pendingHistoryAnchor == nil { position.scrollTo(edge: .bottom) }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 ConversationControls(sessionID: sessionID, dismissOverlaysSignal: dismissOverlaysSignal)
@@ -133,7 +143,6 @@ struct ChatView: View {
                 if !didInitialScroll {
                     await Task.yield()
                     if beginsAtReferenceHistory {
-                        showJump = true
                         position.scrollTo(y: 40)
                     } else { position.scrollTo(edge: .bottom) }
                     didInitialScroll = true
@@ -159,14 +168,25 @@ struct ChatView: View {
         return false
     }
 
+    private var metadataMenuItems: [SessionMenuItem] {
+        guard let session else { return [] }
+        return SessionMenuPolicy.items(for: session, isReferenceMode: store.isReferenceMode,
+                                       isRelay: store.activeProfile?.isRelay == true,
+                                       isOnline: store.connection.isOnline, isUnread: store.isUnread(sessionID))
+    }
+
     private var threadMenu: some View {
         Menu {
             Section(session?.title ?? "任务") {
-                Button(session?.isPinned == true ? "取消置顶" : "置顶",
-                       systemImage: session?.isPinned == true ? "pin.slash" : "pin") { store.togglePin(sessionID) }
-                Button("重命名", systemImage: "pencil") {
-                    renameText = session?.title ?? ""
-                    renamePresented = true
+                if let item = metadataMenuItems.first(where: { $0.id == .pin }) {
+                    Button(item.title, systemImage: item.symbol) { store.togglePin(sessionID) }
+                        .disabled(!item.isEnabled)
+                }
+                if let item = metadataMenuItems.first(where: { $0.id == .rename }) {
+                    Button(item.title, systemImage: item.symbol) {
+                        renameText = session?.title ?? ""
+                        renamePresented = true
+                    }.disabled(!item.isEnabled)
                 }
                 if store.isReferenceMode || session?.canFork == true {
                     Button(store.isForking(sessionID) ? "正在创建分支…" : "创建分支", systemImage: "arrow.triangle.branch") { store.forkSession(sessionID) }
@@ -174,10 +194,15 @@ struct ChatView: View {
                         .accessibilityIdentifier("chat.fork")
                 }
                 Button("复制对话串 ID", systemImage: "square.on.square") { store.copy(sessionID) }
-                Button(session?.isArchived == true ? "取消归档" : "归档", systemImage: "archivebox", role: session?.isArchived == true ? nil : .destructive) { store.archive(sessionID, archived: session?.isArchived != true) }
+                if let item = metadataMenuItems.first(where: { $0.id == .archive }) {
+                    Button(item.title, systemImage: item.symbol, role: item.destructive ? .destructive : nil) { store.archive(sessionID, archived: session?.isArchived != true) }
+                        .disabled(!item.isEnabled)
+                }
             }
             Section {
-                Button("更改", systemImage: "point.3.connected.trianglepath.dotted") { store.sheet = .files(sessionID, true) }
+                if !["bridge-subagent", "official-relay-subagent"].contains(session?.source ?? "") {
+                    Button("更改", systemImage: "point.3.connected.trianglepath.dotted") { store.sheet = .files(sessionID, true) }
+                }
                 Button("文件", systemImage: "folder") { store.sheet = .files(sessionID, false) }
             }
         } label: {

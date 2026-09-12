@@ -59,6 +59,16 @@ actor MockRelaySocket: RelaySocketTransport {
     var archivedSessions: Set<String> = []
     var queryUnknown = false
     var nextRejectedCommand: String?
+    var conversationHello: RelayJSON?
+    var clientHellos: [RelayJSON] = []
+    var conversationInitialized = false
+    var serviceCalls: [RelayJSON] = []
+    var subagentSnapshots: [String: RelayJSON] = [:]
+    var unavailableSubagents = Set<String>()
+    func useSubagentSnapshot(_ value: RelayJSON, sessionID: String) { subagentSnapshots[sessionID] = value }
+    func setSubagentUnavailable(_ sessionID: String, value: Bool) { if value { unavailableSubagents.insert(sessionID) } else { unavailableSubagents.remove(sessionID) } }
+    func listSubagentAsTask(_ sessionID: String) { registeredSessions.insert(sessionID) }
+    func useConversationHello(_ value: RelayJSON) { conversationHello = value }
     func rejectNextCommand(reason: String) { nextRejectedCommand = reason }
     func reportUnknownCommands(_ value: Bool) { queryUnknown = value }
     func useForkRows() throws {
@@ -67,6 +77,13 @@ actor MockRelaySocket: RelaySocketTransport {
         value["pendingInteractions"] = .array([]); value["goal"] = .null
         value["availability"] = .object(["fork": .object(["allowed": .bool(true)])])
         value["rows"] = .object(["window": .array([.object(["rowId": .int(9), "turnId": .string("turn-one"), "entityId": .string("stable-boundary"), "assistantResponseId": .string("message-one"), "kind": .string("assistantText"), "state": .string("complete"), "text": .string("Host finished answer"), "actions": .object(["canFork": .bool(true)])])]), "totalCount": .int(1), "firstRowId": .int(9)])
+        alternateProjection = .object(value)
+    }
+    func useHookReview(_ request: RelayHookReviewRequest?) throws {
+        var value = try baseProjection().requiringObject()
+        value["control"] = .object(["canStop": .bool(false), "phase": .string("completedSuccess")]); value["goal"] = .null
+        value["pendingInteractions"] = .array(request.map { [.object(["interactionId": .string($0.interactionId), "kind": .string("workspaceHookReview"), "anchorRowId": .null, "createdAt": .number($0.createdAt), "payload": $0.wire])] } ?? [])
+        value["workspaceHookAdmission"] = request.map { .object(["pendingCount": .int($0.summary.pendingCount), "bundleDigest": .string($0.bundleDigest), "workspaceIdentity": .string($0.workspaceIdentity)]) } ?? .null
         alternateProjection = .object(value)
     }
     func setHostUnread(_ stamp: Double, sessionID: String) { unreadAt[sessionID] = stamp }
@@ -108,6 +125,7 @@ actor MockRelaySocket: RelaySocketTransport {
                 try payload(.object(["zcode_type": .string(type), "requestId": value["requestId"], "success": .bool(true), "result": .object(["workspaces": .array([.object(["kind": .string("local"), "workspacePath": .string("/workspace")])]), "tasks": .array([])])])); return
             }
             if value["zcode_type"].string == "workspace-bridge-open" {
+                conversationInitialized = false
                 let id = RelayFrameIdentity(bridgeSessionId: value["bridgeSessionId"].string!, bridgeGeneration: value["bridgeGeneration"].integer)
                 server = try .init(identity: id)
                 var bridge = id.fields; bridge.merge(["kind": .string("local"), "workspaceKey": .string("/workspace"), "workspacePath": .string("/workspace")]) { _, new in new }
@@ -118,17 +136,29 @@ actor MockRelaySocket: RelaySocketTransport {
             if let ack = accepted.acknowledgement { try payload(ack) }
             guard let bytes = accepted.message else { return }
             let request = try RelayIPCCodec.decode(bytes)
-            if request.type == 102 { listenerID = request.requestID; return }
+            if request.type == 102 { try require(conversationInitialized, "Conversation listener preceded ClientHello"); listenerID = request.requestID; return }
             if request.type == 103 { return }
             let id = request.requestID!, method = try request.header[3].jsonValue().string!, params = try request.body.jsonValue().array!.first!
-            try require(params["workspacePath"].string == "/workspace", "Scope missing"); calls.append(method)
+            if ["helloConversationV4", "initializeConversationV4"].contains(method) { try require(params["workspacePath"] == .null, "ClientHello contains strict-schema workspace fields") }
+            else { try require(params["workspacePath"].string == "/workspace", "Scope missing") }
+            calls.append(method)
+            serviceCalls.append(.object(["channel": try request.header[2].jsonValue(), "method": .string(method), "params": params]))
             switch method {
+            case "helloConversationV4":
+                try success(id, conversationHello ?? .object(["kind": .string("hello"), "protocolVersion": .int(3), "connectionId": .string("mock-conversation"), "clientMode": .string("web-remote-replayable"), "deliveryProfile": .string("replayable"), "serverTime": .int(1_700_000_000_000), "capabilities": .object(["nativeDialogs": .bool(false), "localTerminal": .bool(false), "binaryFrames": .bool(false), "compression": .string("none"), "workspaceHookReview": .bool(true)]), "auth": .object([:])]))
+            case "initializeConversationV4":
+                try require(Set(try params.requiringObject().keys) == ["kind", "protocolVersion", "clientId", "clientKind", "appVersion", "capabilities"], "ClientHello fields differ from the strict official schema")
+                try require(params["kind"].string == "clientHello" && params["protocolVersion"].integer == 3 && params["clientKind"].string == "mobileApp" && params["capabilities"] == .object(["workspaceHookReviewUi": .bool(true)]), "The complete native hook UI was not advertised")
+                clientHellos.append(params); conversationInitialized = true; try success(id, .null)
             case "listTasks", "listPinnedTasks", "listArchivedTasks":
                 let tasks = registeredSessions.filter { archivedSessions.contains($0) == (method == "listArchivedTasks") }
                 try success(id, .array(tasks.sorted().map { .object(["taskId": .string($0), "title": .string(titles[$0] ?? "Original desktop task"), "workspacePath": .string("/workspace"), "provider": .string("glm"), "unreadAt": unreadAt[$0].map(RelayJSON.number) ?? .null]) }))
             case "readSession", "resumeSession":
                 if method == "resumeSession" { registeredSessions.insert(params["sessionId"].string!) }
-                try success(id, snapshot(params["sessionId"].string!))
+                let sessionID = params["sessionId"].string!
+                if unavailableSubagents.contains(sessionID) {
+                    try sendRPC(.init(header: [.int32(202), .int32(id)], body: try .object(.object(["message": .string("Session is not active"), "code": .string("sessionUnavailable")]))))
+                } else { try success(id, subagentSnapshots[sessionID] ?? snapshot(sessionID)) }
             case "readWorkspaceState": try success(id, .object(["settings": snapshot("session-test")["settings"]]))
             case "conversationRowsRangeV4":
                 let before = params["beforeRowId"].integer ?? Int.max, limit = params["limit"].integer!
@@ -159,7 +189,7 @@ actor MockRelaySocket: RelaySocketTransport {
                 let kind = envelope["type"].string
                 let result: RelayJSON? = kind == "createSession" ? .object(["type": .string("createSession"), "sessionId": .string("session-created")]) : kind == "forkAssistant" ? .object(["type": .string("forkAssistant"), "sessionId": .string("fork-child-" + commandID)]) : nil
                 let rejection = nextRejectedCommand; nextRejectedCommand = nil
-                let ack = prior ?? RelayCommandAck(commandId: commandID, status: rejection == nil ? "accepted" : "stale", revisionAtDecision: 2, reasonCode: rejection, message: rejection == nil ? nil : "Host target changed", result: rejection == nil ? result : nil)
+                let ack = prior.map { old in old.admitted ? RelayCommandAck(commandId: old.commandId, status: "duplicate", revisionAtDecision: old.revisionAtDecision, reasonCode: old.reasonCode, message: old.message, result: old.result) : old } ?? RelayCommandAck(commandId: commandID, status: rejection == nil ? "accepted" : "stale", revisionAtDecision: 2, reasonCode: rejection, message: rejection == nil ? nil : "Host target changed", result: rejection == nil ? result : nil)
                 commands[commandID] = ack
                 if dropNextCommandAck { dropNextCommandAck = false; return }
                 try success(id, RelayJSON(data: JSONEncoder().encode(ack)))
@@ -230,6 +260,9 @@ actor MockRelaySocket: RelaySocketTransport {
 @main private struct RelaySelfTests {
     static func main() async throws {
         var checks: [String] = []
+        checks += try runHookReviewDTOTests()
+        checks += try await runConversationCapabilityTests()
+        checks += try await runHookReviewClientTests()
         let evidenceDirectory = CommandLine.arguments.dropFirst().first ?? "/Users/developer/claude code/zcode-mobile/docs/backend/evidence"
         let vectors = try RelayJSON(data: Data(contentsOf: URL(fileURLWithPath: evidenceDirectory + "/relay-ipc-vectors.json")))
         for vector in vectors["vectors"].array! {

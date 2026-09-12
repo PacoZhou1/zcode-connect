@@ -15,14 +15,14 @@ import tempfile
 import sys
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--suite", choices=("outbox", "session-pagination", "unread", "metadata-actions", "computer-switch", "fork"), default="outbox")
+parser.add_argument("--suite", choices=("outbox", "session-pagination", "unread", "metadata-actions", "computer-switch", "fork", "file-listing", "hook-review"), default="outbox")
 parser.add_argument("--app-store-ref", help="For metadata-actions only: compile the real AppStore from a local Git revision, without checking it out")
 args = parser.parse_args()
 suite = args.suite
 if args.app_store_ref and suite != "metadata-actions":
     parser.error("--app-store-ref is limited to metadata-actions")
 uses_shared_fixtures = suite != "outbox"
-artifact_prefix = {"outbox": "OUTBOX", "session-pagination": "SESSION_PAGINATION", "unread": "UNREAD", "metadata-actions": "METADATA_ACTION", "computer-switch": "COMPUTER_SWITCH", "fork": "FORK"}[suite]
+artifact_prefix = {"outbox": "OUTBOX", "session-pagination": "SESSION_PAGINATION", "unread": "UNREAD", "metadata-actions": "METADATA_ACTION", "computer-switch": "COMPUTER_SWITCH", "fork": "FORK", "file-listing": "FILE_LISTING", "hook-review": "HOOK_REVIEW"}[suite]
 if args.app_store_ref:
     artifact_prefix += "_BASELINE"
 root = Path(__file__).resolve().parents[2]
@@ -32,12 +32,17 @@ sources = [core / n for n in ("AppStore.swift", "PendingSubmission.swift", "Mode
 sources += [root / "ios/ZCodeMobile/Features/ComposerView.swift"]
 if suite in ("unread", "metadata-actions", "computer-switch"):
     sources += [root / "ios/ZCodeMobile/Features/HomeView.swift", root / "ios/ZCodeMobile/Design/SessionContextInteraction.swift"]
+file_view_source = root / "ios/ZCodeMobile/Features/FilesView.swift"
+if suite == "file-listing":
+    sources.append(file_view_source)
 dependencies = [core / "RemoteTransport.swift"] + [core / "Relay" / n for n in ("RelayTypes.swift", "RelayFrames.swift", "RelayProjection.swift", "RelayHostActivity.swift", "RelayCodec.swift")]
+if (core / "Relay/RelayHookReview.swift").exists():
+    dependencies.append(core / "Relay/RelayHookReview.swift")
 if (core / "DraftAttachmentJournal.swift").exists():
     dependencies.append(core / "DraftAttachmentJournal.swift")
 sources += dependencies
 outbox_fixture_source = root / "scripts/tests/OutboxStateTests.swift"
-test_source = root / "scripts/tests" / {"outbox": "OutboxStateTests.swift", "session-pagination": "SessionPaginationStateTests.swift", "unread": "UnreadStateTests.swift", "metadata-actions": "MetadataActionStateTests.swift", "computer-switch": "ComputerSwitchStateTests.swift", "fork": "ForkStateTests.swift"}[suite]
+test_source = root / "scripts/tests" / {"outbox": "OutboxStateTests.swift", "session-pagination": "SessionPaginationStateTests.swift", "unread": "UnreadStateTests.swift", "metadata-actions": "MetadataActionStateTests.swift", "computer-switch": "ComputerSwitchStateTests.swift", "fork": "ForkStateTests.swift", "file-listing": "FileListingStateTests.swift", "hook-review": "HookReviewStateTests.swift"}[suite]
 relay_stub_source = root / "scripts/tests/HostActivityStateTests.swift"
 sources += [test_source, relay_stub_source]
 if uses_shared_fixtures:
@@ -74,6 +79,12 @@ with tempfile.TemporaryDirectory(prefix=f"zcode-{suite}-tests-") as raw:
     for source in dependencies:
         target = temp / source.name
         target.write_bytes(contents[source])
+        swift_inputs.append(str(target))
+    if suite == "file-listing":
+        helpers = contents[file_view_source].decode().split("struct FilesView: View {", 1)
+        assert len(helpers) == 2
+        target = temp / "ProductionFileTree.swift"
+        target.write_text(helpers[0].replace("import SwiftUI", "import Foundation", 1))
         swift_inputs.append(str(target))
     # New production AppStore references relay pairing types. The same throwing
     # adapters used by the activity harness prohibit all real relay I/O here.

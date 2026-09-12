@@ -118,7 +118,7 @@ struct AdvancedSettingsView: View {
                                         ? selection?.thoughtLevel : model.defaultThoughtLevel))
                             } label: {
                                 if let reason = model.unavailableReason, !model.available {
-                                    Label("\(model.name) · \(reason)", systemImage: "exclamationmark.circle")
+                                    Label("\(model.name) · \(model.providerName) · \(reason == "provider_disabled" ? "未启用" : "暂不可用")", systemImage: "exclamationmark.circle")
                                 } else if model.id == currentModel?.id {
                                     Label("\(model.name) · \(model.providerName)", systemImage: "checkmark")
                                 } else { Text("\(model.name) · \(model.providerName)") }
