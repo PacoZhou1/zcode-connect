@@ -223,16 +223,22 @@ struct ComposerView: View {
             }
             if expanded && !voiceActive {
                 HStack(spacing: 8) {
-                    attachmentMenu
-                    permissionButton
-                    if isPlanMode {
-                        Text("方案").font(.caption).foregroundStyle(ZTheme.accent)
+                    HStack(spacing: 5) {
+                        attachmentMenu
+                        permissionButton
+                        if isPlanMode {
+                            Text("方案").font(.caption).foregroundStyle(ZTheme.accent)
+                        }
                     }
                     Spacer(minLength: 4)
-                    reasoningButton
-                    microphoneButton
-                    primaryButton
+                    HStack(spacing: 8) {
+                        reasoningButton
+                        microphoneButton
+                        primaryButton.padding(.leading, 5)
+                    }
                 }
+                .padding(.leading, -3)
+                .padding(.trailing, -7)
             }
         }
         .padding(.horizontal, expanded ? 14 : 12)
@@ -261,8 +267,8 @@ struct ComposerView: View {
     private var inputField: some View {
         let reduced = reduceMotion
         return TextField("在 \(store.hostName) 上工作", text: $text,
-                         prompt: Text("在 \(store.hostName) 上工作").foregroundStyle(ZTheme.listSecondary), axis: .vertical)
-            .font(.system(size: 18))
+                         prompt: Text("在 \(store.hostName) 上工作").foregroundStyle(Color(uiColor: .placeholderText)), axis: .vertical)
+            .font(.system(size: 17))
             .lineLimit(expanded ? 1...6 : 1...1)
             .focused($focused)
             .tint(ZTheme.accent)
@@ -279,7 +285,7 @@ struct ComposerView: View {
         Button {
             startInlineVoice()
         } label: {
-            Image(systemName: "mic").font(.system(size: 22, weight: .regular))
+            Image(systemName: "mic").font(.system(size: 20, weight: .regular))
                 .foregroundStyle(Color.primary).frame(width: 32, height: 34)
         }.disabled(submitting || isRunning)
             .accessibilityLabel("语音输入").accessibilityIdentifier("composer.microphone").accessibilityHidden(voiceActive)
@@ -365,7 +371,7 @@ struct ComposerView: View {
 
     private var attachmentMenu: some View {
         Button { focused = false; showAttachmentMenu.toggle() } label: {
-            Image(systemName: "plus").font(.system(size: 27, weight: .regular)).frame(width: 28, height: 34)
+            Image(systemName: "plus").font(.system(size: 21, weight: .regular)).frame(width: 28, height: 34)
         }
         .disabled(attachmentDraftIdentity != draftIdentity)
         .tint(.primary).accessibilityLabel("添加附件或模式").accessibilityIdentifier("composer.add").accessibilityHidden(voiceActive)

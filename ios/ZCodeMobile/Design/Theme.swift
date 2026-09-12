@@ -17,6 +17,7 @@ enum ZTheme {
     static let background = Color(uiColor: .systemBackground)
     static let secondary = Color(uiColor: .secondaryLabel)
     static let listSecondary = Color(light: UIColor(white: 0.42, alpha: 1), dark: UIColor(white: 0.66, alpha: 1))
+    static let searchPlaceholder = Color(light: UIColor(white: 151.0 / 255, alpha: 1), dark: UIColor(white: 0.66, alpha: 1))
     static let grouped = Color(uiColor: .secondarySystemGroupedBackground)
     static let separator = Color(uiColor: .separator).opacity(0.5)
     static let pageInset: CGFloat = 16
@@ -53,9 +54,9 @@ struct GlassSearchField: View {
     @Binding var text: String
     var placeholder: String
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass").font(.system(size: 20))
-            TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(ZTheme.listSecondary))
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 17))
+            TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(ZTheme.searchPlaceholder))
                 .font(.system(size: 17))
                 .submitLabel(.search)
                 .autocorrectionDisabled()
@@ -66,7 +67,7 @@ struct GlassSearchField: View {
                 }.accessibilityLabel("清除搜索")
             }
         }
-        .padding(.horizontal, 14).frame(height: 48)
+        .padding(.horizontal, 12).frame(height: 48)
         .glassEffect(ZTheme.controlGlass, in: Capsule())
         .measureLayout("search.\(placeholder)")
     }
