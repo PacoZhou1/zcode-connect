@@ -87,7 +87,7 @@ struct ChatView: View {
                     Button {
                         withAnimation { position.scrollTo(edge: .bottom) }
                         showJump = false
-                    } label: { Image(systemName: "arrow.down").font(.system(size: 21, weight: .medium)).frame(width: 36, height: 36) }
+                    } label: { Image(systemName: "arrow.down").font(.system(size: 21, weight: .medium)).frame(width: 24, height: 24) }
                         .buttonStyle(NativeGlassButtonStyle()).buttonBorderShape(.circle)
                         .padding(.bottom, 8).accessibilityLabel("跳到最新消息")
                 }

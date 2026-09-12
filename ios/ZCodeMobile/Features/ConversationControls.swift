@@ -79,12 +79,12 @@ struct ConversationControls: View {
 
     @ViewBuilder private func panel(_ name: String) -> some View {
         if name == "goal", let goal = store.goals[sessionID] {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
                 ScrollView {
                     Text(goal.text).font(.system(size: 12)).lineSpacing(2).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .measureLayout("goal.text")
-                }.frame(maxHeight: 92.333333)
+                }.frame(maxHeight: 100.333333)
                 HStack(spacing: 18) {
                     Spacer()
                     Button { editGoal = true } label: { Image(systemName: "pencil") }.accessibilityLabel("编辑目标")
@@ -114,7 +114,7 @@ struct ConversationControls: View {
                                 else { store.path.append(.session(agent.id)) }
                             } label: {
                                 HStack(spacing: 11) {
-                                    Circle().fill([Color.green, .purple, .blue, .red][agent.colorIndex % 4]).frame(width: 10, height: 10)
+                                    Circle().fill(ZTheme.agentColors[abs(agent.colorIndex % 4)]).frame(width: 10, height: 10)
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(agent.title).font(.system(size: 13, weight: .medium)).foregroundStyle(Color.primary)
                                         Text(agent.status.label).font(.system(size: 12)).foregroundStyle(.secondary)
@@ -128,9 +128,11 @@ struct ConversationControls: View {
                             Text("主机记录了 \(store.agentCount(sessionID)) 个智能体，正在等待任务详情。")
                                 .font(.footnote).foregroundStyle(.secondary).padding(.vertical, 12)
                         }
-                    }.padding(.vertical, 5)
-                }.frame(maxHeight: 172)
-            }.padding(13).glassEffect(ZTheme.controlGlass, in: RoundedRectangle(cornerRadius: 17))
+                    }.padding(.vertical, 4)
+                }.frame(maxHeight: 172).scrollClipDisabled()
+            }.padding(12).frame(height: 220, alignment: .top)
+                .clipShape(RoundedRectangle(cornerRadius: 17))
+                .glassEffect(ZTheme.controlGlass, in: RoundedRectangle(cornerRadius: 17))
                 .measureLayout("agents.panel")
         }
     }

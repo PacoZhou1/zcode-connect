@@ -8,6 +8,8 @@ enum ZTheme {
         return .regular
     }
     static let accent = Color(red: 172.0 / 255, green: 120.0 / 255, blue: 249.0 / 255)
+    static let agentColors = [(42.0, 132.0, 79.0), (140.0, 83.0, 209.0), (46.0, 106.0, 219.0), (219.0, 61.0, 79.0)]
+        .map { Color(red: $0.0 / 255, green: $0.1 / 255, blue: $0.2 / 255) }
     static let userText = Color(red: 0.50, green: 0.27, blue: 0.89)
     static let userBubble = Color(light: UIColor(red: 0.936, green: 0.897, blue: 0.996, alpha: 1),
                                   dark: UIColor(red: 0.22, green: 0.15, blue: 0.33, alpha: 1))
@@ -52,7 +54,7 @@ struct GlassSearchField: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").font(.system(size: 20))
-            TextField(placeholder, text: $text)
+            TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(ZTheme.listSecondary))
                 .font(.system(size: 17))
                 .submitLabel(.search)
                 .autocorrectionDisabled()

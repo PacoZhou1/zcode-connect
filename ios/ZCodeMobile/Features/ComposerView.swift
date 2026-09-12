@@ -34,7 +34,9 @@ struct ComposerView: View {
     private var voiceActive: Bool { voicePhase != .idle }
 
     private var draftKey: String { sessionID ?? "new:\(store.selectedProjectID ?? "")" }
-    private var draftIdentity: String { "\(store.activeProfileID ?? "reference")|\(draftKey)" }
+    private var draftIdentity: String {
+        "\(store.isReferenceMode)|\(store.activeProfileID ?? "unconnected")|\(store.activeProfile?.baseURL ?? "")|\(draftKey)"
+    }
     private var expanded: Bool { focused || !text.isEmpty || !attachments.isEmpty || sessionID == nil }
     private var hasDraftContent: Bool { !text.isEmpty || !attachments.isEmpty }
     private var canSend: Bool {
@@ -258,7 +260,8 @@ struct ComposerView: View {
 
     private var inputField: some View {
         let reduced = reduceMotion
-        return TextField("在 \(store.hostName) 上工作", text: $text, axis: .vertical)
+        return TextField("在 \(store.hostName) 上工作", text: $text,
+                         prompt: Text("在 \(store.hostName) 上工作").foregroundStyle(ZTheme.listSecondary), axis: .vertical)
             .font(.system(size: 18))
             .lineLimit(expanded ? 1...6 : 1...1)
             .focused($focused)
@@ -349,7 +352,7 @@ struct ComposerView: View {
                 else if isRunning { Image(systemName: "stop.fill").font(.system(size: 14)) }
                 else if submitting { ProgressView().tint(.white) }
                 else if hasDraftContent || sessionID == nil { Image(systemName: "arrow.up").font(.system(size: 22, weight: .semibold)) }
-                else { Image(systemName: "waveform").font(.system(size: 18, weight: .semibold)) }
+                else { VoiceBarsGlyph().stroke(style: StrokeStyle(lineWidth: 2.2, lineCap: .round)).frame(width: 20, height: 22) }
             }
             .foregroundStyle(.white).frame(width: 34, height: 34)
             .background((!isRunning && (hasDraftContent || sessionID == nil) && !canSend) ? Color.gray.opacity(0.28) : ZTheme.accent, in: Circle())
@@ -399,8 +402,10 @@ struct ComposerView: View {
                                   action: @escaping () -> Void) -> some View {
         Button {
             showAttachmentMenu = false
+            let identity = draftIdentity
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(200))
+                guard identity == draftIdentity else { return }
                 action()
             }
         } label: {
