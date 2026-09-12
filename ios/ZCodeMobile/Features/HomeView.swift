@@ -31,8 +31,8 @@ struct HomeView: View {
             (search.isEmpty || $0.title.localizedStandardContains(search) || $0.projectName.localizedStandardContains(search))
         }
         if store.sortOrder == .project {
-            let names = Array(Set(filtered.map(\.projectName))).sorted()
-            return names.map { name in SessionGroup(id: name, sessions: filtered.filter { $0.projectName == name }) }
+            let byProject = Dictionary(grouping: filtered, by: \.projectName)
+            return byProject.keys.sorted().map { SessionGroup(id: $0, sessions: byProject[$0] ?? []) }
         }
         var ordered = filtered
         if !store.isReferenceMode || store.sortOrder == .recent {
@@ -155,7 +155,9 @@ struct HomeView: View {
     }
 
     private var sessionList: some View {
-        ScrollView {
+        let visibleGroups = groups
+        let firstGroupID = visibleGroups.first?.id
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if store.sessionListTruncated {
                     InlineNotice(symbol: "list.bullet", text: "已加载 \(store.sessions.count) 个任务，电脑还有未返回的记录。当前搜索只覆盖已加载任务。")
@@ -174,13 +176,13 @@ struct HomeView: View {
                         Label("返回全部任务", systemImage: "arrow.left").font(.subheadline)
                     }.padding(.bottom, 20)
                 }
-                if groups.isEmpty {
+                if visibleGroups.isEmpty {
                     ContentUnavailableView(search.isEmpty ? "还没有任务" : "没有找到聊天",
                         systemImage: search.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
                         description: Text(search.isEmpty ? "创建一个任务，从手机继续你的工作。" : "试试其他任务名称或项目名称。"))
                         .padding(.top, 100)
                 }
-                ForEach(groups) { group in
+                ForEach(visibleGroups) { group in
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             if collapsed.contains(group.id) { collapsed.remove(group.id) }
@@ -194,7 +196,7 @@ struct HomeView: View {
                                 .rotationEffect(.degrees(collapsed.contains(group.id) ? -90 : 0))
                         }.foregroundStyle(.primary).frame(minHeight: 30, alignment: .leading)
                     }.buttonStyle(.plain).padding(.bottom, 21)
-                        .padding(.top, group.id == groups.first?.id ? 0 : -3)
+                        .padding(.top, group.id == firstGroupID ? 0 : -3)
                     if !collapsed.contains(group.id) {
                         ForEach(group.sessions) { session in
                             sessionRow(session)
@@ -207,6 +209,11 @@ struct HomeView: View {
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await store.refresh() }
         .accessibilityIdentifier("home.sessions")
+        .onScrollPhaseChange { _, phase in
+            #if DEBUG
+            if MotionPerformanceProbe.shared.isRunning { MotionPerformanceProbe.shared.setStage("home-\(phase)") }
+            #endif
+        }
     }
 
     private func sessionRow(_ session: RemoteSession) -> some View {

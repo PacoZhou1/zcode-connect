@@ -83,6 +83,29 @@ test('desktop-owned sessions reject every control path without a protocol call',
   await assert.rejects(service.metadata('__proto__', { pinned: true }), { code: 'not_found' }); assert.equal(Object.prototype.pinned, undefined);
 });
 
+test('empty draft rename stays explicit bridge metadata until real persistence then synchronizes the runtime title', async t => {
+  const { service, protocol, acceptanceWorkspace } = fixture(t);
+  const created = await service.create({ project: projectId(acceptanceWorkspace) });
+  assert.equal(protocol.calls.find(call => call.method === 'session/create').params.persistence, 'deferred');
+  let persisted = false;
+  service.ownedHistory.hasSession = () => persisted;
+  const count = protocol.calls.length;
+  const changed = await service.metadata(created.id, { title: 'Named empty draft' });
+  assert.equal(changed.metadataScope, 'bridge'); assert.equal(changed.runtimeTitleStatus, 'pending-persistence');
+  assert.equal(service.registry.sessions[created.id].pendingRuntimeTitle, 'Named empty draft'); assert.equal(protocol.calls.length, count);
+  await service.syncPendingTitle(created.id); assert.equal(protocol.calls.length, count);
+  const request = protocol.request.bind(protocol);
+  protocol.request = async (method, params, ...rest) => {
+    const result = await request(method, params, ...rest);
+    if (method === 'session/read') result.session.title = 'Named empty draft';
+    return result;
+  };
+  persisted = true; await service.syncPendingTitle(created.id);
+  assert.equal(service.registry.sessions[created.id].pendingRuntimeTitle, undefined);
+  assert.equal(protocol.calls.filter(call => call.method === 'v4/command' && call.params.type === 'renameSession').length, 1);
+  assert.equal(protocol.calls.some(call => call.method === 'v4/command' && call.params.type === 'sendText'), false);
+});
+
 test('bridge unread markers persist without runtime calls and compare-and-clear preserves a newer marker', async t => {
   const { service, protocol, acceptanceWorkspace } = fixture(t), created = await service.create({ project: projectId(acceptanceWorkspace) });
   const calls = protocol.calls.length;

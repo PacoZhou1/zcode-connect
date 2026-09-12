@@ -1116,7 +1116,11 @@ final class AppStore {
     func rename(_ id: String, title: String) {
         let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, let i = sessions.firstIndex(where: { $0.id == id }) else { return }
-        if !isReferenceMode, sessions[i].source == "bridge" {
+        if !isReferenceMode {
+            guard ["bridge", "official-relay"].contains(sessions[i].source) else {
+                errorMessage = "这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。"
+                return
+            }
             let epoch = connectionEpoch
             Task { guard epoch == connectionEpoch else { return }; _ = await mutateMetadata(id, body: ["title": .string(value)]) }
             return
@@ -1131,7 +1135,11 @@ final class AppStore {
 
     func togglePin(_ id: String) {
         guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
-        if !isReferenceMode, sessions[i].source == "bridge" {
+        if !isReferenceMode {
+            guard ["bridge", "official-relay"].contains(sessions[i].source) else {
+                errorMessage = "这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。"
+                return
+            }
             let pinned = !sessions[i].isPinned
             let epoch = connectionEpoch
             Task { guard epoch == connectionEpoch else { return }; _ = await mutateMetadata(id, body: ["pinned": .bool(pinned)]) }
@@ -1144,7 +1152,11 @@ final class AppStore {
     }
     func archive(_ id: String, archived: Bool = true) {
         guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
-        if !isReferenceMode, sessions[i].source == "bridge" {
+        if !isReferenceMode {
+            guard ["bridge", "official-relay"].contains(sessions[i].source) else {
+                errorMessage = "这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。"
+                return
+            }
             let epoch = connectionEpoch
             Task {
                 guard epoch == connectionEpoch else { return }
@@ -1160,6 +1172,80 @@ final class AppStore {
         if !isReferenceMode { defaults.set(Array(archivedIDs), forKey: scopedKey("archives")) }
         if archived { path = []; notify("已归档") } else { notify("已恢复任务") }
     }
+    private var forkJournal: ForkJournal { ForkJournal(directory: submissionJournal.directory.appendingPathComponent("Forks")) }
+    var forksInFlight: Set<String> = []
+    func isForking(_ id: String) -> Bool { forksInFlight.contains("\(persistenceScope)|\(id)") }
+
+    /// Capture scope before scheduling; persist the command ID before any host mutation.
+    func forkSession(_ id: String, target: MessageForkTarget? = nil) {
+        guard let parent = session(id), !parent.isArchived else { return }
+        if isReferenceMode {
+            var child = parent
+            child.id = UUID().uuidString; child.title += "（分支）"; child.updatedAt = .now
+            child.isPinned = false; child.status = .idle
+            upsert(child)
+            let history = messages(id)
+            if let target, let index = history.firstIndex(where: { $0.id == target.entityId }) {
+                transcripts[child.id] = Array(history.prefix(index + 1))
+            } else { transcripts[child.id] = history }
+            path.append(.session(child.id))
+            return
+        }
+        guard parent.canFork == true, connection.isOnline, let client else {
+            errorMessage = "这台电脑当前不支持从此处创建分支。"
+            return
+        }
+        let epoch = connectionEpoch, scope = persistenceScope
+        let operationKey = "\(scope)|\(id)"
+        guard !forksInFlight.contains(operationKey) else { return }
+        let boundaryKey = "\(id)|\(target.map { "\($0.rowId)|\($0.entityId)" } ?? "latest")"
+        let command: PendingFork
+        do {
+            var journal = try forkJournal.read(scope: scope)
+            command = journal[boundaryKey] ?? PendingFork(clientForkId: UUID().uuidString, target: target)
+            journal[boundaryKey] = command
+            try forkJournal.write(journal, scope: scope)
+        } catch {
+            errorMessage = "无法保存分支请求：\(error.localizedDescription)"
+            return
+        }
+        forksInFlight.insert(operationKey)
+        Task {
+            defer { forksInFlight.remove(operationKey) }
+            guard epoch == connectionEpoch else { return }
+            do {
+                var body: [String: JSONValue] = ["clientForkId": .string(command.clientForkId)]
+                if let target = command.target {
+                    body["target"] = .object(["rowId": .number(Double(target.rowId)), "entityId": .string(target.entityId)])
+                }
+                struct Result: Decodable, Sendable { var session: BridgeSession; var forkedSessionId: String }
+                let result: Result = try await client.mutate("v1/sessions/\(id)/fork", body: body)
+                guard epoch == connectionEpoch else { return }
+                guard result.session.id == result.forkedSessionId, result.forkedSessionId != id else {
+                    throw BridgeFailure(message: "电脑返回的分支尚未确认，请重试。", code: "fork_uncertain")
+                }
+                var saved = try forkJournal.read(scope: scope)
+                saved[boundaryKey] = nil; try forkJournal.write(saved, scope: scope)
+                upsert(result.session.local)
+                path.append(.session(result.forkedSessionId))
+                notify("已创建分支")
+            } catch {
+                guard epoch == connectionEpoch else { return }
+                if let failure = error as? BridgeFailure,
+                   ["fork_rejected", "fork_target_stale", "fork_unavailable"].contains(failure.code) {
+                    do {
+                        var saved = try forkJournal.read(scope: scope)
+                        saved[boundaryKey] = nil
+                        try forkJournal.write(saved, scope: scope)
+                        errorMessage = "电脑未创建分支：\(failure.message) 刷新会话后可重新选择回复。"
+                    } catch { errorMessage = "无法更新分支请求记录：\(error.localizedDescription)" }
+                } else {
+                    errorMessage = "分支尚未确认：\(error.localizedDescription) 重试会使用同一请求编号。"
+                }
+            }
+        }
+    }
+
     func copy(_ value: String, message: String = "已复制") {
         UIPasteboard.general.string = value
         notify(message)
@@ -1192,11 +1278,9 @@ final class AppStore {
         else { sessions.insert(session, at: 0) }
     }
     private func decorate(_ session: RemoteSession) -> RemoteSession {
-        var value = session
-        value.title = localTitles[value.id] ?? value.title
-        value.isPinned = value.isPinned || pinnedIDs.contains(value.id)
-        value.isArchived = value.isArchived || archivedIDs.contains(value.id)
-        return value
+        // Metadata always reflects the host. Legacy local preferences remain stored
+        // for recovery, but cannot masquerade as a successful remote mutation.
+        session
     }
     private func beginStreaming() {
         guard let client else { return }

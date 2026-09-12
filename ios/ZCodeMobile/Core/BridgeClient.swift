@@ -122,6 +122,7 @@ struct BridgeSession: Decodable, Sendable {
         var approve: Bool
         var changes: Bool
         var markUnread: Bool?
+        var fork: Bool?
     }
     var id: String
     var title: String
@@ -144,7 +145,7 @@ struct BridgeSession: Decodable, Sendable {
         RemoteSession(id: id, title: title, projectID: projectId, projectName: projectName,
                       updatedAt: Date.fromBridge(updatedAt), status: SessionStatus(rawValue: status) ?? (status == "error" ? .failed : .idle),
                       isPinned: pinned ?? false, isArchived: archived ?? false,
-                      canControl: capabilities.send, source: source, unread: unread, unreadAt: unreadAt, unreadScope: unreadScope, canMarkUnread: capabilities.markUnread)
+                      canControl: capabilities.send, source: source, unread: unread, unreadAt: unreadAt, unreadScope: unreadScope, canMarkUnread: capabilities.markUnread, canFork: capabilities.fork)
     }
 }
 
@@ -164,6 +165,7 @@ struct BridgeMessage: Decodable, Sendable {
     var toolCalls: [Tool]?
     var reasoning: String?
     var attachments: [MessageAttachment]?
+    var forkTarget: MessageForkTarget?
     var local: ChatMessage {
         ChatMessage(id: id, role: ChatMessage.Role(rawValue: role) ?? .system,
                     text: text, createdAt: Date.fromBridge(createdAt),
@@ -173,7 +175,7 @@ struct BridgeMessage: Decodable, Sendable {
                                  status: ["running", "in_progress"].contains($0.status) ? .running :
                                     (["error", "failed", "rejected"].contains($0.status) ? .failed : .completed))
                     },
-                    isStreaming: isStreaming, reasoning: reasoning, attachments: attachments ?? [])
+                    isStreaming: isStreaming, reasoning: reasoning, attachments: attachments ?? [], forkTarget: forkTarget)
     }
 }
 

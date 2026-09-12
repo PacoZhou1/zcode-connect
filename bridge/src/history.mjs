@@ -50,6 +50,7 @@ export class HistoryReader {
     this.taskDb = join(zcodeRoot, 'v2/tasks-index.sqlite');
     this.transcripts = new TranscriptPages();
   }
+  hasSession(id) { return dbRead(this.sessionDb, db => !!db.prepare('SELECT 1 FROM session WHERE id = ?').get(id), false); }
   sessions(limit = 200, onlyID) {
     const metadata = dbRead(this.taskDb, db => new Map(db.prepare('SELECT task_id,title,task_status,model,mode,archived,deleted,unread_at FROM tasks').all().map(r => [r.task_id, r])), new Map());
     return dbRead(this.sessionDb, db => db.prepare("SELECT id,title,path,directory,time_created,time_updated,summary_additions,summary_deletions FROM session WHERE parent_id IS NULL AND time_archived IS NULL AND task_type = 'interactive'" + (onlyID ? ' AND id = ?' : '') + ' ORDER BY time_updated DESC,id DESC LIMIT ?').all(...(onlyID ? [onlyID, limit] : [limit])).flatMap(row => {

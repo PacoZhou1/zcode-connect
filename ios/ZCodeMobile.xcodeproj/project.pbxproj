@@ -14,6 +14,7 @@
 		20A2E6E8A00B316F0626C35B /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0809BD437D0AF50FA97BB62B /* ChatView.swift */; };
 		22DBA8CA4ACEE79D4231289F /* RelayFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ED41DF90F78B118667C3E6E /* RelayFrames.swift */; };
 		238958683848FE83A2C4EF99 /* RelayTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3D13F9B01591B9FAC71ECB7 /* RelayTypes.swift */; };
+		6D2911829DCD7351BD2DFE41 /* RelayFork.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17A9C7254E170E6779A1066 /* RelayFork.swift */; };
 		27FCA7C1FF07EB62BBD009A6 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4F0D7A5AEC3CA5D59D29459 /* ComposerView.swift */; };
 		2CDEA0D081FA2A893C52F2C4 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93034B5E7A5C99E815F3E561 /* Models.swift */; };
 		2CF4836A8B0C7AB3CF1EB773 /* ConversationControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4403F2376625B4E0EBCDC325 /* ConversationControls.swift */; };
@@ -103,6 +104,7 @@
 		C76150E0F20E473393F51574 /* ReferenceSymbols.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceSymbols.swift; sourceTree = "<group>"; };
 		C93D135B8F0204237DCB01DF /* LayoutMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutMeasurement.swift; sourceTree = "<group>"; };
 		D3D13F9B01591B9FAC71ECB7 /* RelayTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayTypes.swift; sourceTree = "<group>"; };
+		A17A9C7254E170E6779A1066 /* RelayFork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayFork.swift; sourceTree = "<group>"; };
 		D53E608EC4C76B55D532A07D /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
 		D662DA4FFEF70F22E12102FC /* RelaySessionPages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySessionPages.swift; sourceTree = "<group>"; };
 		DBDFB6B2861B6F275C9CBE81 /* ZCodeMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ZCodeMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -171,6 +173,7 @@
 				E4268542146EC82FE448BEF4 /* RelayProjection.swift */,
 				17A6E3792041A4C193271AAE /* RelaySelfTests.swift */,
 				D3D13F9B01591B9FAC71ECB7 /* RelayTypes.swift */,
+				A17A9C7254E170E6779A1066 /* RelayFork.swift */,
 				0AB24A5994BDE127973CE1D1 /* RelayWorkspaceServices.swift */,
 			);
 			path = Relay;
@@ -383,6 +386,7 @@
 				6731B17F2D94BC58E5595BB0 /* RelaySelfTests.swift in Sources */,
 				A9CFFE490BAF1DEBB03A4252 /* RelaySessionPages.swift in Sources */,
 				238958683848FE83A2C4EF99 /* RelayTypes.swift in Sources */,
+				6D2911829DCD7351BD2DFE41 /* RelayFork.swift in Sources */,
 				09B37C8610DD0512F16A8EA7 /* RelayWorkspaceServices.swift in Sources */,
 				98F6A79CD0AAA11960B4E25F /* RemoteTransport.swift in Sources */,
 				ADF7266D8A3EF03743B5B147 /* ServerSentEvents.swift in Sources */,

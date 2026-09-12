@@ -46,3 +46,28 @@ struct SubmissionJournal {
         try url.setResourceValues(resources)
     }
 }
+
+struct PendingFork: Codable {
+    var clientForkId: String
+    var target: MessageForkTarget?
+}
+
+struct ForkJournal {
+    let directory: URL
+    private func file(_ scope: String) -> URL {
+        let name = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent(name + ".json")
+    }
+    func read(scope: String) throws -> [String: PendingFork] {
+        let url = file(scope)
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        return try JSONDecoder().decode([String: PendingFork].self, from: Data(contentsOf: url))
+    }
+    func write(_ values: [String: PendingFork], scope: String) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JSONEncoder().encode(values).write(to: file(scope), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        var url = file(scope)
+        var resources = URLResourceValues(); resources.isExcludedFromBackup = true
+        try url.setResourceValues(resources)
+    }
+}

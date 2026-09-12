@@ -51,6 +51,12 @@ struct RemoteSession: Identifiable, Codable, Hashable {
     var unreadAt: Double?
     var unreadScope: String?
     var canMarkUnread: Bool?
+    var canFork: Bool?
+}
+
+struct MessageForkTarget: Codable, Hashable, Sendable {
+    var rowId: Int
+    var entityId: String
 }
 
 struct ChatMessage: Identifiable, Codable, Hashable {
@@ -66,6 +72,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var feedback: Int = 0
     var reasoning: String? = nil
     var attachments: [MessageAttachment] = []
+    var forkTarget: MessageForkTarget?
 }
 
 struct MessageAttachment: Identifiable, Codable, Hashable, Sendable {

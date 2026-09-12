@@ -459,7 +459,7 @@ public actor RelayClient {
             return
         }
         guard let sessionID = command.sessionId, !sessionID.isEmpty else { throw RelayFailure.invalid("Missing command session.") }
-        let keys: [String: Set<String>] = ["sendText": ["text", "attachments", "requestedDelivery"], "stop": ["expectedForegroundExecutionId"], "renameSession": ["title"], "resolveInteraction": ["interactionId", "answer"], "switchModelConfig": ["provider", "model", "thought"], "switchCollaborationMode": ["mode"], "pauseGoal": [], "resumeGoal": []]
+        let keys: [String: Set<String>] = ["sendText": ["text", "attachments", "requestedDelivery"], "stop": ["expectedForegroundExecutionId"], "forkAssistant": ["target"], "renameSession": ["title"], "resolveInteraction": ["interactionId", "answer"], "switchModelConfig": ["provider", "model", "thought"], "switchCollaborationMode": ["mode"], "pauseGoal": [], "resumeGoal": []]
         guard let allowed = keys[command.type], Set(payload.keys).isSubset(of: allowed) else { throw RelayFailure("relay_command_unsupported", "This command or payload field is not exposed by the native adapter.") }
         switch command.type {
         case "sendText":
@@ -467,6 +467,9 @@ public actor RelayClient {
             if let delivery = payload["requestedDelivery"], !["startNow", "queue", "guide"].contains(delivery.string ?? "") { throw RelayFailure.invalid("Unsupported message delivery mode.") }
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(payload["attachments"]?.array ?? []).isEmpty else { throw RelayFailure.invalid("A message needs text or an attachment.") }
         case "stop": if let target = payload["expectedForegroundExecutionId"], target.string?.isEmpty != false { throw RelayFailure.invalid("Invalid stop target.") }
+        case "forkAssistant":
+            _ = try RelayRowTarget(wire: payload["target"] ?? .null)
+            guard command.baseRevision != nil, command.baseLogEpoch?.isEmpty == false else { throw RelayFailure.invalid("Fork requires the source projection revision and epoch.") }
         case "renameSession": guard let title = payload["title"]?.string, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 200 else { throw RelayFailure.invalid("Invalid task title.") }
         case "switchCollaborationMode":
             guard let mode = payload["mode"]?.string, ["build", "edit", "plan", "yolo"].contains(mode) else { throw RelayFailure.invalid("Unsupported collaboration mode.") }
@@ -516,6 +519,25 @@ public actor RelayClient {
         let payload: RelayJSON = .object(active.map { ["expectedForegroundExecutionId": .string($0)] } ?? [:])
         return try await submit(makeCommand(sessionID: sessionID, type: "stop", payload: payload, commandID: commandID), explicitUserAction: explicitUserAction)
     }
+    public func makeForkCommand(sessionID: String, target: RelayRowTarget? = nil, commandID: String) throws -> RelayCommandEnvelope {
+        guard let projection = reducers[sessionID]?.projection else { throw RelayFailure("fork_unavailable", "Read the host conversation before branching it.") }
+        let allowed = projection.forkTargets
+        guard let selected = target ?? allowed.last else { throw RelayFailure("fork_unavailable", "The host has no completed assistant boundary available to branch.") }
+        guard allowed.contains(selected) else { throw RelayFailure("fork_target_stale", "This assistant boundary changed or is no longer available. Refresh before branching.") }
+        return makeCommand(sessionID: sessionID, type: "forkAssistant", payload: .object(["target": selected.wire]), commandID: commandID)
+    }
+    public func fork(sessionID: String, target: RelayRowTarget? = nil, commandID: String, explicitUserAction: Bool) async throws -> RelayCommandAck {
+        try await submit(makeForkCommand(sessionID: sessionID, target: target, commandID: commandID), explicitUserAction: explicitUserAction)
+    }
+    /// Registers an acknowledged native fork with the original host's task index, preserving its host-chosen configuration.
+    public func registerForkedTask(_ acknowledgement: RelayCommandAck, parentSessionID: String, explicitUserAction: Bool) async throws -> RelaySessionSnapshot {
+        try RelayWire.requireAction(explicitUserAction)
+        guard acknowledgement.admitted, acknowledgement.result?["type"].string == "forkAssistant",
+              let child = acknowledgement.result?["sessionId"].string, RelayWire.validID(child), child != parentSessionID else { throw RelayFailure("fork_uncertain", "The host has not confirmed a distinct forked task.", outcomeUncertain: true) }
+        let snapshot = try RelaySessionSnapshot(raw: await rpc("zcode-session", "resumeSession", ["sessionId": .string(child)]))
+        guard snapshot.sessionID == child else { throw RelayFailure.invalid("The host resumed another task.") }
+        return snapshot
+    }
     public func reply(sessionID: String, interactionID: String, answer: RelayInteractionAnswer, commandID: String, explicitUserAction: Bool) async throws -> RelayCommandAck {
         var wire = answer.wire
         if answer == .decline, let pending = reducers[sessionID]?.projection?.pendingInteractions.first(where: { $0.id == interactionID }), pending.kind == "permission", let option = pending.oneTimeOptions.first(where: { $0["kind"].string == "deny" })?["optionId"].string { wire = .object(["optionId": .string(option)]) }
@@ -536,7 +558,11 @@ public actor RelayClient {
     }
     public func archiveTask(sessionID: String, archived: Bool, explicitUserAction: Bool) async throws -> RelayTaskMetadata {
         try RelayWire.requireAction(explicitUserAction)
-        return try await rpc("zcode-task", archived ? "archiveTask" : "unarchiveTask", ["taskId": .string(sessionID)]).decode(RelayTaskMetadata.self)
+        let result = try await rpc("zcode-task", archived ? "archiveTask" : "unarchiveTask", ["taskId": .string(sessionID)]).decode(RelayTaskMetadata.self)
+        guard result.id == sessionID, let confirmed = try await listTasks(archived: archived).first(where: { $0.id == sessionID }) else { throw RelayFailure("metadata_not_confirmed", "The host has not confirmed the task's archive state.", outcomeUncertain: true) }
+        var value = try RelayJSON(data: JSONEncoder().encode(confirmed)).requiringObject()
+        value["archived"] = .bool(archived)
+        return try RelayJSON.object(value).decode(RelayTaskMetadata.self)
     }
     public func pinTask(sessionID: String, pinned: Bool, explicitUserAction: Bool) async throws -> RelayTaskMetadata {
         try RelayWire.requireAction(explicitUserAction)

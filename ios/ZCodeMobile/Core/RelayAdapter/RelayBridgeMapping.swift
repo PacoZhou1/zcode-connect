@@ -24,7 +24,7 @@ enum RelayBridgeMapping {
         let archived = meta?.archived ?? false
         var value: [String: RelayJSON] = ["id": .string(id), "title": .string(meta?.title.nilIfEmpty ?? projection?.title.nilIfEmpty ?? snapshot?.title.nilIfEmpty ?? "新任务"), "projectId": .string(projectID), "projectName": .string(URL(fileURLWithPath: bridge.workspacePath).lastPathComponent), "source": .string("official-relay"), "status": .string(state), "updatedAt": date(meta?.updatedAt ?? snapshot?.raw["session"]["updatedAt"].number), "pinned": .bool(meta?.pinned ?? false), "archived": .bool(archived),
             "unread": .bool(meta?.unreadAt != nil), "unreadAt": meta?.unreadAt.map(RelayJSON.number) ?? .null, "unreadScope": .string("desktop"),
-            "capabilities": .object(["read": .bool(controllable), "send": .bool(controllable && !archived), "stop": .bool(controllable && (projection?.canStop ?? ["running", "waiting"].contains(state))), "approve": .bool(controllable), "changes": .bool(true), "markUnread": .bool(controllable)])]
+            "capabilities": .object(["read": .bool(controllable), "send": .bool(controllable && !archived), "stop": .bool(controllable && (projection?.canStop ?? ["running", "waiting"].contains(state))), "approve": .bool(controllable), "changes": .bool(true), "markUnread": .bool(controllable), "rename": .bool(controllable), "pin": .bool(controllable), "archive": .bool(controllable), "fork": .bool(controllable && !archived && !(projection?.forkTargets.isEmpty ?? true))])]
         var provider = snapshot?.model["providerId"].string ?? projection?.config["provider"].string
         var model = snapshot?.model["modelId"].string ?? projection?.config["model"].string
         if model == nil, let stored = meta?.model {
@@ -89,6 +89,7 @@ enum RelayBridgeMapping {
             if let existing = groups[key] { index = existing }
             else { index = messages.count; groups[key] = index; messages.append(["id": .string(key), "role": .string("assistant"), "text": .string(""), "reasoning": .string(""), "toolCalls": .array([]), "createdAt": date(row["createdAt"].number), "isStreaming": .bool(false)]) }
             if kind == "assistantText" { messages[index]["text"] = .string((messages[index]["text"]?.string ?? "") + (row["text"].string ?? "")) }
+            if let target = projection.forkTargets.first(where: { $0.rowId == rowID }) { messages[index]["forkTarget"] = target.wire }
             if kind == "reasoning" { messages[index]["reasoning"] = .string((messages[index]["reasoning"]?.string ?? "") + (row["text"].string ?? "")) }
             if kind == "toolCall" || kind == "subagent" {
                 let toolStatus = row["status"].string ?? "unknown"

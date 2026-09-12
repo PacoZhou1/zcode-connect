@@ -41,6 +41,16 @@ struct AppShell: View {
         }
         .animation(.easeInOut(duration: 0.2), value: store.toast)
         .task { await store.start() }
+        .task {
+            #if DEBUG
+            guard ProcessInfo.processInfo.arguments.contains("--performance-probe") else { return }
+            MotionPerformanceProbe.shared.start(sessionName: "scroll-review", metadata: ["configuration": "Debug", "arguments": ProcessInfo.processInfo.arguments.filter { $0.hasPrefix("--") }.joined(separator: " ")])
+            do {
+                try await Task.sleep(for: .seconds(60))
+                try await MotionPerformanceProbe.shared.stopAndWrite(to: URL.documentsDirectory.appending(path: "scroll-probe.json"))
+            } catch { MotionPerformanceProbe.shared.stopWithoutWriting() }
+            #endif
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, store.connection.isOnline, !store.isReferenceMode {
                 Task { await store.refresh(); if let id = store.currentSessionID { await store.loadTranscript(id) } }

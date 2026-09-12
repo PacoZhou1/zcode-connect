@@ -95,6 +95,54 @@ private actor AdapterEvents {
         await historyAdapter.shutdown(); await historyClient.disconnect()
         checks.append("paginated_history_retains_assistant_identity_and_fences_stale_cursors")
 
+        let forkMock = MockRelaySocket(); try await forkMock.useForkRows()
+        let forkClient = try RelayClient(clientID: "fork-journal-client", transport: forkMock, requestTimeout: 2)
+        try await forkClient.connect(pairing: pairing, confirmedControllerReplacement: true)
+        let forkBootstrap = try await forkClient.bootstrap(), forkBridge = try await forkClient.openWorkspace(key: "/workspace")
+        let forkAdapter = try await RelayRemoteTransport(client: forkClient, bootstrap: forkBootstrap, bridge: forkBridge, hostName: "Fork mock", journalDirectory: folder)
+        let forkDetail: RelayJSON = try await forkAdapter.get("v1/sessions/session-test")
+        try expect(forkDetail["session"]["capabilities"]["fork"].bool == true && forkDetail["messages"].array?.first?["forkTarget"]["entityId"].string == "stable-boundary", "Host fork target was not preserved")
+        let forkBody: [String: JSONValue] = ["clientForkId": .string("retained-fork")]
+        await forkMock.dropAcknowledgement()
+        let uncertainFork = Task { let value: RelayJSON = try await forkAdapter.mutate("v1/sessions/session-test/fork", body: forkBody); return value }
+        let forkKey = "fork-" + relayDigest(Data("retained-fork".utf8))
+        for _ in 0..<100 { if await forkMock.commands[forkKey] != nil { break }; try await Task.sleep(for: .milliseconds(10)) }
+        try expect(await forkMock.commands[forkKey] != nil, "Fork did not reach the host")
+        uncertainFork.cancel(); _ = try? await uncertainFork.value; await forkAdapter.shutdown()
+        let originalFork = await forkMock.commandEnvelopes[forkKey]!
+        let forkRestored = try await RelayRemoteTransport(client: forkClient, bootstrap: forkBootstrap, bridge: forkBridge, hostName: "Fork mock", journalDirectory: folder)
+        let beforeForkQueries = await forkMock.sentCommandCount
+        let recoveredFork: RelayJSON = try await forkRestored.mutate("v1/sessions/session-test/fork", body: forkBody)
+        let childID = recoveredFork["forkedSessionId"].string!
+        try expect(childID != "session-test" && recoveredFork["session"]["id"].string == childID, "Fork did not return its real child")
+        try expect(await forkMock.sentCommandCount == beforeForkQueries, "Known fork result was sent again")
+        try expect(await forkMock.setterCalls == 0, "Fork changed model, thinking or mode")
+        try await failure("fork_conflict") { let _: RelayJSON = try await forkRestored.mutate("v1/sessions/session-test/fork", body: ["clientForkId": .string("retained-fork"), "target": .object(["rowId": .number(9), "entityId": .string("stable-boundary")])]) }
+        await forkMock.dropAcknowledgement(); await forkMock.reportUnknownCommands(true)
+        let unknownBody: [String: JSONValue] = ["clientForkId": .string("unknown-fork")]
+        let unknownKey = "fork-" + relayDigest(Data("unknown-fork".utf8))
+        let unknownFork = Task { let value: RelayJSON = try await forkRestored.mutate("v1/sessions/session-test/fork", body: unknownBody); return value }
+        for _ in 0..<100 { if await forkMock.commands[unknownKey] != nil { break }; try await Task.sleep(for: .milliseconds(10)) }
+        unknownFork.cancel(); _ = try? await unknownFork.value
+        let originalUnknown = await forkMock.commandEnvelopes[unknownKey]!
+        let _: RelayJSON = try await forkRestored.mutate("v1/sessions/session-test/fork", body: unknownBody)
+        let replayedForkEnvelopes = await forkMock.commandEnvelopes
+        try expect(replayedForkEnvelopes[unknownKey] == originalUnknown && replayedForkEnvelopes[forkKey] == originalFork, "Unknown fork replay changed its envelope")
+        await forkMock.rejectNextCommand(reason: "proto.staleRevision")
+        let rejectedBody: [String: JSONValue] = ["clientForkId": .string("rejected-fork")]
+        try await failure("fork_rejected") { let _: RelayJSON = try await forkRestored.mutate("v1/sessions/session-test/fork", body: rejectedBody) }
+        let rejectedCount = await forkMock.sentCommandCount
+        try await failure("fork_rejected") { let _: RelayJSON = try await forkRestored.mutate("v1/sessions/session-test/fork", body: rejectedBody) }
+        try expect(await forkMock.sentCommandCount == rejectedCount, "A terminal rejected fork was sent again")
+        checks.append("native_fork_target_durable_journal_ack_loss_restart_and_unknown_query_replay")
+        let archived: RelayJSON = try await forkRestored.mutate("v1/sessions/\(childID)", method: "PATCH", body: ["archived": .bool(true)])
+        try expect(archived["session"]["archived"].bool == true, "Archive was not confirmed from host list")
+        try await failure("session_archived") { let _: RelayJSON = try await forkRestored.mutate("v1/sessions/\(childID)/messages", body: ["text": .string("Blocked"), "inputId": .string("archive-blocked")]) }
+        let unarchived: RelayJSON = try await forkRestored.mutate("v1/sessions/\(childID)", method: "PATCH", body: ["archived": .bool(false)])
+        try expect(unarchived["session"]["archived"].bool == false && unarchived["metadataScope"].string == "desktop", "Restore was not confirmed from host list")
+        await forkRestored.shutdown(); await forkClient.disconnect()
+        checks.append("official_archive_restore_readback_with_metadata_omitting_archive_flags")
+
         let listing: BridgeFileListing = try await adapter.get("v1/projects/\(projectID)/files?search=main")
         try expect(listing.files.map(\.path) == ["src/main.swift"] && listing.searchComplete == true, "Safe recursive search failed")
         let text: RelayJSON = try await adapter.get("v1/projects/\(projectID)/file?path=README.md")

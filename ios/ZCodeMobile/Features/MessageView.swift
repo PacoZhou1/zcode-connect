@@ -15,7 +15,7 @@ struct MessageView: View {
                     Spacer(minLength: 92)
                     VStack(alignment: .leading, spacing: 10) {
                         attachmentLabels
-                        RichMessageText(text: message.text, user: true)
+                        RichMessageText(text: message.text, user: true).equatable()
                     }
                         .padding(.horizontal, 16).padding(.vertical, 12)
                         .background(ZTheme.userBubble, in: RoundedRectangle(cornerRadius: 23))
@@ -59,7 +59,7 @@ struct MessageView: View {
                         }
                     }
                 }
-                RichMessageText(text: message.text, user: false)
+                RichMessageText(text: message.text, user: false).equatable()
                 attachmentLabels
                 if !message.changes.isEmpty {
                     changeSummary.padding(.top, -4)
@@ -122,8 +122,16 @@ struct MessageView: View {
             Button { store.toggleLocalFeedback(-1, messageID: message.id, sessionID: sessionID) } label: {
                 Image(systemName: feedback == -1 ? "hand.thumbsdown.fill" : "hand.thumbsdown")
             }.accessibilityLabel("没有帮助")
-            ShareLink(item: message.text) { BranchShareGlyph().stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)).frame(width: 16, height: 16) }
-                .accessibilityLabel("分享回复")
+            if store.isReferenceMode || (message.forkTarget != nil && store.session(sessionID)?.canFork == true) {
+                Button { store.forkSession(sessionID, target: message.forkTarget ?? (store.isReferenceMode ? MessageForkTarget(rowId: 0, entityId: message.id) : nil)) } label: {
+                    BranchShareGlyph().stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)).frame(width: 16, height: 16)
+                }.accessibilityLabel("从此回复创建分支")
+                    .accessibilityIdentifier("message.fork.\(message.id)")
+                    .disabled(store.isForking(sessionID))
+            } else {
+                ShareLink(item: message.text) { Image(systemName: "square.and.arrow.up") }
+                    .accessibilityLabel("分享回复")
+            }
             if store.showTimestamps {
                 Text(timestampLabel)
                     .font(.system(size: 13))
@@ -144,22 +152,44 @@ struct MessageView: View {
     }
 }
 
-struct RichMessageText: View {
-    var text: String
-    var user: Bool
-
-    private enum Block: Identifiable {
-        case prose(Int, String), code(Int, String), table(Int, [[String]])
-        var id: Int {
-            switch self { case .prose(let id, _), .code(let id, _), .table(let id, _): id }
-        }
+enum MessageTextBlock: Identifiable, Equatable {
+    case prose(Int, AttributedString), code(Int, String), table(Int, [[String]])
+    var id: Int {
+        switch self { case .prose(let id, _), .code(let id, _), .table(let id, _): id }
     }
+}
 
-    private var blocks: [Block] {
-        if user { return [.prose(0, text)] }
+/// Exact-content cache: streaming revisions never reuse an older parse. NSCache
+/// bounds resident history and releases it under memory pressure.
+@MainActor
+final class MessageTextCache {
+    static let shared = MessageTextCache()
+    private final class Entry: NSObject {
+        let blocks: [MessageTextBlock]
+        init(_ blocks: [MessageTextBlock]) { self.blocks = blocks }
+    }
+    private let cache: NSCache<NSString, Entry> = {
+        let value = NSCache<NSString, Entry>()
+        value.countLimit = 256
+        value.totalCostLimit = 8 * 1024 * 1024
+        return value
+    }()
+    func blocks(text: String, user: Bool) -> [MessageTextBlock] {
+        let key = ((user ? "u|" : "a|") + text) as NSString
+        if let entry = cache.object(forKey: key) { return entry.blocks }
+        let result = Self.parse(text: text, user: user)
+        cache.setObject(Entry(result), forKey: key, cost: text.utf16.count * 8 + 256)
+        return result
+    }
+    private static func attributed(_ text: String) -> AttributedString {
+        let trimmed = text.trimmingCharacters(in: .newlines)
+        return (try? AttributedString(markdown: trimmed, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(trimmed)
+    }
+    static func parse(text: String, user: Bool) -> [MessageTextBlock] {
+        if user { return [.prose(0, attributed(text))] }
         let fence = String(repeating: String(UnicodeScalar(96)!), count: 3)
         let segments = text.components(separatedBy: fence)
-        var result: [Block] = []
+        var result: [MessageTextBlock] = []
         for (index, segment) in segments.enumerated() {
             if index % 2 == 1 {
                 let lines = segment.components(separatedBy: "\n")
@@ -169,7 +199,7 @@ struct RichMessageText: View {
                 var table: [[String]] = []
                 for line in segment.components(separatedBy: "\n") {
                     if line.trimmingCharacters(in: .whitespaces).hasPrefix("|") {
-                        if !pending.isEmpty { result.append(.prose(result.count, pending.joined(separator: "\n"))); pending = [] }
+                        if !pending.isEmpty { result.append(.prose(result.count, attributed(pending.joined(separator: "\n")))); pending = [] }
                         let cells = line.split(separator: "|", omittingEmptySubsequences: true).map { $0.trimmingCharacters(in: .whitespaces) }
                         if !cells.allSatisfy({ $0.allSatisfy { "-: ".contains($0) } }) { table.append(cells) }
                     } else {
@@ -177,21 +207,25 @@ struct RichMessageText: View {
                         pending.append(line)
                     }
                 }
-                if !pending.isEmpty { result.append(.prose(result.count, pending.joined(separator: "\n"))) }
+                if !pending.isEmpty { result.append(.prose(result.count, attributed(pending.joined(separator: "\n")))) }
                 if !table.isEmpty { result.append(.table(result.count, table)) }
             }
         }
         return result
     }
+}
+
+struct RichMessageText: View, Equatable {
+    var text: String
+    var user: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(blocks) { block in
+            ForEach(MessageTextCache.shared.blocks(text: text, user: user)) { block in
                 switch block {
                 case .prose(_, let content):
-                    let trimmed = content.trimmingCharacters(in: .newlines)
-                    if !trimmed.isEmpty {
-                        Text((try? AttributedString(markdown: trimmed, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(trimmed))
+                    if !content.characters.isEmpty {
+                        Text(content)
                             .font(.system(size: 17)).tracking(user ? 0 : 0.6)
                             .lineSpacing(5.333333)
                             .foregroundStyle(user ? ZTheme.userText : .primary)

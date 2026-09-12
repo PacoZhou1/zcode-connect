@@ -158,6 +158,7 @@ actor RelayRemoteTransport: RemoteTransport {
                 case ("POST", "messages"): return try await message(id, body)
                 case ("POST", "attachments"): return try await attachment(id, body)
                 case ("POST", "stop"): return try await stop(id)
+                case ("POST", "fork"): return try await fork(id, body)
                 case ("GET", "changes"): return try await changes(id)
                 default: break
                 }
@@ -183,6 +184,7 @@ actor RelayRemoteTransport: RemoteTransport {
             "attachments": ["fileName": "string", "mimeType": "string", "base64": "string"],
             "settings": ["model": "object", "thoughtLevel": "string", "mode": "string", "permissionMode": "string", "confirmFullAccess": "bool"],
             "metadata": ["title": "string", "pinned": "bool", "archived": "bool", "unread": "bool", "expectedUnreadAt": "number"],
+            "fork": ["clientForkId": "string", "target": "object"],
             "respond": ["decision": "string", "reason": "string", "action": "string", "content": "object"],
             "stop": [:], "pause": [:], "resume": [:]
         ]
@@ -280,32 +282,39 @@ actor RelayRemoteTransport: RemoteTransport {
     private func durableCommand(key: String, intent: RelayJSON, sessionID: String?, type: String, payload: RelayJSON, context: RelayJSON? = nil, confirmFullAccess: Bool = false) async throws -> RelayCommandAck {
         let hash = relayDigest(try intent.data())
         if let saved = journal.state.commands[key] {
-            guard saved.intentHash == hash, saved.envelope.sessionId == sessionID, saved.envelope.type == type else { throw RelayFailure(type == "createSession" ? "draft_conflict" : "input_conflict", "This request ID was already used with different content.") }
+            guard saved.intentHash == hash, saved.envelope.sessionId == sessionID, saved.envelope.type == type else { throw RelayFailure(type == "createSession" ? "draft_conflict" : type == "forkAssistant" ? "fork_conflict" : "input_conflict", "This request ID was already used with different content.") }
         } else {
             let envelope: RelayCommandEnvelope
             if type == "createSession" { envelope = try await client.makeCreateSessionCommand(commandID: key) }
+            else if type == "forkAssistant" { envelope = try await client.makeForkCommand(sessionID: sessionID!, target: payload["target"] == .null ? nil : RelayRowTarget(wire: payload["target"]), commandID: key) }
             else { envelope = await client.makeCommand(sessionID: sessionID!, type: type, payload: payload, commandID: key) }
             try journal.commit { $0.commands[key] = .init(intentHash: hash, envelope: envelope, context: context) }
         }
         var record = journal.state.commands[key]!
-        if let ack = record.acknowledgement { return try admitted(ack) }
+        if let ack = record.acknowledgement { return try admitted(ack, type: type) }
         if record.attempted {
             let query = try await client.queryCommands([.init(sessionId: record.envelope.sessionId, commandId: record.envelope.commandId)])
             guard let result = query["results"].array?.first(where: { $0["key"]["commandId"].string == record.envelope.commandId && $0["key"]["sessionId"].string == record.envelope.sessionId })?["result"] else { throw RelayFailure.invalid("The desktop omitted the command reconciliation result.") }
             if result.object != nil {
                 let ack = try result.decode(RelayCommandAck.self)
                 guard ack.commandId == key else { throw RelayFailure.invalid("The desktop reconciled another command.") }
-                try journal.commit { $0.commands[key]?.acknowledgement = ack }; return try admitted(ack)
+                try journal.commit { $0.commands[key]?.acknowledgement = ack }; return try admitted(ack, type: type)
             }
             guard result == .string("unknown") else { throw RelayFailure.invalid("Unknown command reconciliation shape.") }
         }
         // Persist before submitting. Retries retain the original issuedAt, base revision, epoch and attachment refs.
         try journal.commit { $0.commands[key]?.attempted = true }; record = journal.state.commands[key]!
         let ack = try await client.submit(record.envelope, explicitUserAction: true, confirmFullAccess: confirmFullAccess)
-        try journal.commit { $0.commands[key]?.acknowledgement = ack }; return try admitted(ack)
+        try journal.commit { $0.commands[key]?.acknowledgement = ack }; return try admitted(ack, type: type)
     }
-    private func admitted(_ ack: RelayCommandAck) throws -> RelayCommandAck {
-        guard ack.admitted else { throw RelayFailure(ack.reasonCode ?? "command_rejected", ack.message ?? "The desktop declined this command.") }; return ack
+    private func admitted(_ ack: RelayCommandAck, type: String) throws -> RelayCommandAck {
+        guard ack.admitted else {
+            if type == "forkAssistant" {
+                let description = [ack.reasonCode, ack.message].compactMap { $0 }.joined(separator: ": ")
+                throw RelayFailure("fork_rejected", description.isEmpty ? "The desktop declined this fork." : description)
+            }
+            throw RelayFailure(ack.reasonCode ?? "command_rejected", ack.message ?? "The desktop declined this command.")
+        }; return ack
     }
     private func message(_ id: String, _ body: RelayJSON) async throws -> RelayJSON {
         try ensureWritable(id); _ = try await loadProjection(id)
@@ -348,6 +357,25 @@ actor RelayRemoteTransport: RemoteTransport {
         let snapshot = try await client.readSession(id); snapshots[id] = snapshot
         guard snapshot.activeTurnID == nil, !["running", "waiting"].contains(snapshot.status) else { throw RelayFailure("stop_not_confirmed", "The desktop has not confirmed that the active turn ended.", outcomeUncertain: true) }
         return .object(["stopped": .bool(true), "sessionId": .string(id), "verified": .bool(true)])
+    }
+    private func fork(_ id: String, _ body: RelayJSON) async throws -> RelayJSON {
+        let clientID = try body.requiringString("clientForkId")
+        guard clientID.utf8.count <= 128 else { throw RelayFailure.invalid("clientForkId must contain at most 128 bytes.") }
+        let target = body["target"] == .null ? nil : try RelayRowTarget(wire: body["target"])
+        let key = "fork-" + relayDigest(Data(clientID.utf8))
+        if journal.state.commands[key] == nil { try ensureWritable(id); _ = try await loadProjection(id) }
+        let ack = try await durableCommand(key: key, intent: body, sessionID: id, type: "forkAssistant", payload: .object(target.map { ["target": $0.wire] } ?? [:]))
+        guard ack.result?["type"].string == "forkAssistant", let child = ack.result?["sessionId"].string, child != id, RelayWire.validID(child) else { throw RelayFailure("fork_uncertain", "The host acknowledged the command without confirming a forked task ID.", outcomeUncertain: true) }
+        _ = try await taskList(includeArchived: true)
+        if metadata[child] == nil {
+            snapshots[child] = try await client.registerForkedTask(ack, parentSessionID: id, explicitUserAction: true)
+            _ = try await taskList(includeArchived: true)
+        }
+        guard metadata[child] != nil else { throw RelayFailure("fork_uncertain", "The fork exists, but the host has not confirmed its task-list entry. Retry the original fork request.", outcomeUncertain: true) }
+        snapshots[child] = try await client.readSession(child)
+        let session = sessionJSON(child)
+        try emit(type: "session.created", sessionID: child, data: ["session": session])
+        return .object(["session": session, "parentSessionId": .string(id), "forkedSessionId": .string(child)])
     }
     private func respond(_ interactionID: String, _ body: RelayJSON) async throws -> RelayJSON {
         if let (key, saved) = journal.state.commands.first(where: { $0.value.envelope.type == "resolveInteraction" && $0.value.envelope.payload["interactionId"].string == interactionID }) {

@@ -13,6 +13,7 @@ import { workspaceChanges } from './git.mjs';
 import { listWorkspaceFiles, readWorkspaceFile, searchWorkspaceFiles } from './files.mjs';
 import { AttachmentStore } from './attachments.mjs';
 import { HostActivity, activityFromProjection, emptyHostActivity } from './host-activity.mjs';
+import { forkSession, forkRows, withForkTargets } from './fork.mjs';
 
 export class BridgeService extends EventEmitter {
   constructor({ runtimeDir, zcodeRoot, cliPath, acceptanceWorkspace, protocol, history, ownedHistory }) {
@@ -24,6 +25,7 @@ export class BridgeService extends EventEmitter {
     this.registryPath = join(runtimeDir, 'sessions.json');
     this.registry = readJSON(this.registryPath, { sessions: {}, inputs: {}, drafts: {} });
     this.registry.sessions = Object.assign(Object.create(null), this.registry.sessions); this.registry.inputs = Object.assign(Object.create(null), this.registry.inputs); this.registry.drafts = Object.assign(Object.create(null), this.registry.drafts);
+    this.registry.forks = Object.assign(Object.create(null), this.registry.forks);
     for (const record of Object.values(this.registry.sessions)) if (['running', 'waiting'].includes(record.status)) { record.status = 'error'; record.recoveryReason = 'The bridge restarted before the previous turn was confirmed complete.'; }
     for (const draft of Object.values(this.registry.drafts)) if (draft.status === 'pending') draft.status = 'uncertain';
     this.snapshots = new Map(); this.initialized = new Set(); this.initializing = new Map(); this.refreshing = new Map(); this.refreshTimers = new Map(); this.mutations = new Map();
@@ -67,7 +69,7 @@ export class BridgeService extends EventEmitter {
       createdAt: record.createdAt, updatedAt: record.updatedAt, source: 'bridge', mode: record.mode, recoveryReason: record.recoveryReason,
       model: record.selection.modelId, providerId: record.selection.providerId, thoughtLevel: record.selection.thoughtLevel, pinned: record.pinned ?? false, archived: record.archived ?? false,
       unread: typeof record.unreadAt === 'number', unreadAt: record.unreadAt ?? null, unreadScope: 'bridge',
-      capabilities: { read: true, send: active && !record.archived, stop: active && ['running', 'waiting'].includes(record.status), approve: active, changes: true, settings: active && !record.archived, attachments: active && !record.archived, rename: true, archive: true, pin: true, markUnread: true } };
+      capabilities: { read: true, send: active && !record.archived, stop: active && ['running', 'waiting'].includes(record.status), approve: active, changes: true, settings: active && !record.archived, attachments: active && !record.archived, rename: true, archive: true, pin: true, markUnread: true, fork: active && !record.archived && forkRows(this.hostActivity.projections.get(record.id)).length > 0 } };
   }
   sessions({ project, limit = 100, includeArchived = false } = {}) {
     const desktop = this.history.sessions(1000).map(({ workspacePath, ...rest }) => rest);
@@ -124,8 +126,10 @@ export class BridgeService extends EventEmitter {
     const record = this.registry.sessions[id];
     if (!record && !this.getDesktop(id)) throw new BridgeError(404, 'not_found', 'Task not found.');
     const reader = record ? this.ownedHistory : this.history;
-    return reader.transcript(id, options, record ? this.snapshots.get(id)?.messages ?? [] : []);
+    const result = reader.transcript(id, options, record ? this.snapshots.get(id)?.messages ?? [] : []);
+    return record ? { ...result, messages: withForkTargets(result.messages, this.hostActivity.projections.get(id)) } : result;
   }
+  fork(id, body) { return forkSession(this, id, body); }
   async goalAction(id, action) {
     const record = this.requireOwned(id);
     if (!['pause', 'resume'].includes(action)) throw new BridgeError(422, 'goal_remove_unsupported', 'The verified desktop protocol has no goal removal command.');
@@ -222,14 +226,30 @@ export class BridgeService extends EventEmitter {
       if (unreadApplied === false && Object.keys(body).every(key => ['unread', 'expectedUnreadAt'].includes(key))) return { session: this.ownedDTO(record), metadataScope: 'bridge', unreadApplied: false };
       if (body.archived && ['running', 'waiting'].includes(record.status)) throw new BridgeError(409, 'session_busy', 'Stop the task before archiving it.');
       if (body.title !== undefined) {
-        await this.ensureInitialized(id); await this.command(id, 'renameSession', { title: body.title.trim() });
+        // Official CLI drafts are not stored until real input. Its immediate flag alone
+        // does not persist them and breaks v4 admission; keep draft metadata separate.
+        if (this.ownedHistory.hasSession?.(id) === false) record.pendingRuntimeTitle = body.title.trim();
+        else {
+          await this.ensureInitialized(id); await this.command(id, 'renameSession', { title: body.title.trim() });
+          record.pendingRuntimeTitle = undefined; record.pendingRuntimeTitleError = undefined;
+        }
         record.title = body.title.trim(); record.customTitle = true;
       }
       for (const key of ['pinned', 'archived']) if (body[key] !== undefined) record[key] = body[key];
       if (unreadApplied) record.unreadAt = body.unread ? Math.max(Date.now(), (record.unreadAt ?? 0) + 1) : undefined;
       record.updatedAt = iso(); this.persist(); const session = this.ownedDTO(record);
-      this.events.publish('session.updated', { session }, id); return { session, metadataScope: 'bridge', ...(unreadApplied !== undefined ? { unreadApplied } : {}) };
+      this.events.publish('session.updated', { session }, id); return { session, metadataScope: 'bridge', ...(body.title !== undefined ? { runtimeTitleStatus: record.pendingRuntimeTitle ? 'pending-persistence' : 'applied' } : {}), ...(unreadApplied !== undefined ? { unreadApplied } : {}) };
     });
+  }
+  async syncPendingTitle(id) {
+    const record = this.registry.sessions[id], title = record?.pendingRuntimeTitle;
+    if (!title || this.ownedHistory.hasSession?.(id) === false) return;
+    try {
+      await this.command(id, 'renameSession', { title });
+      const readback = await this.protocol.request('session/read', { sessionId: id, messageLimit: 1 });
+      if (readback.session?.title !== title) throw new BridgeError(504, 'metadata_not_confirmed', 'The runtime title is not yet confirmed.', true);
+      if (record.pendingRuntimeTitle === title) { record.pendingRuntimeTitle = undefined; record.pendingRuntimeTitleError = undefined; this.persist(); }
+    } catch (error) { record.pendingRuntimeTitleError = error.code || 'metadata_sync_failed'; this.persist(); }
   }
   settings(id) {
     const record = this.requireOwned(id), model = modelCatalog(this.zcodeRoot).find(model => model.providerId === record.selection.providerId && model.modelId === record.selection.modelId);
@@ -369,8 +389,9 @@ export class BridgeService extends EventEmitter {
     if (!this.initialized.has(id)) return;
     if (this.refreshing.has(id)) return this.refreshing.get(id);
     const operation = (async () => {
+      if (this.registry.sessions[id]?.pendingRuntimeTitle) await this.syncPendingTitle(id);
       const snapshot = await this.protocol.request('session/read', { sessionId: id, messageLimit: 500 });
-      const before = normalizeMessages(this.snapshots.get(id)?.messages ?? []), after = normalizeMessages(snapshot.messages ?? []);
+      const before = normalizeMessages(this.snapshots.get(id)?.messages ?? []), after = withForkTargets(normalizeMessages(snapshot.messages ?? []), this.hostActivity.projections.get(id));
       this.snapshots.set(id, snapshot);
       const map = new Map(before.map(m => [m.id, JSON.stringify(m)]));
       for (const message of after) if (map.get(message.id) !== JSON.stringify(message)) this.events.publish('message.updated', { message }, id);

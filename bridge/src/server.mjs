@@ -84,7 +84,7 @@ export function createBridgeServer({ service, token }) {
         if (Object.keys(body).length) throw new BridgeError(422, 'invalid_request', 'Goal pause/resume accepts an empty body.');
         return json(response, 200, await service.goalAction(decodeURIComponent(goal[1]), goal[2]));
       }
-      const task = path.match(/^\/v1\/sessions\/([^/]+)(?:\/(messages|stop|changes|settings|attachments))?$/);
+      const task = path.match(/^\/v1\/sessions\/([^/]+)(?:\/(messages|stop|fork|changes|settings|attachments))?$/);
       if (task) {
         const id = decodeURIComponent(task[1]), action = task[2];
         if (!action && request.method === 'GET') return json(response, 200, await service.detail(id));
@@ -94,6 +94,7 @@ export function createBridgeServer({ service, token }) {
         if (action === 'attachments' && request.method === 'POST') return json(response, 201, service.upload(id, await readBody(request, 12 * 1024 * 1024)));
         if (action === 'changes' && request.method === 'GET') return json(response, 200, await service.changes(id));
         if (action === 'stop' && request.method === 'POST') return json(response, 200, await service.stop(id));
+        if (action === 'fork' && request.method === 'POST') return json(response, 201, await service.fork(id, await readBody(request)));
         if (action === 'messages' && request.method === 'GET') {
           if (!url.searchParams.has('beforeRowId') || !url.searchParams.has('logEpoch')) throw new BridgeError(422, 'invalid_request', 'Read the task detail first, then provide beforeRowId and logEpoch.');
           return json(response, 200, service.transcript(id, { beforeRowId: Number(url.searchParams.get('beforeRowId')), logEpoch: url.searchParams.get('logEpoch'), limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 200 }));

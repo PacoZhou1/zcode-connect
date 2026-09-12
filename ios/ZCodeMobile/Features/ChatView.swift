@@ -23,7 +23,9 @@ struct ChatView: View {
                     if store.isReferenceMode && !store.referenceReview {
                         InlineNotice(text: "界面体验 · 此处为参考会话")
                     }
-                    if let session, !session.canControl {
+                    if let session, session.isArchived {
+                        InlineNotice(symbol: "archivebox", text: "此任务已归档。可在右上角菜单取消归档后继续。")
+                    } else if let session, !session.canControl {
                         InlineNotice(symbol: "desktopcomputer",
                                      text: "此任务由电脑上的 ZCode 管理。你可以查看记录，或新建一个手机可控制的任务。")
                     }
@@ -70,7 +72,7 @@ struct ChatView: View {
             .onScrollGeometryChange(for: CGSize.self) { geometry in
                 CGSize(width: geometry.containerSize.height, height: geometry.contentInsets.bottom)
             } action: { _, _ in
-                if !showJump { position.scrollTo(edge: .bottom) }
+                if !showJump && !userScrolling { position.scrollTo(edge: .bottom) }
             }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 80
@@ -78,6 +80,9 @@ struct ChatView: View {
                 if userScrolling || atBottom { showJump = !atBottom }
             }
             .onScrollPhaseChange { _, phase in
+                #if DEBUG
+                if MotionPerformanceProbe.shared.isRunning { MotionPerformanceProbe.shared.setStage("chat-\(phase)") }
+                #endif
                 userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
             }
             .simultaneousGesture(TapGesture().onEnded { dismissOverlaysSignal += 1 })
@@ -93,13 +98,13 @@ struct ChatView: View {
                 }
             }
             .onChange(of: store.messages(sessionID).last?.id) { _, _ in
-                if !showJump { position.scrollTo(edge: .bottom) }
+                if !showJump && !userScrolling { position.scrollTo(edge: .bottom) }
             }
             .onChange(of: store.messages(sessionID).last?.text.count) { _, _ in
-                if !showJump { position.scrollTo(edge: .bottom) }
+                if !showJump && !userScrolling { position.scrollTo(edge: .bottom) }
             }
             .onChange(of: store.pendingInteractions[sessionID]?.count) { _, _ in
-                if !showJump { position.scrollTo(edge: .bottom) }
+                if !showJump && !userScrolling { position.scrollTo(edge: .bottom) }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 ConversationControls(sessionID: sessionID, dismissOverlaysSignal: dismissOverlaysSignal)
@@ -163,8 +168,13 @@ struct ChatView: View {
                     renameText = session?.title ?? ""
                     renamePresented = true
                 }
+                if store.isReferenceMode || session?.canFork == true {
+                    Button(store.isForking(sessionID) ? "正在创建分支…" : "创建分支", systemImage: "arrow.triangle.branch") { store.forkSession(sessionID) }
+                        .disabled(store.isForking(sessionID) || session?.isArchived == true)
+                        .accessibilityIdentifier("chat.fork")
+                }
                 Button("复制对话串 ID", systemImage: "square.on.square") { store.copy(sessionID) }
-                Button("归档", systemImage: "archivebox", role: .destructive) { store.archive(sessionID) }
+                Button(session?.isArchived == true ? "取消归档" : "归档", systemImage: "archivebox", role: session?.isArchived == true ? nil : .destructive) { store.archive(sessionID, archived: session?.isArchived != true) }
             }
             Section {
                 Button("更改", systemImage: "point.3.connected.trianglepath.dotted") { store.sheet = .files(sessionID, true) }

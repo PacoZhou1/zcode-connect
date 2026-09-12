@@ -56,6 +56,19 @@ actor MockRelaySocket: RelaySocketTransport {
     var unreadAt: [String: Double] = [:]
     var unreadClock: Double = 1_700_000_000_123
     var unreadCalls: [RelayJSON] = []
+    var archivedSessions: Set<String> = []
+    var queryUnknown = false
+    var nextRejectedCommand: String?
+    func rejectNextCommand(reason: String) { nextRejectedCommand = reason }
+    func reportUnknownCommands(_ value: Bool) { queryUnknown = value }
+    func useForkRows() throws {
+        var value = try baseProjection().requiringObject()
+        value["control"] = .object(["canStop": .bool(false), "phase": .string("completedSuccess")])
+        value["pendingInteractions"] = .array([]); value["goal"] = .null
+        value["availability"] = .object(["fork": .object(["allowed": .bool(true)])])
+        value["rows"] = .object(["window": .array([.object(["rowId": .int(9), "turnId": .string("turn-one"), "entityId": .string("stable-boundary"), "assistantResponseId": .string("message-one"), "kind": .string("assistantText"), "state": .string("complete"), "text": .string("Host finished answer"), "actions": .object(["canFork": .bool(true)])])]), "totalCount": .int(1), "firstRowId": .int(9)])
+        alternateProjection = .object(value)
+    }
     func setHostUnread(_ stamp: Double, sessionID: String) { unreadAt[sessionID] = stamp }
     func snapshot(_ sessionID: String) -> RelayJSON {
         let model: RelayJSON = .object(["providerId": .string("host-provider"), "modelId": .string("host-model")])
@@ -110,9 +123,11 @@ actor MockRelaySocket: RelaySocketTransport {
             let id = request.requestID!, method = try request.header[3].jsonValue().string!, params = try request.body.jsonValue().array!.first!
             try require(params["workspacePath"].string == "/workspace", "Scope missing"); calls.append(method)
             switch method {
-            case "listTasks", "listPinnedTasks": try success(id, .array(registeredSessions.sorted().map { .object(["taskId": .string($0), "title": .string(titles[$0] ?? "Original desktop task"), "workspacePath": .string("/workspace"), "provider": .string("glm"), "unreadAt": unreadAt[$0].map(RelayJSON.number) ?? .null]) }))
-            case "listArchivedTasks": try success(id, .array([]))
-            case "readSession":
+            case "listTasks", "listPinnedTasks", "listArchivedTasks":
+                let tasks = registeredSessions.filter { archivedSessions.contains($0) == (method == "listArchivedTasks") }
+                try success(id, .array(tasks.sorted().map { .object(["taskId": .string($0), "title": .string(titles[$0] ?? "Original desktop task"), "workspacePath": .string("/workspace"), "provider": .string("glm"), "unreadAt": unreadAt[$0].map(RelayJSON.number) ?? .null]) }))
+            case "readSession", "resumeSession":
+                if method == "resumeSession" { registeredSessions.insert(params["sessionId"].string!) }
                 try success(id, snapshot(params["sessionId"].string!))
             case "readWorkspaceState": try success(id, .object(["settings": snapshot("session-test")["settings"]]))
             case "conversationRowsRangeV4":
@@ -141,14 +156,16 @@ actor MockRelaySocket: RelaySocketTransport {
                 if prior == nil { sentCommandCount += 1 }
                 if let original = commandEnvelopes[commandID] { try require(original == envelope, "Retry changed the original command envelope") }
                 commandEnvelopes[commandID] = envelope
-                let result: RelayJSON? = envelope["type"].string == "createSession" ? .object(["type": .string("createSession"), "sessionId": .string("session-created")]) : nil
-                let ack = RelayCommandAck(commandId: commandID, status: prior == nil ? "accepted" : "duplicate", revisionAtDecision: 2, reasonCode: nil, message: nil, result: result)
+                let kind = envelope["type"].string
+                let result: RelayJSON? = kind == "createSession" ? .object(["type": .string("createSession"), "sessionId": .string("session-created")]) : kind == "forkAssistant" ? .object(["type": .string("forkAssistant"), "sessionId": .string("fork-child-" + commandID)]) : nil
+                let rejection = nextRejectedCommand; nextRejectedCommand = nil
+                let ack = prior ?? RelayCommandAck(commandId: commandID, status: rejection == nil ? "accepted" : "stale", revisionAtDecision: 2, reasonCode: rejection, message: rejection == nil ? nil : "Host target changed", result: rejection == nil ? result : nil)
                 commands[commandID] = ack
                 if dropNextCommandAck { dropNextCommandAck = false; return }
                 try success(id, RelayJSON(data: JSONEncoder().encode(ack)))
             case "queryConversationCommandsV4":
                 let results = try params["commands"].array!.map { key -> RelayJSON in
-                    let result = try commands[key["commandId"].string!].map { try RelayJSON(data: JSONEncoder().encode($0)) } ?? .string("unknown")
+                    let result = queryUnknown ? .string("unknown") : try commands[key["commandId"].string!].map { try RelayJSON(data: JSONEncoder().encode($0)) } ?? .string("unknown")
                     return .object(["key": key, "result": result])
                 }
                 try success(id, .object(["results": .array(results)]))
@@ -166,7 +183,9 @@ actor MockRelaySocket: RelaySocketTransport {
             case "renameTask", "setTaskPinned", "archiveTask", "unarchiveTask":
                 let taskID = params["taskId"].string!
                 if let title = params["title"].string { titles[taskID] = title }
-                try success(id, .object(["taskId": .string(taskID), "title": .string(titles[taskID] ?? "Original desktop task"), "workspacePath": .string("/workspace"), "provider": .string("glm"), "pinned": params["pinned"], "archived": .bool(method == "archiveTask"), "unreadAt": unreadAt[taskID].map(RelayJSON.number) ?? .null]))
+                if method == "archiveTask" { archivedSessions.insert(taskID) }
+                if method == "unarchiveTask" { archivedSessions.remove(taskID) }
+                try success(id, .object(["taskId": .string(taskID), "title": .string(titles[taskID] ?? "Original desktop task"), "workspacePath": .string("/workspace"), "provider": .string("glm"), "pinned": params["pinned"], "unreadAt": unreadAt[taskID].map(RelayJSON.number) ?? .null]))
             case "setTaskUnread":
                 let taskID = params["taskId"].string!; unreadCalls.append(params)
                 if params["unread"].bool == true { unreadClock += 1; unreadAt[taskID] = unreadClock }
