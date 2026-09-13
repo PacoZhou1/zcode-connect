@@ -10,6 +10,12 @@ struct HomeView: View {
     @State private var confirmRelayReconnect = false
     @State private var computerToConfirm: ConnectionProfile?
 
+    private struct SessionRowIdentity: Hashable {
+        var scope: String
+        var sessionID: String
+        var actions: [SessionContextAction.AccessibilityIdentity]
+    }
+
     private struct SessionGroup: Identifiable {
         var id: String
         var sessions: [RemoteSession]
@@ -275,7 +281,8 @@ struct HomeView: View {
         }
         // Refresh the AX owner, whose custom actions can outlive their builder.
         // The outer ForEach still identifies and orders rows by session.id.
-        .id(actions.map(\.accessibilityIdentity))
+        .id(SessionRowIdentity(scope: connectionScope, sessionID: session.id,
+                               actions: actions.map(\.accessibilityIdentity)))
     }
 
     private func sessionActions(for session: RemoteSession) -> [SessionContextAction] {
