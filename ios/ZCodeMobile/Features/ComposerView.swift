@@ -15,6 +15,8 @@ struct ComposerView: View {
     @State private var photoSelections: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showAttachmentMenu = false
+    @State private var attachmentContentHeight: CGFloat = 360
+    @State private var pendingAttachmentAction: (() -> Void)?
     @State private var showFiles = false
     @State private var showCamera = false
     @State private var showPermissions = false
@@ -46,6 +48,13 @@ struct ComposerView: View {
     private var isRunning: Bool { sessionID.flatMap { store.session($0) }.map { [.running, .waiting].contains($0.status) } ?? false }
     private var permission: PermissionMode { store.permission(for: sessionID) }
     private var isPlanMode: Bool { store.isPlanMode(for: sessionID) }
+    private var showsReferenceDocuments: Bool {
+        #if DEBUG
+        // Visual QA only: exercise the real five-row shape without connecting a host.
+        if ProcessInfo.processInfo.arguments.contains("--attachment-five-row-review") { return false }
+        #endif
+        return store.isReferenceMode
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -116,7 +125,11 @@ struct ComposerView: View {
             attachments = store.draftAttachments[key] ?? []
             attachmentDraftIdentity = identity
         }
-        .onChange(of: draftIdentity) { _, _ in cancelInlineVoice() }
+        .onChange(of: draftIdentity) { _, _ in
+            cancelInlineVoice()
+            pendingAttachmentAction = nil
+            showAttachmentMenu = false
+        }
         .onChange(of: attachments) { _, values in
             guard attachmentDraftIdentity == draftIdentity, store.draftAttachments[draftKey] != values else { return }
             store.setDraftAttachments(values, for: draftKey)
@@ -130,7 +143,10 @@ struct ComposerView: View {
             showReasoning = false
             showAttachmentMenu = false
         }
-        .onDisappear { onReasoningVisibilityChange(false); cancelInlineVoice() }
+        .onDisappear {
+            onReasoningVisibilityChange(false); cancelInlineVoice()
+            pendingAttachmentAction = nil; showAttachmentMenu = false
+        }
         .onChange(of: scenePhase) { _, phase in if phase == .background { cancelInlineVoice() } }
         .onChange(of: speech.isRecording) { _, recording in
             if !recording, voicePhase == .recording { finishInlineVoice(sendAfter: false) }
@@ -210,7 +226,7 @@ struct ComposerView: View {
             }
             HStack(spacing: 10) {
                 if !expanded && !voiceActive { attachmentMenu }
-                inputField.frame(minHeight: expanded ? 28 : 34, alignment: .top)
+                inputField.frame(minHeight: expanded ? 28 : 34, alignment: expanded ? .top : .center)
                 if !expanded && !voiceActive {
                     microphoneButton
                     primaryButton
@@ -368,7 +384,9 @@ struct ComposerView: View {
         }
         .disabled(attachmentDraftIdentity != draftIdentity)
         .tint(.primary).accessibilityLabel("添加附件或模式").accessibilityIdentifier("composer.add").accessibilityHidden(voiceActive)
-        .nativeFloatingPanel(isPresented: $showAttachmentMenu, preferredWidth: 320) { attachmentPanel }
+        .nativeFloatingPanel(isPresented: $showAttachmentMenu, preferredWidth: 320,
+                             cornerRadius: 48, placement: .sourceLeading,
+                             onDismiss: performPendingAttachmentAction) { attachmentPanel }
     }
 
     private var attachmentPanel: some View {
@@ -385,7 +403,7 @@ struct ComposerView: View {
                         else { store.errorMessage = "此设备没有可用相机。你可以从照片中选择图片。" }
                     }
                     attachmentAction("照片", symbol: "photo.on.rectangle") { showPhotos = true }
-                    if store.isReferenceMode {
+                    if showsReferenceDocuments {
                         Text("插件").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                             .padding(.horizontal, 28).padding(.top, 18)
                         attachmentAction("Documents", symbol: "doc.text.fill", rowHeight: 44) { showFiles = true }
@@ -394,21 +412,21 @@ struct ComposerView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                             .padding(.horizontal, 28).padding(.top, 4).padding(.bottom, 8)
                     }
-                }.padding(.top, 10)
-            }.frame(height: 420.666667)
+                }.padding(.vertical, 10)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { attachmentContentHeight = $0 }
+            }.frame(height: min(attachmentContentHeight, 420.666667))
                 .accessibilityIdentifier("composer.attachmentsPanel")
     }
 
     private func attachmentAction(_ title: String, symbol: String, enabled: Bool = true, rowHeight: CGFloat = 68,
                                   action: @escaping () -> Void) -> some View {
         Button {
-            showAttachmentMenu = false
             let identity = draftIdentity
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(200))
+            pendingAttachmentAction = {
                 guard identity == draftIdentity else { return }
                 action()
             }
+            showAttachmentMenu = false
         } label: {
             HStack(spacing: 16) {
                 Group {
@@ -423,6 +441,12 @@ struct ComposerView: View {
                 Spacer(minLength: 0)
             }.padding(.horizontal, 28).frame(minHeight: rowHeight).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(!enabled)
+    }
+
+    private func performPendingAttachmentAction() {
+        let action = pendingAttachmentAction
+        pendingAttachmentAction = nil
+        action?()
     }
 
     private var permissionButton: some View {

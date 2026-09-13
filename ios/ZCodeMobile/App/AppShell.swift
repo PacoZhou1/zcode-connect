@@ -20,6 +20,7 @@ struct AppShell: View {
                     }
                 }
         }
+        .modifier(FloatingPanelOverlay())
         .sheet(item: $store.sheet) { destination in
             switch destination {
             case .connections: ConnectionsView()
