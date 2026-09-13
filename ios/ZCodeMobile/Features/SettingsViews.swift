@@ -17,6 +17,16 @@ struct SettingsView: View {
                 Picker("颜色", selection: $store.appearance) {
                     ForEach(["跟随系统", "浅色", "深色"], id: \.self) { Text($0) }
                 }
+                NavigationLink {
+                    ThemeColorSettingsView()
+                } label: {
+                    HStack {
+                        Text("主题色")
+                        Spacer()
+                        Circle().fill(ZTheme.accent).frame(width: 20, height: 20)
+                        Text(ThemePreferences.shared.selection.label).foregroundStyle(.secondary)
+                    }
+                }.accessibilityIdentifier("settings.theme")
                 Toggle("触感反馈", isOn: $store.hapticsEnabled)
                 Toggle("显示时间", isOn: $store.showTimestamps)
             }
@@ -267,5 +277,43 @@ struct PermissionsView: View {
             }
             busy = false
         }
+    }
+}
+
+struct ThemeColorSettingsView: View {
+    @Environment(AppStore.self) private var store
+    var body: some View {
+        List {
+            Section {
+                ForEach(AccentTheme.allCases) { theme in
+                    Button {
+                        ThemePreferences.shared.selection = theme
+                        store.haptic()
+                    } label: {
+                        HStack(spacing: 14) {
+                            Circle().fill(theme.color).frame(width: 26, height: 26)
+                            Text(theme.label).foregroundStyle(.primary)
+                            Spacer()
+                            if ThemePreferences.shared.selection == theme {
+                                Image(systemName: "checkmark").foregroundStyle(theme.color)
+                            }
+                        }.frame(minHeight: 32).contentShape(Rectangle())
+                    }
+                    .accessibilityIdentifier("theme." + theme.rawValue)
+                    .accessibilityAddTraits(ThemePreferences.shared.selection == theme ? .isSelected : [])
+                }
+            } footer: {
+                Text("应用于按钮、图标与对话气泡，所有电脑共用此设置。")
+            }
+            Section("预览") {
+                HStack {
+                    Spacer()
+                    Text("从这里继续你的工作。")
+                        .foregroundStyle(ZTheme.userText).padding(14)
+                        .background(ZTheme.userBubble, in: RoundedRectangle(cornerRadius: 20))
+                }.listRowBackground(Color.clear)
+            }
+        }
+        .navigationTitle("主题色").navigationBarTitleDisplayMode(.inline)
     }
 }

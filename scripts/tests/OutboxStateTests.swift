@@ -446,6 +446,44 @@ struct TestResult: Codable { let name: String; let passed: Bool; let detail: Str
             let ids = TestTransport.requests.filter { $0.path.hasSuffix("/messages") }.map { $0.body["inputId"] }
             try check(value == "S" && ids == [.string(original.id), .string(original.id)], "waiting guard blocked exact retry or changed identity")
         }
+        await run("optimistic user bubble precedes ACK and does not duplicate host echo") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            let gate = Gate()
+            TestTransport.handler = { r in
+                if r.path.hasSuffix("/messages") { await gate.hold() }
+                return nil
+            }
+            var prepared = false
+            let task = Task { await f.store.submitDraft("instant bubble", attachments: [], draftKey: "S", sessionID: "S", onPrepared: { _ in prepared = true }) }
+            try await gate.waitUntilEntered()
+            try check(prepared && f.store.messages("S").filter { $0.text == "instant bubble" }.count == 1, "bubble waited for ACK")
+            let optimistic = f.store.outgoingMessages["S"]!
+            f.store.transcripts["S", default: []].append(ChatMessage(id: "host-echo", role: .user, text: optimistic.text))
+            try check(f.store.messages("S").filter { $0.text == "instant bubble" }.count == 1, "echo duplicated optimistic bubble")
+            gate.release(); _ = await task.value
+            try check(f.store.outgoingMessages.isEmpty, "optimistic state survived ACK")
+        }
+        await run("failed optimistic send keeps durable retry and original draft") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            f.store.setDraft("keep me", for: "S")
+            TestTransport.handler = { r in
+                if r.path.hasSuffix("/messages") { throw BridgeFailure(message: "synthetic timeout", code: "timeout") }
+                return nil
+            }
+            let result = await f.store.submitDraft("keep me", attachments: [], draftKey: "S", sessionID: "S")
+            try check(result == nil && f.store.errorMessage != nil, "timeout silently succeeded")
+            try check(f.store.outgoingMessages.isEmpty && f.store.drafts["S"] == "keep me" && f.store.pendingSubmissions["S"]?.text == "keep me", "failure lost draft/retry or retained optimistic state")
+        }
+        await run("index lifecycle event updates row without opening its transcript") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            let initialReads = TestTransport.requests.filter { $0.path == "v1/sessions/S" }.count
+            try await TestTransport.emit(["session": TestTransport.session(status: "running")], type: "session.index.updated")
+            try check(f.store.session("S")?.status == .running, "running index push was dropped")
+            try await Task.sleep(for: .milliseconds(250))
+            try check(TestTransport.requests.filter { $0.path == "v1/sessions/S" }.count == initialReads, "index push opened a transcript")
+            try await TestTransport.emit(["session": TestTransport.session(status: "completed")], type: "session.index.updated")
+            try check(f.store.session("S")?.status == .completed, "completion index push was dropped")
+        }
         let report: [String: JSONValue] = ["cases": .number(Double(results.count)), "passed": .number(Double(results.filter(\.passed).count)), "failed": .number(Double(results.filter { !$0.passed }.count)), "assertions": .number(Double(assertions))]
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(JSONValue.object(report))) as! [String: Any]
         object["results"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(results))

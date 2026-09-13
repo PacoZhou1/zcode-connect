@@ -24,6 +24,9 @@ final class AppStore {
     var toast: String?
     var isLoading = false
     var sendingSessions: Set<String> = []
+    // Presentation-only messages; the durable outbox remains the authority for retries.
+    var outgoingMessages: [String: ChatMessage] = [:]
+    var outgoingBaselineIDs: [String: Set<String>] = [:]
     var drafts: [String: String] = [:]
     var localFeedback: [String: Int] = [:]
     var localUnreadIDs: Set<String> = []
@@ -142,6 +145,13 @@ final class AppStore {
                     catch { errorMessage = "无法读取审查体验数据：\(error.localizedDescription)" }
                 case "files": path = [.session(ReferenceData.conversationID)]; sheet = .files(ReferenceData.conversationID, false)
                 case "advanced": path = [.session(ReferenceData.conversationID)]; sheet = .advanced
+                case "send-review":
+                    path = [.session(ReferenceData.conversationID)]
+                    setDraft("主题和发送体验验收", for: ReferenceData.conversationID)
+                case "status-review":
+                    if !sessions.isEmpty { sessions[0].status = .running }
+                    if sessions.count > 1 { sessions[1].status = .waiting }
+                    if sessions.count > 2 { sessions[2].status = .completed }
                 case "offline": connection = .disconnected; sessions = []
                 default: break
                 }
@@ -699,6 +709,8 @@ final class AppStore {
         connection = .disconnected
         sessionListTruncated = false
         sendingSessions = []
+        outgoingMessages = [:]
+        outgoingBaselineIDs = [:]
         stoppingSessions = []
         changingGoals = []
         loadingAgentDirectories = []; agentDirectoryErrors = [:]
@@ -952,11 +964,12 @@ final class AppStore {
 
     /// A failed attempt remains immutable until it is acknowledged; changed drafts stay separate.
     func submitDraft(_ text: String, attachments: [Attachment], draftKey: String, sessionID: String?,
-                     retryPending: Bool = false) async -> String? {
+                     retryPending: Bool = false, onPrepared: ((String) -> Void)? = nil) async -> String? {
         if isReferenceMode {
             let targetID: String?
             if let sessionID { targetID = sessionID } else { targetID = await createSession(text: text) }
             guard let id = targetID else { return nil }
+            onPrepared?(id)
             return await send(text, to: id, attachments: attachments) ? id : nil
         }
         let epoch = connectionEpoch
@@ -1001,6 +1014,7 @@ final class AppStore {
         }
         guard let id = entry.sessionID else { return nil }
         for (attachmentID, remoteID) in entry.uploadedIDs { uploadedAttachments["\(id):\(attachmentID)"] = remoteID }
+        onPrepared?(id)
         let accepted = await send(entry.text, to: id, inputID: entry.id, attachments: entry.attachments)
         guard epoch == connectionEpoch else { return nil }
         for attachment in entry.attachments {
@@ -1060,6 +1074,15 @@ final class AppStore {
             return true
         }
         guard let client else { errorMessage = "连接已断开，草稿已保留。"; return false }
+        outgoingBaselineIDs[id] = Set((transcripts[id] ?? []).map(\.id))
+        outgoingMessages[id] = ChatMessage(id: "outgoing-" + inputID, role: .user, text: trimmed,
+            attachments: attachments.map { MessageAttachment(id: $0.id, fileName: $0.name, mimeType: $0.mimeType) })
+        defer {
+            if epoch == connectionEpoch {
+                outgoingMessages[id] = nil
+                outgoingBaselineIDs[id] = nil
+            }
+        }
         struct Accepted: Decodable, Sendable { var accepted: Bool }
         do {
             struct Upload: Decodable, Sendable {
@@ -1091,6 +1114,7 @@ final class AppStore {
                 setStatus(id, .running)
                 await loadTranscript(id)
             }
+            if !result.accepted { errorMessage = "电脑没有接受这条消息，请重试。" }
             return result.accepted
         } catch {
             guard epoch == connectionEpoch else { return false }
@@ -1334,7 +1358,16 @@ final class AppStore {
     }
 
     func session(_ id: String) -> RemoteSession? { sessions.first { $0.id == id } ?? childSessions[persistenceScope + "|" + id] }
-    func messages(_ id: String) -> [ChatMessage] { transcripts[id] ?? [] }
+    func messages(_ id: String) -> [ChatMessage] {
+        let saved = transcripts[id] ?? []
+        guard let outgoing = outgoingMessages[id] else { return saved }
+        let baseline = outgoingBaselineIDs[id] ?? []
+        let echoed = saved.contains {
+            !baseline.contains($0.id) && $0.role == .user && $0.text == outgoing.text
+                && $0.attachments.map(\.fileName) == outgoing.attachments.map(\.fileName)
+        }
+        return echoed ? saved : saved + [outgoing]
+    }
     func agentCount(_ id: String) -> Int {
         if isReferenceMode { return (agentTasks[id]?.isEmpty == false) ? 30 : 0 }
         guard let host = hostAgents[id], host.isVisible else { return 0 }
@@ -1846,6 +1879,8 @@ final class AppStore {
             sessionRevisions[remote.id] = eventRevision
             upsert(decorate(remote.local))
         }
+        // Index pushes update rows without opening/subscribing every desktop task.
+        if event.type == "session.index.updated" { return }
         if let id = event.sessionId, let message = event.data?.message {
             messageRevisions["\(id)|\(message.id)"] = eventRevision
             if let index = transcripts[id]?.firstIndex(where: { $0.id == message.id }) {

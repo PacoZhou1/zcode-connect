@@ -12,6 +12,9 @@ actor RelayRemoteTransport: RemoteTransport {
     private let version: String?
     private let journal: RelayAdapterJournal
     private var metadata: [String: RelayTaskMetadata] = [:]
+    // Lifecycle observations advance only on a status transition, never on token tails.
+    private var indexStatuses: [String: String] = [:]
+    private var liveStatuses: [String: String] = [:]
     private var snapshots: [String: RelaySessionSnapshot] = [:]
     private struct SubagentHistory {
         let parentID: String
@@ -55,7 +58,10 @@ actor RelayRemoteTransport: RemoteTransport {
         let scopedDevice = serviceID == RelayPairing.officialServiceID ? deviceID : "service:" + relayDigest(Data(serviceID.utf8)) + "\n" + deviceID
         projectID = "relay-" + String(relayDigest(Data((scopedDevice + "\n" + bridge.workspaceKey).utf8)).prefix(24))
         journal = try RelayAdapterJournal(scope: scopedDevice + "\n" + bridge.workspaceKey + "\n" + client.clientID, directory: journalDirectory)
-        for task in bootstrap.tasks ?? [] where Self.belongs(task, to: bridge) { metadata[task.id] = task }
+        for task in bootstrap.tasks ?? [] where Self.belongs(task, to: bridge) {
+            metadata[task.id] = task
+            if let status = task.displayStatus { indexStatuses[task.id] = status; liveStatuses[task.id] = status }
+        }
     }
     deinit { pump?.cancel(); for sink in sinks.values { sink.finish() } }
 
@@ -267,7 +273,12 @@ actor RelayRemoteTransport: RemoteTransport {
             }
         }
         var unique: [String: RelayTaskMetadata] = [:]
-        for task in tasks where Self.belongs(task, to: bridge) && subagentParents[task.id] == nil { unique[task.id] = task; metadata[task.id] = task }
+        for task in tasks where Self.belongs(task, to: bridge) && subagentParents[task.id] == nil {
+            var fields = try RelayJSON(data: JSONEncoder().encode(task)).requiringObject()
+            if let status = indexStatuses[task.id] { fields["displayStatus"] = .string(status) }
+            let merged = try RelayJSON.object(fields).decode(RelayTaskMetadata.self)
+            unique[task.id] = merged; metadata[task.id] = merged
+        }
         return unique.values.sorted { ($0.pinned == true) != ($1.pinned == true) ? $0.pinned == true : ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
     }
     private func ensureTask(_ id: String) async throws {
@@ -292,7 +303,15 @@ actor RelayRemoteTransport: RemoteTransport {
     }
     private func sessionJSON(_ id: String) -> RelayJSON {
         if let child = subagentHistories[id] { return RelayBridgeMapping.subagentSession(child.snapshot, parentID: child.parentID, bridge: bridge, projectID: projectID) }
-        return RelayBridgeMapping.session(id: id, meta: metadata[id], snapshot: snapshots[id], projection: projections[id], bridge: bridge, projectID: projectID)
+        var value = RelayBridgeMapping.session(id: id, meta: metadata[id], snapshot: snapshots[id], projection: projections[id], bridge: bridge, projectID: projectID).object!
+        if let status = liveStatuses[id] {
+            value["status"] = .string(status)
+            if var capabilities = value["capabilities"]?.object {
+                capabilities["stop"] = .bool(capabilities["stop"]?.bool == true && ["running", "waiting"].contains(status))
+                value["capabilities"] = .object(capabilities)
+            }
+        }
+        return .object(value)
     }
     private func loadProjection(_ id: String) async throws -> RelayConversationProjection {
         guard subagentParents[id] == nil else { throw RelayFailure("session_read_only", "Subagent history must not create or resume a conversation subscription.") }
@@ -723,10 +742,26 @@ actor RelayRemoteTransport: RemoteTransport {
         guard !closed else { return }
         do {
             switch event {
+            case .workspaces(let bootstrap):
+                guard await client.bridge == bridge else { return }
+                for task in bootstrap.tasks ?? [] where Self.belongs(task, to: bridge) && subagentParents[task.id] == nil {
+                    let previousRow = sessionJSON(task.id)
+                    metadata[task.id] = task
+                    if let status = task.displayStatus, indexStatuses[task.id] != status {
+                        indexStatuses[task.id] = status
+                        liveStatuses[task.id] = status
+                    }
+                    let row = sessionJSON(task.id)
+                    if previousRow != row { try emit(type: "session.index.updated", sessionID: task.id, data: ["session": row]) }
+                }
             case .projection(let projection):
                 guard await client.bridge == bridge else { return }
                 if subagentParents[projection.sessionID] != nil { return }
                 let previous = projections[projection.sessionID]; projections[projection.sessionID] = projection
+                let status = RelayBridgeMapping.status(projection, snapshot: nil, meta: nil)
+                if previous == nil || RelayBridgeMapping.status(previous, snapshot: nil, meta: nil) != status {
+                    liveStatuses[projection.sessionID] = status
+                }
                 let oldMessages = previous.map { RelayBridgeMapping.messages($0) } ?? [], newMessages = RelayBridgeMapping.messages(projection)
                 let oldIDs = Set(oldMessages.compactMap { $0["id"].string }), newIDs = Set(newMessages.compactMap { $0["id"].string })
                 if previous?.logEpoch != nil && (previous?.logEpoch != projection.logEpoch || !oldIDs.isSubset(of: newIDs)) { try emit(type: "resync.required", sessionID: projection.sessionID) }
@@ -744,7 +779,7 @@ actor RelayRemoteTransport: RemoteTransport {
                 let previousPending = previous?.pendingInteractions ?? [], pending = projection.pendingInteractions
                 for item in pending where !previousPending.contains(item) { try emit(type: "interaction.requested", sessionID: projection.sessionID, data: ["interaction": RelayBridgeMapping.interaction(item, sessionID: projection.sessionID)]) }
                 for item in previousPending where !pending.contains(where: { $0.id == item.id }) { try emit(type: "interaction.resolved", sessionID: projection.sessionID, data: ["interactionId": .string(item.id)]) }
-                if previous?.phase != projection.phase || previous?.title != projection.title || previous?.config != projection.config { try emit(type: "session.updated", sessionID: projection.sessionID, data: ["session": sessionJSON(projection.sessionID)]) }
+                if previous?.phase != projection.phase || previous?.pendingInteractions != projection.pendingInteractions || previous?.title != projection.title || previous?.config != projection.config { try emit(type: "session.updated", sessionID: projection.sessionID, data: ["session": sessionJSON(projection.sessionID)]) }
             case .resyncRequired(let id, _): try emit(type: "resync.required", sessionID: id)
             case .state(let state):
                 if state == .disconnected || state == .replaced {

@@ -218,6 +218,12 @@ struct NewSessionView: View {
     var body: some View {
         @Bindable var store = store
         VStack(alignment: .leading, spacing: 0) {
+            let key = "new:\(store.selectedProjectID ?? "none")"
+            if let id = store.pendingSubmissions[key]?.sessionID, let outgoing = store.outgoingMessages[id] {
+                ScrollView {
+                    MessageView(message: outgoing, sessionID: id).padding(16)
+                }.defaultScrollAnchor(.bottom)
+            }
             Spacer()
             VStack(alignment: .leading, spacing: 26.666667) {
                 Button { store.sheet = .connections } label: {

@@ -366,7 +366,6 @@ struct ComposerView: View {
             Group {
                 if sessionID.map({ store.stoppingSessions.contains($0) }) ?? false { ProgressView().tint(.white) }
                 else if isRunning { Image(systemName: "stop.fill").font(.system(size: 14)) }
-                else if submitting { ProgressView().tint(.white) }
                 else { Image(systemName: "arrow.up").font(.system(size: 22, weight: .semibold)) }
             }
             .foregroundStyle(.white).frame(width: 34, height: 34)
@@ -544,7 +543,14 @@ struct ComposerView: View {
         let submittedSession = sessionID
         Task {
             if let id = await store.submitDraft(originalText, attachments: originalAttachments,
-                                                draftKey: submittedKey, sessionID: submittedSession, retryPending: retryPending) {
+                                                draftKey: submittedKey, sessionID: submittedSession, retryPending: retryPending,
+                                                onPrepared: { id in
+                guard store.activeProfileID == submittedProfile, draftKey == submittedKey else { return }
+                if store.hapticsEnabled { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+                text = ""
+                attachments = []
+                focused = false
+            }) {
                 guard store.activeProfileID == submittedProfile, draftKey == submittedKey else {
                     if store.activeProfileID == submittedProfile {
                         if store.drafts[submittedKey] == originalText { store.setDraft("", for: submittedKey) }
@@ -560,10 +566,16 @@ struct ComposerView: View {
                 store.setDraftAttachments(attachments, for: submittedKey)
                 store.setDraft(text, for: submittedKey)
                 focused = false
-                if sessionID == nil {
+                if sessionID == nil && !store.path.contains(.session(id)) {
                     store.path.removeAll { $0 == .newSession }
                     store.path.append(.session(id))
                 }
+            } else if store.activeProfileID == submittedProfile, draftKey == submittedKey {
+                // A transport failure restores the original draft without replacing new typing.
+                if text.isEmpty { text = originalText }
+                if attachments.isEmpty { attachments = originalAttachments }
+                store.setDraft(text, for: submittedKey)
+                store.setDraftAttachments(attachments, for: submittedKey)
             }
             submitting = false
         }
