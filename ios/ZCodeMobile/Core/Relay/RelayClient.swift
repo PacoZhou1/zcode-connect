@@ -399,7 +399,7 @@ public actor RelayClient {
                                 "zcode-session/readSession", "zcode-agent/readSession", "zcode-agent/listSessionSubagents",
                                 "zcode-agent/helloConversationV4", "zcode-agent/conversationRowsRangeV4",
                                 "zcode-agent/queryConversationCommandsV4"].contains(channel + "/" + method)
-                let timer = timeoutTask(timeout ?? requestTimeout) { [weak self] in
+                let timer = timeoutTask(timeout ?? (readOnly ? requestTimeout * 2 : requestTimeout)) { [weak self] in
                     // Operation names only: never log task IDs, messages, credentials or RPC parameters.
                     Logger(subsystem: "dev.paco.zcode.mobile", category: "Relay").error("Desktop RPC timeout: \(channel, privacy: .public)/\(method, privacy: .public)")
                     let failure = readOnly

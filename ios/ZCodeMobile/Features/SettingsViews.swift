@@ -224,7 +224,7 @@ struct PermissionsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                Text(store.isReferenceMode ? "应如何批准 Codex 操作？" : "应如何批准 ZCode 操作？")
+                Text(store.isPlanMode(for: sessionID) ? "退出计划后的批准方式" : store.isReferenceMode ? "应如何批准 Codex 操作？" : "应如何批准 ZCode 操作？")
                 Button { showHelp = true } label: { Text("了解更多").underline() }
             }.font(.system(size: 15)).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 18) {
@@ -256,9 +256,11 @@ struct PermissionsView: View {
                 Text("请先连接电脑，并打开可控制的任务。").font(.footnote).foregroundStyle(.secondary)
             }
             if sessionID != nil && store.activeProfile?.isRelay == true && store.isPlanMode(for: sessionID) {
-                Text("选择批准方式将退出计划模式。").font(.footnote).foregroundStyle(.secondary)
+                Text("这里保存退出计划后的批准方式，不会关闭计划模式。ZCode 在计划期间仍限制为只读操作。").font(.footnote).foregroundStyle(.secondary)
             }
-            Text(sessionID != nil && store.activeProfile?.isRelay == true
+            Text(store.isPlanMode(for: sessionID) && store.activeProfile?.isRelay == true
+                 ? "此选择保存在当前连接中，退出计划时由 App 应用。电脑端自行结束计划仍遵循电脑原来的设置。"
+                 : sessionID != nil && store.activeProfile?.isRelay == true
                  ? "此设置由电脑执行，可能同时成为该项目的默认批准方式。当前待批准操作仍需选择“允许本次”或“拒绝”。"
                  : "批准模式决定之后的操作如何请求许可；当前操作仍需单独批准或拒绝。")
                 .font(.footnote).foregroundStyle(.secondary)

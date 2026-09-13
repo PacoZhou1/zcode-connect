@@ -252,7 +252,7 @@ enum PermissionMode: String, CaseIterable, Codable, Identifiable {
 struct SessionOptions: Codable, Hashable {
     var model = "GLM-5.3"
     var reasoning: ReasoningLevel = .high
-    var permission: PermissionMode = .ask
+    var permission: PermissionMode = .full
     var isPlanMode = false
     var speed = "标准"
 }

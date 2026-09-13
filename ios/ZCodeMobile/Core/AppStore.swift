@@ -52,6 +52,16 @@ final class AppStore {
     var selectedProjectID: String?
     var appearance = "跟随系统"
     var hapticsEnabled = true
+    private struct CachedTranscript: Codable {
+        var savedAt: Date
+        var messages: [ChatMessage]
+    }
+    var transcriptLoading: Set<String> = []
+    private var transcriptLoadingOwners: [String: UUID] = [:]
+    var transcriptLoadErrors: [String: String] = [:]
+    var cachedTranscriptIDs: Set<String> = []
+    private var transcriptLastLoaded: [String: Date] = [:]
+    private var transcriptCacheTasks: [String: Task<Void, Never>] = [:]
     var contextUsage: [String: ContextUsage] = [:]
     private var contextRevisions: [String: Int] = [:]
     var showContextUsage = true
@@ -151,9 +161,9 @@ final class AppStore {
                     catch { errorMessage = "无法读取审查体验数据：\(error.localizedDescription)" }
                 case "files": path = [.session(ReferenceData.conversationID)]; sheet = .files(ReferenceData.conversationID, false)
                 case "advanced": path = [.session(ReferenceData.conversationID)]; sheet = .advanced
-                case "context-review", "compact-review", "agents-review":
+                case "context-review", "context-empty-review", "compact-review", "agents-review":
                     path = [.session(ReferenceData.conversationID)]
-                    setDraft("上下文与智能体验收", for: ReferenceData.conversationID)
+                    setDraft(args[index + 1] == "context-empty-review" ? "" : "上下文与智能体验收", for: ReferenceData.conversationID)
                     contextUsage[ReferenceData.conversationID] = ContextUsage(available: true, usedTokens: 44_000, maxTokens: 1_050_000, usedPercent: 4.2, autoCompactThresholdTokens: 900_000, breakdown: [
                         .init(source: "system_tool_schemas", chars: 3590, percent: 35.9), .init(source: "mcp_tool_schemas", chars: 2960, percent: 29.6), .init(source: "messages", chars: 2690, percent: 26.9), .init(source: "system_prompt", chars: 380, percent: 3.8), .init(source: "skills", chars: 270, percent: 2.7), .init(source: "meta_user_context", chars: 110, percent: 1.1)
                     ], breakdownBasis: "characters", compaction: .init(active: args[index + 1] == "compact-review", latest: nil))
@@ -183,6 +193,12 @@ final class AppStore {
     }
     private func scopedKey(_ key: String) -> String { "\(persistenceScope)|\(key)" }
     private func loadScopedState() throws {
+        transcriptLastLoaded = [:]; transcriptLoading = []; transcriptLoadingOwners = [:]; transcriptLoadErrors = [:]
+        let cache = decode([String: CachedTranscript].self, key: scopedKey("transcriptCache.v1")) ?? [:]
+        cachedTranscriptIDs = []
+        for (id, entry) in cache where Date().timeIntervalSince(entry.savedAt) < 7 * 86400 {
+            if transcripts[id]?.isEmpty != false { transcripts[id] = entry.messages; cachedTranscriptIDs.insert(id) }
+        }
         localUnreadIDs = Set(defaults.stringArray(forKey: scopedKey("unread")) ?? [])
         locallyReadTimestamps = decode([String: Double].self, key: scopedKey("readTimestamps")) ?? [:]
         localFeedback = decode([String: Int].self, key: scopedKey("feedback")) ?? [:]
@@ -200,6 +216,42 @@ final class AppStore {
         pendingSubmissions = [:]
         pendingSubmissions = try submissionJournal.read(scope: persistenceScope)
     }
+    private func cacheTranscript(_ id: String) {
+        guard !isReferenceMode, activeProfileID != nil, let messages = transcripts[id] else { return }
+        var cache = decode([String: CachedTranscript].self, key: scopedKey("transcriptCache.v1")) ?? [:]
+        guard !messages.isEmpty else { cache[id] = nil; save(cache, key: scopedKey("transcriptCache.v1")); return }
+        let entry = CachedTranscript(savedAt: .now, messages: Array(messages.suffix(60)))
+        guard let data = try? JSONEncoder().encode(entry), data.count <= 256_000 else { cache[id] = nil; save(cache, key: scopedKey("transcriptCache.v1")); return }
+        cache[id] = entry
+        let recent = cache.sorted { $0.value.savedAt > $1.value.savedAt }.prefix(12)
+        cache = Dictionary(uniqueKeysWithValues: recent.map { ($0.key, $0.value) })
+        while let encoded = try? JSONEncoder().encode(cache), encoded.count > 1_000_000,
+              let oldest = cache.min(by: { $0.value.savedAt < $1.value.savedAt }) { cache[oldest.key] = nil }
+        save(cache, key: scopedKey("transcriptCache.v1"))
+    }
+
+    private func scheduleTranscriptCache(_ id: String) {
+        guard transcriptCacheTasks[id] == nil else { return }
+        let epoch = connectionEpoch
+        transcriptCacheTasks[id] = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            guard let self, epoch == self.connectionEpoch, !Task.isCancelled else { return }
+            self.cacheTranscript(id)
+            self.transcriptCacheTasks[id] = nil
+        }
+    }
+
+    func openTranscript(_ id: String) async {
+        let epoch = connectionEpoch
+        while transcriptLoading.contains(id) {
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+            guard !Task.isCancelled, epoch == connectionEpoch else { return }
+        }
+        if streamConnected, let loaded = transcriptLastLoaded[id], Date().timeIntervalSince(loaded) < 20,
+           !cachedTranscriptIDs.contains(id) { return }
+        await loadTranscript(id)
+    }
+
     var currentSessionID: String? {
         if case let .session(id) = path.last { return id }
         return nil
@@ -731,6 +783,8 @@ final class AppStore {
         connection = .disconnected
         sessionListTruncated = false
         sendingSessions = []
+        for task in transcriptCacheTasks.values { task.cancel() }; transcriptCacheTasks = [:]
+        transcriptLoading = []; transcriptLoadingOwners = [:]; transcriptLastLoaded = [:]; transcriptLoadErrors = [:]
         contextUsage = [:]; contextRevisions = [:]
         changingSettings = []
         settingsRevisions = [:]
@@ -752,6 +806,7 @@ final class AppStore {
             transcripts = [:]
             histories = [:]; loadingHistory = []
         }
+        defaults.removeObject(forKey: "\(profile.id)|\(profile.baseURL)|transcriptCache.v1")
         CredentialStore.remove(profile.id)
         profiles.removeAll { $0.id == profile.id }
         save(profiles, key: "connections")
@@ -871,6 +926,10 @@ final class AppStore {
         let request = UUID()
         transcriptRequests[id] = request
         let revision = eventRevision
+        transcriptLoading.insert(id)
+        transcriptLoadingOwners[id] = request
+        transcriptLoadErrors[id] = nil
+        defer { if epoch == connectionEpoch, transcriptLoadingOwners[id] == request { transcriptLoading.remove(id); transcriptLoadingOwners[id] = nil } }
         do {
             // A restored child view must re-establish its parent scope on the new adapter.
             if let parentID = openedAgentParents[persistenceScope + "|" + id], hostAgents[parentID] == nil {
@@ -880,7 +939,7 @@ final class AppStore {
                 upsert(decorate(parent.session.local))
             }
             let detail: BridgeDetail = try await client.get("v1/sessions/\(id)")
-            guard epoch == connectionEpoch, transcriptRequests[id] == request else { return }
+            guard epoch == connectionEpoch, transcriptRequests[id] == request, !Task.isCancelled else { return }
             let current = Dictionary((transcripts[id] ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, newest in newest })
             let incomingIDs = Set(detail.messages.map(\.id))
             var merged = detail.messages.map { item in
@@ -891,6 +950,9 @@ final class AppStore {
                 !incomingIDs.contains($0.id) && (messageRevisions["\(id)|\($0.id)"] ?? 0) > revision
             })
             transcripts[id] = merged
+            transcriptLastLoaded[id] = .now
+            cachedTranscriptIDs.remove(id)
+            cacheTranscript(id)
             histories[id] = detail.history
             if (contextRevisions[id] ?? 0) <= revision { contextUsage[id] = detail.contextUsage }
             if (interactionRevisions[id] ?? 0) <= revision { pendingInteractions[id] = detail.pendingInteractions }
@@ -905,14 +967,17 @@ final class AppStore {
             }
         } catch {
             guard epoch == connectionEpoch, transcriptRequests[id] == request else { return }
+            if Task.isCancelled || error is CancellationError { return }
             let code = (error as? RelayFailure)?.code ?? (error as? BridgeFailure)?.code
             if code == "relay_read_timeout", retryReadTimeout, connection.isOnline, !Task.isCancelled {
                 // Only re-read history. Never replay a send/fork/archive command from this path.
+                try? await Task.sleep(for: .milliseconds(Int.random(in: 400...900)))
+                guard !Task.isCancelled, epoch == connectionEpoch, transcriptRequests[id] == request else { return }
                 await loadTranscript(id, onFailure: onFailure, retryReadTimeout: false)
                 return
             }
             if let onFailure { onFailure(error.localizedDescription) }
-            else { errorMessage = error.localizedDescription }
+            else { transcriptLoadErrors[id] = "暂时无法更新，请稍后重试。已缓存的内容仍可查看。" }
         }
     }
 
@@ -931,7 +996,7 @@ final class AppStore {
                                 URLQueryItem(name: "logEpoch", value: history.logEpoch),
                                 URLQueryItem(name: "limit", value: "200")]
             let page: BridgeHistoryPage = try await client.get("v1/sessions/\(id)/messages?\(query.percentEncodedQuery ?? "")")
-            guard epoch == connectionEpoch, transcriptRequests[id] == request else { return }
+            guard epoch == connectionEpoch, transcriptRequests[id] == request, !Task.isCancelled else { return }
             let current = Dictionary((transcripts[id] ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, newest in newest })
             let incomingIDs = Set(page.messages.map(\.id))
             var merged = page.messages.map { item in
@@ -1325,7 +1390,7 @@ final class AppStore {
             guard epoch == connectionEpoch, settingsRevisions[id] == revision, !changingSettings.contains(id) else { return }
             remoteSettings[id] = response
             modelSelections[id] = response.model
-        } catch { if epoch == connectionEpoch, settingsRevisions[id] == revision, !changingSettings.contains(id) { errorMessage = error.localizedDescription } }
+        } catch { if epoch == connectionEpoch, settingsRevisions[id] == revision, !changingSettings.contains(id), !Task.isCancelled { transcriptLoadErrors[id] = "设置尚未同步，网络恢复后会重试。" } }
     }
 
     func permission(for id: String?) -> PermissionMode {
@@ -1937,6 +2002,7 @@ final class AppStore {
             if let index = transcripts[id]?.firstIndex(where: { $0.id == message.id }) {
                 transcripts[id]?[index] = message.local
             } else { transcripts[id, default: []].append(message.local) }
+            scheduleTranscriptCache(id)
             return
         }
         if let id = event.sessionId {

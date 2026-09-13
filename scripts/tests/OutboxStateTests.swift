@@ -508,7 +508,7 @@ struct TestResult: Codable { let name: String; let passed: Bool; let detail: Str
                 return nil
             }
             await f.store.loadTranscript("S")
-            try check(attempts == 2 && f.store.errorMessage != nil, "persistent timeout was hidden or unbounded")
+            try check(attempts == 2 && f.store.transcriptLoadErrors["S"] != nil && f.store.errorMessage == nil, "persistent timeout was not reported inline or was unbounded")
             attempts = 0; code = "relay_rpc_timeout"
             await f.store.loadTranscript("S")
             try check(attempts == 1, "uncertain operation was blindly retried")
@@ -553,6 +553,26 @@ struct TestResult: Codable { let name: String; let passed: Bool; let detail: Str
                 try check(CredentialStore.values[candidate.id] == nil && !f.store.hasConnectedBefore, "cancelled request saved credentials or unlocked onboarding")
                 try check(TestTransport.eventSubscriptions["b.invalid"] == nil && f.store.errorMessage == nil, "cancelled pairing opened stream or alerted")
             }
+        }
+        await run("transcript cache survives reconnect and failed refresh without global alert") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            await f.store.loadTranscript("S")
+            TestTransport.handler = { r in r.path == "v1/sessions/S" ? TestTransport.detail("cached reply") : nil }
+            await f.store.loadTranscript("S")
+            let saved = f.store.messages("S")
+            try check(!saved.isEmpty, "fixture has no history")
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
+            try check(reopened.messages("S") == saved && reopened.cachedTranscriptIDs.contains("S"), "cache missing after relaunch")
+            TestTransport.handler = { r in
+                if r.path == "v1/sessions/S" { throw BridgeFailure(message: "network", code: "offline") }
+                return nil
+            }
+            await f.store.loadTranscript("S")
+            try check(f.store.messages("S") == saved && f.store.errorMessage == nil && f.store.transcriptLoadErrors["S"] != nil, "failed refresh destroyed history or alerted")
+            TestTransport.handler = { r in r.path == "v1/sessions/S" ? TestTransport.detail() : nil }
+            await f.store.loadTranscript("S")
+            let afterEmpty = AppStore(defaults: f.defaults); defer { afterEmpty.disconnect() }
+            try check(afterEmpty.messages("S").isEmpty, "authoritative empty history resurrected old cached text")
         }
         let report: [String: JSONValue] = ["cases": .number(Double(results.count)), "passed": .number(Double(results.filter(\.passed).count)), "failed": .number(Double(results.filter { !$0.passed }.count)), "assertions": .number(Double(assertions))]
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(JSONValue.object(report))) as! [String: Any]

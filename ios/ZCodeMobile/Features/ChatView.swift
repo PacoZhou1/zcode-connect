@@ -22,6 +22,15 @@ struct ChatView: View {
                     if !store.isReferenceMode && !store.streamConnected {
                         InlineNotice(symbol: "wifi.exclamationmark", text: "实时连接正在恢复，已显示的内容可能不是最新状态。")
                     }
+                    if store.cachedTranscriptIDs.contains(sessionID) {
+                        InlineNotice(text: "已显示缓存记录，正在与电脑同步。")
+                    }
+                    if let message = store.transcriptLoadErrors[sessionID] {
+                        HStack {
+                            Text(message).font(.caption).foregroundStyle(.secondary)
+                            Button("重试") { Task { await store.loadTranscript(sessionID); await store.loadSettings(sessionID) } }
+                        }.padding(.vertical, 8)
+                    }
                     if store.isReferenceMode && !store.referenceReview {
                         InlineNotice(text: "界面体验 · 此处为参考会话")
                     }
@@ -34,7 +43,7 @@ struct ChatView: View {
                                         : "此任务由电脑上的 ZCode 管理。你可以查看记录，或新建一个手机可控制的任务。")
                     }
                     if store.messages(sessionID).isEmpty {
-                        if store.isLoading { ProgressView().frame(maxWidth: .infinity).padding(.top, 70) }
+                        if store.isLoading || store.transcriptLoading.contains(sessionID) { ProgressView().frame(maxWidth: .infinity).padding(.top, 70) }
                         else {
                             Text("从这里继续你的工作。")
                                 .foregroundStyle(.tertiary).frame(maxWidth: .infinity).padding(.top, 80)
@@ -140,7 +149,7 @@ struct ChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .tint(.primary)
             .task {
-                await store.loadTranscript(sessionID)
+                await store.openTranscript(sessionID)
                 if !didInitialScroll {
                     await Task.yield()
                     if beginsAtReferenceHistory {

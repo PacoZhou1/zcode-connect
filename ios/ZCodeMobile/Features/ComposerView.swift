@@ -20,6 +20,7 @@ struct ComposerView: View {
     @State private var showFiles = false
     @State private var showCamera = false
     @State private var showPermissions = false
+    @State private var showContext = false
     @State private var showReasoning = false
     @State private var showGoalEditor = false
     @State private var submitting = false
@@ -39,7 +40,7 @@ struct ComposerView: View {
     private var draftIdentity: String {
         "\(store.isReferenceMode)|\(store.activeProfileID ?? "unconnected")|\(store.activeProfile?.baseURL ?? "")|\(draftKey)"
     }
-    private var expanded: Bool { focused || !text.isEmpty || !attachments.isEmpty || sessionID == nil }
+    private var expanded: Bool { showContext || focused || !text.isEmpty || !attachments.isEmpty || sessionID == nil }
     private var canSend: Bool {
         (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) && !submitting
             && !isRunning && (sessionID.map { !store.sendingSessions.contains($0) } ?? true)
@@ -91,7 +92,7 @@ struct ComposerView: View {
             #if DEBUG
             let args = ProcessInfo.processInfo.arguments
             let screen = args.firstIndex(of: "--screen").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
-            if ["keyboard", "reasoning", "permissions"].contains(screen ?? "") { focused = true }
+            if ["keyboard", "reasoning", "permissions", "context-empty-review"].contains(screen ?? "") { focused = true }
             if screen == "reasoning" { showReasoning = true }
             if screen == "voice", store.isReferenceMode {
                 focused = true
@@ -130,6 +131,7 @@ struct ComposerView: View {
         }
         .onChange(of: draftIdentity) { _, _ in
             cancelInlineVoice()
+            showContext = false
             pendingAttachmentAction = nil
             showAttachmentMenu = false
         }
@@ -144,11 +146,12 @@ struct ComposerView: View {
         .onChange(of: currentReasoning) { _, _ in if !showReasoning { dialActivation += 1 } }
         .onChange(of: dismissOverlaysSignal) { _, _ in
             showReasoning = false
+            showContext = false
             showAttachmentMenu = false
         }
         .onDisappear {
             onReasoningVisibilityChange(false); cancelInlineVoice()
-            pendingAttachmentAction = nil; showAttachmentMenu = false
+            pendingAttachmentAction = nil; showAttachmentMenu = false; showContext = false
         }
         .onChange(of: scenePhase) { _, phase in if phase == .background { cancelInlineVoice() } }
         .onChange(of: speech.isRecording) { _, recording in
@@ -247,7 +250,7 @@ struct ComposerView: View {
                     Spacer(minLength: 4)
                     HStack(spacing: 8) {
                         if store.showContextUsage, let id = sessionID, let usage = store.contextUsage[id] {
-                            ContextUsageButton(usage: usage)
+                            ContextUsageButton(usage: usage, presented: $showContext)
                         }
                         reasoningButton
                         microphoneButton
@@ -455,7 +458,7 @@ struct ComposerView: View {
     }
 
     private var permissionButton: some View {
-        Button { showPermissions.toggle() } label: {
+        Button { showContext = false; showPermissions.toggle() } label: {
             Image(systemName: permission.symbol)
                 .font(.system(size: 19)).foregroundStyle(permission == .full ? .orange : .secondary)
                 .frame(width: 34, height: 34)
@@ -667,7 +670,7 @@ struct CameraPicker: UIViewControllerRepresentable {
 
 private struct ContextUsageButton: View {
     let usage: ContextUsage
-    @State private var presented = false
+    @Binding var presented: Bool
     private var percent: Double { min(100, max(0, usage.usedPercent ?? 0)) }
     private func tokens(_ value: Double) -> String {
         value >= 10_000 ? String(format: "%.1f万", value / 10_000) : value.formatted(.number.precision(.fractionLength(0)))
@@ -688,7 +691,7 @@ private struct ContextUsageButton: View {
                         .stroke(Color.primary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 } else { Text("—").font(.system(size: 10)) }
-            }.frame(width: 19, height: 19).frame(width: 28, height: 34)
+            }.frame(width: 19, height: 19).frame(width: 32, height: 36).contentShape(Rectangle())
         }.buttonStyle(.plain)
             .accessibilityLabel(usage.available ? "上下文已用 \(percent.formatted(.number.precision(.fractionLength(1))))%" : "上下文用量暂不可用")
             .accessibilityIdentifier("composer.contextUsage")
