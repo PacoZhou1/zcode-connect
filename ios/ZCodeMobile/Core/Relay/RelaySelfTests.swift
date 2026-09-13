@@ -1,4 +1,4 @@
-#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS || RELAY_RECOVERY_SELF_TESTS || RELAY_AUTH_SELF_TESTS
+#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS || RELAY_RECOVERY_SELF_TESTS || RELAY_AUTH_SELF_TESTS || RELAY_COLD_OPEN_SELF_TESTS
 import Foundation
 
 private struct TestFailure: Error { let message: String }
@@ -70,6 +70,13 @@ actor MockRelaySocket: RelaySocketTransport {
     var socketConnectCount = 0
     var serializedOutgoingEnvelopes: [String] = []
     var dropHeartbeats = false
+    var coldSessions = Set<String>()
+    var sessionReadFailures = Set<String>()
+    var coldOpenDelay: Duration = .milliseconds(120)
+    var sessionReadReadiness: [RelayJSON] = []
+    var coldOpenOrder: [String] = []
+    func makeSessionCold(_ sessionID: String, delay: Duration = .milliseconds(120)) { coldSessions.insert(sessionID); coldOpenDelay = delay }
+    func failSessionRead(_ sessionID: String) { sessionReadFailures.insert(sessionID) }
     func setRecoveryBehavior(_ value: String) { recoveryBehavior = value }
     func setDropHeartbeats(_ value: Bool) { dropHeartbeats = value }
     func failReceive() { connected = false; receiver?.resume(throwing: URLError(.networkConnectionLost)); receiver = nil }
@@ -116,6 +123,18 @@ actor MockRelaySocket: RelaySocketTransport {
     func snapshot(_ sessionID: String) -> RelayJSON {
         let model: RelayJSON = .object(["providerId": .string("host-provider"), "modelId": .string("host-model")])
         return .object(["session": .object(["sessionId": .string(sessionID), "title": .string(titles[sessionID] ?? "Original desktop task"), "status": .string("completed")]), "settings": .object(["model": .object(["current": model, "available": .array([.object(["ref": model, "label": .string("Host model"), "reasoning": .object(["levels": .array([.object(["value": .string("max")]), .object(["value": .string("high")])])]), "supportsImages": .bool(imagesSupported), "supportsPdf": .bool(false)])])]), "thoughtLevel": .object(["current": .string(configurationThought), "available": .array([.object(["value": .string("max")]), .object(["value": .string("high")])])]), "mode": .object(["current": .string(configurationMode)])]), "messages": .array([]), "runtime": .object([:])])
+    }
+    private func completeConversationSubscription(_ id: Int32, params: RelayJSON) throws {
+        var projection = try (alternateProjection ?? baseProjection()).requiringObject()
+        let sessionID = params["sessionId"].string!; projection["sessionId"] = .string(sessionID)
+        coldSessions.remove(sessionID); coldOpenOrder.append("runtime-ready:" + sessionID)
+        var frame = try logical(.object(["kind": .string("snapshot"), "snapshot": .object(projection)])).requiringObject()
+        frame["topic"] = .string("conversation/" + sessionID); frame["subscriptionId"] = .string("subscription-" + sessionID)
+        if sessionID == "session-test" { frame["subscriptionId"] = .string("subscription-one") }
+        var initial = try wire(.object(frame)).requiringObject()
+        if corruptNextSubscription { initial["wireVersion"] = .int(99); corruptNextSubscription = false }
+        try sendRPC(.init(header: [.int32(204), .int32(listenerID!)], body: try .object(.object(initial))))
+        try success(id, .object(["ack": .object(["subscriptionId": frame["subscriptionId"]!, "mode": .string("snapshot"), "logEpoch": .string("epoch-one")])]))
     }
     func connect(to url: URL) async throws { try require(url.host == "zcode.z.ai", "Wrong host"); connected = true; socketConnectCount += 1 }
     func close() async { connected = false; receiver?.resume(throwing: RelayFailure.closed()); receiver = nil; inbox.removeAll() }
@@ -183,7 +202,10 @@ actor MockRelaySocket: RelaySocketTransport {
             case "readSession", "resumeSession":
                 if method == "resumeSession" { registeredSessions.insert(params["sessionId"].string!) }
                 let sessionID = params["sessionId"].string!
-                if unavailableSubagents.contains(sessionID) {
+                let ready = !coldSessions.contains(sessionID)
+                sessionReadReadiness.append(.object(["sessionId": .string(sessionID), "method": .string(method), "runtimeReady": .bool(ready)]))
+                coldOpenOrder.append("read:" + sessionID + (ready ? ":ready" : ":cold"))
+                if unavailableSubagents.contains(sessionID) || sessionReadFailures.contains(sessionID) || (method == "readSession" && !ready) {
                     try sendRPC(.init(header: [.int32(202), .int32(id)], body: try .object(.object(["message": .string("Session is not active"), "code": .string("sessionUnavailable")]))))
                 } else { try success(id, subagentSnapshots[sessionID] ?? snapshot(sessionID)) }
             case "readWorkspaceState": try success(id, .object(["settings": snapshot("session-test")["settings"]]))
@@ -199,15 +221,17 @@ actor MockRelaySocket: RelaySocketTransport {
                 if let thought = params["thoughtLevel"].string { configurationThought = thought }
                 try success(id, snapshot(params["sessionId"].string!))
             case "subscribeConversationV4":
-                var projection = try (alternateProjection ?? baseProjection()).requiringObject()
-                let sessionID = params["sessionId"].string!; projection["sessionId"] = .string(sessionID)
-                var frame = try logical(.object(["kind": .string("snapshot"), "snapshot": .object(projection)])).requiringObject()
-                frame["topic"] = .string("conversation/" + sessionID); frame["subscriptionId"] = .string("subscription-" + sessionID)
-                if sessionID == "session-test" { frame["subscriptionId"] = .string("subscription-one") }
-                var initial = try wire(.object(frame)).requiringObject()
-                if corruptNextSubscription { initial["wireVersion"] = .int(99); corruptNextSubscription = false }
-                try sendRPC(.init(header: [.int32(204), .int32(listenerID!)], body: try .object(.object(initial))))
-                try success(id, .object(["ack": .object(["subscriptionId": frame["subscriptionId"]!, "mode": .string("snapshot"), "logEpoch": .string("epoch-one")])]))
+                let sessionID = params["sessionId"].string!
+                coldOpenOrder.append("subscribe:" + sessionID)
+                if coldSessions.contains(sessionID) {
+                    // Host restoration completes independently of accepting later RPC frames.
+                    // Sleeping inside send() would serialize reads behind this ACK and hide the race.
+                    let delay = coldOpenDelay
+                    Task {
+                        try await Task.sleep(for: delay)
+                        if connected { try completeConversationSubscription(id, params: params) }
+                    }
+                } else { try completeConversationSubscription(id, params: params) }
             case "sendConversationCommandV4":
                 let envelope = params["envelope"], commandID = envelope["commandId"].string!, prior = commands[commandID]
                 if prior == nil { sentCommandCount += 1 }

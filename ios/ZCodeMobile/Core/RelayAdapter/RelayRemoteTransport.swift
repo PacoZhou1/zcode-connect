@@ -166,6 +166,8 @@ actor RelayRemoteTransport: RemoteTransport {
             if p.count == 4 {
                 switch (method, p[3]) {
                 case ("GET", "settings"):
+                    // Subscription restores cold desktop runtimes before session/read.
+                    _ = try await loadProjection(id)
                     let snapshot = try await client.readSession(id); snapshots[id] = snapshot
                     return try RelayBridgeMapping.settings(snapshot, permissionMode: permissionMode(snapshot))
                 case ("PATCH", "settings"): return try await settingsMutation(id, body)
@@ -288,8 +290,9 @@ actor RelayRemoteTransport: RemoteTransport {
         let projection = try await task.value; try await checkScope(); projections[id] = projection; return projection
     }
     private func detail(_ id: String) async throws -> RelayJSON {
-        async let snapshotRead = client.readSession(id)
-        let projection = try await loadProjection(id), snapshot = try await snapshotRead
+        // session/read requires an active runtime; subscribe supplies that barrier.
+        let projection = try await loadProjection(id)
+        let snapshot = try await client.readSession(id)
         snapshots[id] = snapshot
         return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.messages(projection)), "pendingInteractions": .array(projection.pendingInteractions.map { RelayBridgeMapping.interaction($0, sessionID: id) }), "hostActivity": RelayBridgeMapping.activity(projection), "history": RelayBridgeMapping.history(projection)])
     }
