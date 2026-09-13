@@ -80,7 +80,7 @@ private func childSnapshot(id: String = "child-ended", count: Int = 705) -> Rela
     await mock.useSubagentSnapshot(.object(overLimit), sessionID: "child-one")
     try await childReject("relay_history_limit") { let _: RelayJSON = try await facade.get("v1/sessions/child-one") }
     await mock.setSubagentUnavailable("child-ended", value: true)
-    try await childReject("relay_subagent_history_unavailable") { let _: RelayJSON = try await facade.get("v1/sessions/child-ended") }
+    try await childReject("relay_subagent_history_unavailable") { _ = try await client.readSubagentSession("child-ended", parentSessionID: "session-test") }
     let serviceCalls = await mock.serviceCalls, setterCalls = await mock.setterCalls, commandCount = await mock.sentCommandCount
     let childCalls = serviceCalls.filter { ["child-ended", "child-one"].contains($0["params"]["sessionId"].string ?? $0["params"]["taskId"].string ?? "") }
     try childExpect(childCalls.allSatisfy { $0["channel"].string == "zcode-agent" && $0["method"].string == "readSession" && $0["params"]["runtimePolicy"].string == "existing-only" && $0["params"]["messageLimit"] == .null && $0["params"]["model"] == .null && $0["params"]["thoughtLevel"] == .null }, "Child read used subscribe, cold resume, registration, truncation or a configuration override")

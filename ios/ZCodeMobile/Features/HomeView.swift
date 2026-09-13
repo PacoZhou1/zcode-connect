@@ -129,15 +129,6 @@ struct HomeView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 12) {
                 GlassSearchField(text: $search, placeholder: "搜索聊天")
-                if store.connection.isOnline {
-                    Button { store.sheet = .voice } label: {
-                        VoiceBarsGlyph().stroke(style: StrokeStyle(lineWidth: 2.2, lineCap: .round)).frame(width: 20, height: 22)
-                            .frame(width: 36, height: 36)
-                    }.buttonStyle(.glassProminent).buttonBorderShape(.circle)
-                        .frame(width: 48, height: 48)
-                        .accessibilityLabel("语音创建任务").accessibilityIdentifier("home.voice")
-                        .measureLayout("home.voice")
-                }
                 Button {
                     if store.connection.isOnline { store.path.append(.newSession) }
                     else { store.sheet = .pairing }
@@ -151,7 +142,7 @@ struct HomeView: View {
                     .accessibilityLabel("新建聊天").accessibilityIdentifier("home.new")
                     .measureLayout("home.new")
             }
-            .padding(.horizontal, 28).padding(.top, 10).padding(.bottom, -5.333333)
+            .padding(.horizontal, 28).padding(.top, 10).padding(.bottom, 8)
         }
         .alert("重命名任务", isPresented: Binding(get: { renameSession != nil }, set: { if !$0 { renameSession = nil } })) {
             TextField("任务名称", text: $renameText)

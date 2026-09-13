@@ -140,8 +140,8 @@ struct ConversationPreview: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
-                        ForEach(messages.suffix(12)) { message in
-                            MessageView(message: message, sessionID: sessionID)
+                        ForEach(TranscriptPresentation.group(messages).suffix(3)) { turn in
+                            TranscriptTurnView(turn: turn, sessionID: sessionID)
                         }
                     }.padding(16)
                 }

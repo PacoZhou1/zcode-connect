@@ -13,6 +13,7 @@ struct ChatView: View {
     @State private var position = ScrollPosition(edge: .bottom)
 
     private var session: RemoteSession? { store.session(sessionID) }
+    private var turns: [TranscriptTurn] { TranscriptPresentation.group(store.messages(sessionID)) }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -41,11 +42,11 @@ struct ChatView: View {
                     }
                     if store.histories[sessionID]?.hasMore == true {
                         Button {
-                            let anchor = store.messages(sessionID).first?.id
+                            let anchor = turns.first?.id
                             pendingHistoryAnchor = anchor
                             Task {
                                 await store.loadEarlierMessages(sessionID)
-                                if store.messages(sessionID).first?.id == anchor { pendingHistoryAnchor = nil }
+                                if turns.first?.id == anchor { pendingHistoryAnchor = nil }
                             }
                         } label: {
                             HStack(spacing: 8) {
@@ -56,8 +57,8 @@ struct ChatView: View {
                         .disabled(store.loadingHistory.contains(sessionID))
                         .accessibilityIdentifier("chat.loadEarlier")
                     }
-                    ForEach(store.messages(sessionID)) { message in
-                        MessageView(message: message, sessionID: sessionID).padding(.bottom, message.role == .user ? 34 : 22).id(message.id)
+                    ForEach(turns) { turn in
+                        TranscriptTurnView(turn: turn, sessionID: sessionID).id(turn.id)
                     }
                     ForEach(store.pendingInteractions[sessionID] ?? []) { interaction in
                         InteractionRequestCard(interaction: interaction).padding(.bottom, 28)
@@ -100,7 +101,7 @@ struct ChatView: View {
                         .padding(.bottom, 8).accessibilityLabel("跳到最新消息")
                 }
             }
-            .task(id: store.messages(sessionID).first?.id) {
+            .task(id: turns.first?.id) {
                 guard let anchor = pendingHistoryAnchor else { return }
                 await Task.yield()
                 guard !Task.isCancelled, pendingHistoryAnchor == anchor else { return }

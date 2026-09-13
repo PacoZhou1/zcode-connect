@@ -1,7 +1,8 @@
 import Foundation
 
-// These adapters prohibit the real relay path. Activity DTOs, mapping and reducers
-// are production code; pairing, sockets, RPC and credentials are never exercised.
+// Other Store suites reuse these default-throwing adapters. The dedicated activity
+// runner instead links in-memory RelayWorkspaceRecoveryAdapters, never real I/O.
+#if !HOST_ACTIVITY_STATE_TESTS
 actor RelayClient {
     init(clientID: String) throws {}
     func connect(pairing: RelayPairing, confirmedControllerReplacement: Bool) async throws { throw prohibited() }
@@ -18,6 +19,7 @@ actor RelayRemoteTransport: RemoteTransport {
     func events(after cursor: String?, onEvent: @Sendable (BridgeEnvelope) async -> Void) async throws { throw TestFailure(message: "Real relay I/O is prohibited") }
     func shutdown() async {}
 }
+#endif
 
 @main struct HostActivityStateTests {
     @MainActor static var results: [TestResult] = []
@@ -27,7 +29,9 @@ actor RelayRemoteTransport: RemoteTransport {
         if try !condition() { throw TestFailure(message: message) }
     }
     @MainActor static func run(_ name: String, _ body: () async throws -> Void) async {
+        for _ in 0..<150 { await Task.yield() }
         TestTransport.reset()
+        RelayWorkspaceProbe.reset()
         OutboxTestSandbox.directory = URL(fileURLWithPath: CommandLine.arguments[1]).appendingPathComponent(UUID().uuidString)
         do { try await body(); results.append(.init(name: name, passed: true, detail: "all assertions passed")); print("PASS \(name)") }
         catch { let detail = (error as? TestFailure)?.message ?? String(describing: error); results.append(.init(name: name, passed: false, detail: detail)); print("FAIL \(name): \(detail)") }
@@ -64,6 +68,34 @@ actor RelayRemoteTransport: RemoteTransport {
         try await TestTransport.emit(["hostActivity": try json(value)], type: "host.activity")
     }
     @MainActor static func visible(_ store: AppStore) -> Bool { store.goals["S"] != nil || store.agentCount("S") > 0 }
+
+    static func directory(_ items: [RelayJSON], nextCursor: String? = nil) throws -> RelaySubagentDirectory {
+        try .init(raw: .object(["revision": .int(20), "childSessionIds": .array(items.compactMap { $0["childSessionId"].string }.map(RelayJSON.string)),
+            "running": .array([]), "ended": .object(["total": .int(items.count), "items": .array(items), "nextCursor": nextCursor.map(RelayJSON.string) ?? .null])]))
+    }
+    static func endedRecord(_ id: String, title: String, status: String = "success") throws -> RelayJSON {
+        var fields = try agent(id, title: title, status: status).requiringObject()
+        fields["summary"] = .string("主机摘要：" + title)
+        fields["startedAt"] = .number(1_000_000); fields["endedAt"] = .number(1_060_000)
+        return .object(fields)
+    }
+    @MainActor static func childDetail(_ id: String, title: String = "Loaded child") -> JSONValue {
+        var child = TestTransport.session(id, status: "completed", title: title).objectValue!
+        child["source"] = .string("official-relay-subagent")
+        child["capabilities"] = .object(["read": .bool(true), "send": .bool(false), "stop": .bool(false), "approve": .bool(false),
+            "changes": .bool(false), "markUnread": .bool(false), "fork": .bool(false), "rename": .bool(false), "pin": .bool(false), "archive": .bool(false)])
+        return .object(["session": .object(child), "messages": .array([TestTransport.message("Synthetic retained child history")]),
+            "pendingInteractions": .array([]), "hostActivity": .object(["goal": .null, "subagents": .object(["childSessionIds": .array([]), "running": .array([]), "endedTotal": .number(0)])])])
+    }
+    @MainActor static func waitFor(_ value: () -> Bool) async throws {
+        for _ in 0..<10_000 { if value() { return }; await Task.yield() }
+        throw TestFailure(message: "Bounded wait for synthetic activity lifecycle expired")
+    }
+    @MainActor static func relayReady() async throws {
+        let expected = RelayWorkspaceProbe.count("adapter", device: "activity-device")
+        try await waitFor { (TestTransport.eventSubscriptions[ActivityRelayFixture.host] ?? 0) >= expected && TestTransport.subscribers[ActivityRelayFixture.host] != nil }
+        try await TestTransport.emit(["connectionStatus": .string("connected")], host: ActivityRelayFixture.host, type: "ready")
+    }
 
     @MainActor static func main() async throws {
         await run("fresh non-reference store has no activity entry points") {
@@ -260,6 +292,105 @@ actor RelayRemoteTransport: RemoteTransport {
             try check(!visible(f.store) && f.store.changingGoals.isEmpty, "old goal command wrote across connection epoch")
             try check(!TestTransport.requests.contains { $0.host == "b.invalid" && $0.path == "v1/sessions/S" }, "old command refreshed session on replacement host")
         }
+        await run("official ended directory supplies all 13 distinct names states and summaries without transcript rows") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            let names = ["核对需求", "审查连接协议", "检查文件路径", "梳理错误恢复", "验证历史分页", "检查附件事务", "复核会话权限", "验证命令回执", "检查目录状态", "复核取消边界", "核对重连顺序", "审查存储隔离", "整理验收证据"]
+            let states = ["success", "failed", "cancelled", "lost"]
+            let records = try names.enumerated().map { try endedRecord("ended-\($0.offset)", title: $0.element, status: states[$0.offset % states.count]) }
+            let mapped = RelayBridgeMapping.activity(try projection(activity()), directory: try directory(records))
+            try await install(mapped, store: f.store)
+            let tasks = f.store.agentTasks["S"] ?? []
+            try check(tasks.count == 13 && f.store.agentCount("S") == 13, "Ended directory was truncated or used a fixed count")
+            for (index, name) in names.enumerated() {
+                let expectedStatus: SessionStatus = index % 4 == 0 ? .completed : index % 4 == 1 ? .failed : .idle
+                let label = ["已完成", "失败", "已取消", "已中断"][index % 4]
+                let task = tasks.first { $0.id == "ended-\(index)" }
+                try check(task?.title == name && task?.detail == "主机摘要：" + name && task?.status == expectedStatus && task?.statusText == label, "Ended record \(index) lost its exact title/status/summary")
+            }
+            try check(f.store.hostAgents["S"]?.ended.allSatisfy { $0.endedAt == 1_060_000 } == true, "Ended timestamps were discarded")
+            try check(mapped["rows"]["window"].array?.isEmpty == true && f.store.messages("S").isEmpty, "Directory entries were fabricated as transcript rows/messages")
+        }
+        await run("unrecognized host agent state remains explicit and is never labeled ready or complete") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            let record = try endedRecord("unknown-child", title: "新状态任务", status: "futureHostState")
+            let mapped = RelayBridgeMapping.activity(try projection(activity()), directory: try directory([record]))
+            try await install(mapped, store: f.store)
+            let task = f.store.agentTasks["S"]?.first
+            try check(task?.title == "新状态任务" && task?.status == .idle && task?.statusText == "状态待更新", "Unknown state was silently reclassified as ready or complete")
+            try check(f.store.hostAgents["S"]?.ended.first?.status == "futureHostState", "Typed projection lost the original unknown state")
+        }
+        await run("official directory metadata wins over stale ended transcript metadata") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            let record = try endedRecord("child-A", title: "目录最终标题", status: "cancelled")
+            let mapped = RelayBridgeMapping.activity(try projection(activity(children: ["child-A"], rows: [row("child-A", title: "旧历史标题")])), directory: try directory([record]))
+            try await install(mapped, store: f.store)
+            let task = f.store.agentTasks["S"]?.first
+            try check(task?.title == "目录最终标题" && task?.statusText == "已取消" && task?.detail == "主机摘要：目录最终标题", "Stale row replaced the official directory record")
+        }
+        await run("opening and reading a real-source child uses a separate read-only cache without adding a Home task") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            let mapped = RelayBridgeMapping.activity(try projection(activity()), directory: try directory([try endedRecord("child-A", title: "主机子任务")]))
+            try await install(mapped, store: f.store)
+            let originalHomeIDs = f.store.sessions.map(\.id)
+            let task = f.store.agentTasks["S"]!.first!
+            f.store.openAgent(task, parentID: "S")
+            try check(f.store.currentSessionID == task.id && f.store.sessions.map(\.id) == originalHomeIDs, "Opening an agent inserted it into Home")
+            let opened = f.store.session(task.id)
+            try check(opened?.title == task.title && opened?.canControl == false && opened?.source == "official-relay-subagent", "Opened child cache fabricated ordinary task permissions")
+            TestTransport.handler = { request in request.path == "v1/sessions/child-A" ? childDetail("child-A", title: "读回子任务") : nil }
+            await f.store.loadTranscript(task.id)
+            try check(f.store.session(task.id)?.title == "读回子任务" && f.store.messages(task.id).first?.text == "Synthetic retained child history", "Child snapshot did not update its separate cache/history")
+            try check(f.store.sessions.map(\.id) == originalHomeIDs && f.store.session(task.id)?.canControl == false, "Child detail polluted Home or became writable")
+            await f.store.refresh()
+            try check(f.store.sessions.map(\.id) == originalHomeIDs && f.store.session(task.id)?.title == "读回子任务", "Normal index refresh lost or promoted the child cache")
+        }
+        await run("unlisted agent IDs cannot open and a child cache cannot appear on a different computer") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            let mapped = RelayBridgeMapping.activity(try projection(activity()), directory: try directory([try endedRecord("child-A", title: "主机 A 子任务")]))
+            try await install(mapped, store: f.store)
+            let unlisted = AgentTask(id: "guessed-child", title: "Guessed", status: .idle, detail: "", colorIndex: 0)
+            f.store.openAgent(unlisted, parentID: "S")
+            try check(f.store.path.isEmpty && f.store.session("guessed-child") == nil, "Unlisted child received a navigation/cache entry")
+            f.store.openAgent(f.store.agentTasks["S"]!.first!, parentID: "S")
+            TestTransport.handler = nil
+            let other = ConnectionProfile(id: "B", name: "Synthetic B", baseURL: "https://b.invalid")
+            f.store.profiles.append(other)
+            await f.store.switchComputer(other)
+            try check(f.store.activeProfileID == other.id && f.store.connection.isOnline, "Saved B fixture did not complete its connection")
+            try check(f.store.session("child-A") == nil && f.store.path.isEmpty, "A child cache appeared under B's scope")
+            try check(!TestTransport.requests.contains { $0.host == "b.invalid" && $0.path == "v1/sessions/child-A" }, "Switching hosts read the old child on B")
+        }
+        await run("automatic Relay restoration primes the parent before requesting the retained child") {
+            let f = try ActivityRelayFixture(); defer { f.close() }
+            await f.store.start(); try await relayReady()
+            let mapped = RelayBridgeMapping.activity(try projection(activity()), directory: try directory([try endedRecord("child-A", title: "恢复中的主机子任务")]))
+            var primedGeneration = 0
+            TestTransport.handler = { request in
+                if request.path == "v1/sessions/S" {
+                    primedGeneration = RelayWorkspaceProbe.count("adapter", device: "activity-device")
+                    return detail(try json(mapped))
+                }
+                if request.path == "v1/sessions/child-A" {
+                    guard primedGeneration == RelayWorkspaceProbe.count("adapter", device: "activity-device") else { throw TestFailure(message: "Cold child was requested before its parent authorized the new adapter") }
+                    return childDetail("child-A", title: "Generation \(primedGeneration)")
+                }
+                return nil
+            }
+            await f.store.loadTranscript("S")
+            f.store.openAgent(f.store.agentTasks["S"]!.first!, parentID: "S")
+            await f.store.loadTranscript("child-A")
+            let recoveryStart = TestTransport.requests.count
+            TestTransport.eventExitHandler = { _ in throw RelayFailure("relay_transport_failed", "Synthetic connection interrupted") }
+            TestTransport.subscribers[ActivityRelayFixture.host]?.finish()
+            try await waitFor { RelayWorkspaceProbe.count("adapter", device: "activity-device") == 2 && primedGeneration == 2 && f.store.connection.isOnline }
+            try await relayReady()
+            try await waitFor { f.store.session("child-A")?.title == "Generation 2" }
+            let reads = TestTransport.requests.dropFirst(recoveryStart).filter { ["v1/sessions/S", "v1/sessions/child-A"].contains($0.path) }
+            try check(reads.map(\.path) == ["v1/sessions/S", "v1/sessions/child-A"], "Retained child recovery did not read parent then child exactly once")
+            try check(f.store.currentSessionID == "child-A" && f.store.session("child-A")?.canControl == false && f.store.messages("child-A").first?.text == "Synthetic retained child history", "Restoration lost the child page or its read-only snapshot")
+            try check(f.store.sessions.map(\.id) == ["S"] && TestTransport.requests.dropFirst(recoveryStart).allSatisfy { $0.method == "GET" }, "Child restoration registered a Home task or sent a mutation")
+            try check(RelayWorkspaceProbe.count("pair", device: "activity-device") == 2 && f.store.errorMessage == nil, "Restoration duplicated pairing or hid a parent-scope error")
+        }
         let failed = results.filter { !$0.passed }.count
         let report = ActivityReport(cases: results.count, passed: results.count - failed, failed: failed, assertions: assertions, results: results)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -269,3 +400,22 @@ actor RelayRemoteTransport: RemoteTransport {
     }
 }
 struct ActivityReport: Codable { let cases: Int; let passed: Int; let failed: Int; let assertions: Int; let results: [TestResult] }
+
+@MainActor private final class ActivityRelayFixture {
+    static let host = "relay:activity-device:/synthetic"
+    let suite = "dev.paco.activity-relay.\(UUID().uuidString)"
+    let defaults: UserDefaults
+    let store: AppStore
+    init() throws {
+        defaults = UserDefaults(suiteName: suite)!
+        let profile = ConnectionProfile(id: "activity-A", name: "Synthetic activity host", baseURL: "https://zcode.z.ai/remote/v4", relayDeviceID: "activity-device", relayWorkspaceKey: "/synthetic")
+        defaults.set(try JSONEncoder().encode([profile]), forKey: "connections")
+        defaults.set(profile.id, forKey: "activeConnection"); defaults.set(true, forKey: "hasConnectedBefore")
+        CredentialStore.values[profile.id] = "https://zcode.z.ai/remote/v4?sid=activity-device&hash=synthetic-fixture-only-0000000000000000&name=Synthetic&app_version=fixture"
+        RelayWorkspaceProbe.listings["activity-device"] = .init(windowControlSessionId: "activity-fixture-control", workspaces: [
+            .init(kind: "local", workspacePath: "/synthetic", workspaceIdentity: nil, remoteSessionId: nil, connectionState: "connected", lastConnectionError: nil)
+        ], tasks: [], initialViewState: nil, mobileViewState: nil, activeWorkspaceKey: nil, activeTaskId: nil)
+        store = AppStore(defaults: defaults, reconnectDelay: { _ in try Task.checkCancellation() })
+    }
+    func close() { store.disconnect(); defaults.removePersistentDomain(forName: suite) }
+}

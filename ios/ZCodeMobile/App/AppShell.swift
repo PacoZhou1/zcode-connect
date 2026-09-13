@@ -20,7 +20,6 @@ struct AppShell: View {
                     }
                 }
         }
-        .modifier(FloatingPanelOverlay())
         .sheet(item: $store.sheet) { destination in
             switch destination {
             case .connections: ConnectionsView()
@@ -58,9 +57,8 @@ struct AppShell: View {
             #endif
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active, store.connection.isOnline, !store.isReferenceMode {
-                Task { await store.refresh(); if let id = store.currentSessionID { await store.loadTranscript(id) } }
-            }
+            if phase == .active { Task { await store.applicationDidBecomeActive() } }
+            else if phase == .background { store.applicationDidEnterBackground() }
         }
     }
 }

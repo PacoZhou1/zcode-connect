@@ -4,7 +4,7 @@
 No network, Simulator, project build, Keychain, or live app storage is used. The
 shared inert HTTP/platform harness is copied from OutboxStateTests before its @main.
 Only UIKit and journal construction are redirected in the temporary AppStore copy.
-Relay connection side effects are replaced by throwing test-only adapters.
+Relay connection side effects use in-memory adapters with no sockets or real account.
 """
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,11 +17,13 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 core = root / "ios/ZCodeMobile/Core"
 audit = root / "docs/audit"
-production = [core / n for n in ("AppStore.swift", "PendingSubmission.swift", "Models.swift", "BridgeClient.swift", "ReferenceData.swift", "RemoteTransport.swift", "DraftAttachmentJournal.swift")]
-production += [core / "Relay" / n for n in ("RelayTypes.swift", "RelayFrames.swift", "RelayProjection.swift", "RelayHostActivity.swift", "RelayCodec.swift")]
+production = [core / n for n in ("AppStore.swift", "PendingSubmission.swift", "PendingGoal.swift", "Models.swift", "BridgeClient.swift", "ReferenceData.swift", "RemoteTransport.swift", "DraftAttachmentJournal.swift")]
+production += [core / "Relay" / n for n in ("RelayTypes.swift", "RelayFrames.swift", "RelayProjection.swift", "RelayHostActivity.swift", "RelayCodec.swift", "RelayHookReview.swift", "RelayFork.swift")]
+if (core / "Relay/RelayTranscriptSemantics.swift").exists():
+    production.append(core / "Relay/RelayTranscriptSemantics.swift")
 production += [core / "RelayAdapter/RelayBridgeMapping.swift"]
 inspection = [root / "ios/ZCodeMobile/Features/ConversationControls.swift", core / "RelayAdapter/RelayRemoteTransport.swift"]
-tests = [root / "scripts/tests/OutboxStateTests.swift", root / "scripts/tests/HostActivityStateTests.swift"]
+tests = [root / "scripts/tests/OutboxStateTests.swift", root / "scripts/tests/HostActivityStateTests.swift", root / "scripts/tests/RelayWorkspaceRecoveryAdapters.swift"]
 contents = {p: p.read_bytes() for p in production + inspection + tests}
 manifest = {str(p.relative_to(root)): hashlib.sha256(data).hexdigest() for p, data in contents.items()}
 started = datetime.now(timezone.utc).isoformat()
@@ -35,8 +37,9 @@ with tempfile.TemporaryDirectory(prefix="zcode-host-activity-tests-") as raw:
             assert text.count("import UIKit") == 1
             assert text.count("private let submissionJournal = SubmissionJournal()") == 1
             text = text.replace("import UIKit", "// Inert test-only platform adapters.")
-            text = text.replace("SubmissionJournal()", "SubmissionJournal(directory: OutboxTestSandbox.directory)")
+            text = text.replace("private let submissionJournal = SubmissionJournal()", "private let submissionJournal = SubmissionJournal(directory: OutboxTestSandbox.directory)")
             text = text.replace("DraftAttachmentJournal()", 'DraftAttachmentJournal(directory: OutboxTestSandbox.directory.appendingPathComponent("draft-attachments"))')
+            text = text.replace("GoalSubmissionJournal()", 'GoalSubmissionJournal(directory: OutboxTestSandbox.directory.appendingPathComponent("pending-goals"))')
         elif source.name == "BridgeClient.swift":
             text = text.split("struct BridgeClient: Sendable {", 1)[0] + "\nextension Date {" + text.split("extension Date {", 1)[1].split("enum CredentialStore {", 1)[0]
         target = temp / source.name
@@ -50,10 +53,13 @@ with tempfile.TemporaryDirectory(prefix="zcode-host-activity-tests-") as raw:
     target = temp / tests[1].name
     target.write_bytes(contents[tests[1]])
     inputs.append(str(target))
+    relay = temp / tests[2].name
+    relay.write_bytes(contents[tests[2]])
+    inputs.append(str(relay))
     compiler = subprocess.run(["xcrun", "--find", "swiftc"], capture_output=True, text=True, check=True).stdout.strip()
     sdk = subprocess.run(["xcrun", "--sdk", "macosx", "--show-sdk-path"], capture_output=True, text=True, check=True).stdout.strip()
     version = subprocess.run([compiler, "--version"], capture_output=True, text=True, check=True).stdout.strip()
-    build = subprocess.run([compiler, "-sdk", sdk, "-swift-version", "6", "-parse-as-library", "-O", "-module-cache-path", str(temp / "module-cache"), *inputs, "-o", str(temp / "activity-tests")], capture_output=True, text=True)
+    build = subprocess.run([compiler, "-sdk", sdk, "-swift-version", "6", "-DHOST_ACTIVITY_STATE_TESTS", "-parse-as-library", "-O", "-module-cache-path", str(temp / "module-cache"), *inputs, "-o", str(temp / "activity-tests")], capture_output=True, text=True)
     if build.returncode:
         print(build.stdout + build.stderr)
         sys.exit(build.returncode)

@@ -11,8 +11,8 @@ struct ConversationControls: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            if let selectedPanel {
-                panel(selectedPanel)
+            if selectedPanel == "goal" {
+                panel("goal")
                     .padding(.horizontal, 38)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
@@ -45,6 +45,10 @@ struct ConversationControls: View {
                             .glassEffect(ZTheme.controlGlass.tint(selectedPanel == "agents" ? .black : .clear).interactive(), in: Capsule())
                             .accessibilityIdentifier("chat.agents")
                             .measureLayout("agents.pill")
+                            .nativeFloatingPanel(isPresented: Binding(
+                                get: { selectedPanel == "agents" },
+                                set: { if !$0, selectedPanel == "agents" { selectedPanel = nil } }
+                            ), preferredWidth: 364) { panel("agents") }
                     }
                 }.padding(.horizontal, 42)
                     .blur(radius: reasoningPresented ? 4 : 0)
@@ -107,35 +111,50 @@ struct ConversationControls: View {
                 Text(store.isReferenceMode ? "已完成" : "主机上的智能体")
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                 ScrollView {
-                    VStack(spacing: 18) {
+                    LazyVStack(spacing: 6) {
                         ForEach(store.agentTasks[sessionID] ?? []) { agent in
                             Button {
                                 if store.isReferenceMode { store.sheet = .agent(agent) }
-                                else { store.path.append(.session(agent.id)) }
+                                else { selectedPanel = nil; store.openAgent(agent, parentID: sessionID) }
                             } label: {
                                 HStack(spacing: 11) {
                                     Circle().fill(ZTheme.agentColors[abs(agent.colorIndex % 4)]).frame(width: 10, height: 10)
                                     VStack(alignment: .leading, spacing: 3) {
-                                        Text(agent.title).font(.system(size: 13, weight: .medium)).foregroundStyle(Color.primary)
-                                        Text(agent.status.label).font(.system(size: 12)).foregroundStyle(.secondary)
+                                        Text(agent.title).font(.system(size: 13, weight: .medium)).foregroundStyle(Color.primary).lineLimit(2)
+                                        Text(agent.statusText ?? agent.status.label).font(.system(size: 12)).foregroundStyle(.secondary)
                                     }
                                     Spacer()
                                     Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                                }.contentShape(Rectangle())
+                                }.frame(minHeight: 44).contentShape(Rectangle())
                             }.buttonStyle(.plain)
+                        }
+                        if !store.isReferenceMode {
+                            if let error = store.agentDirectoryError(sessionID) {
+                                Text(error).font(.footnote).foregroundStyle(.secondary)
+                                Button("重试") { Task { await store.refreshAgents(sessionID) } }
+                            }
+                            if store.loadingAgentDirectories.contains(sessionID) { ProgressView() }
+                            else if store.hostAgents[sessionID]?.nextEndedCursor != nil {
+                                Button("加载更多智能体") { Task { await store.refreshAgents(sessionID, loadMore: true) } }
+                                    .accessibilityIdentifier("agents.loadMore")
+                            }
                         }
                         if !store.isReferenceMode && (store.agentTasks[sessionID] ?? []).isEmpty {
                             Text("主机记录了 \(store.agentCount(sessionID)) 个智能体，正在等待任务详情。")
                                 .font(.footnote).foregroundStyle(.secondary).padding(.vertical, 12)
                         }
-                    }.padding(.vertical, 4)
-                }.frame(maxHeight: 172).scrollClipDisabled()
-            }.padding(12).frame(height: 220, alignment: .top)
-                .clipShape(RoundedRectangle(cornerRadius: 17))
-                .glassEffect(ZTheme.controlGlass, in: RoundedRectangle(cornerRadius: 17))
+                    }
+                }.frame(height: agentListHeight)
+            }.padding(12)
                 .measureLayout("agents.panel")
+                .task { await store.refreshAgents(sessionID) }
         }
     }
+    private var agentListHeight: CGFloat {
+        let count = min(4, (store.agentTasks[sessionID] ?? []).count)
+        return count == 0 ? 64 : CGFloat(count * 44 + max(0, count - 1) * 6)
+    }
+
     private func toggle(_ panel: String) {
         store.haptic()
         selectedPanel = selectedPanel == panel ? nil : panel
@@ -147,33 +166,49 @@ struct GoalEditorView: View {
     @Environment(\.dismiss) private var dismiss
     let sessionID: String?
     @State private var goalText = ""
+    @State private var submitting = false
+    @State private var failure: String?
+    @State private var submission: Task<Void, Never>?
     var body: some View {
         NavigationStack {
             Form {
                 Section("你希望完成什么？") {
-                    TextEditor(text: $goalText).frame(minHeight: 160).accessibilityIdentifier("goal.editor")
+                    TextEditor(text: $goalText).frame(minHeight: 160)
+                        .disabled(submitting).accessibilityIdentifier("goal.editor")
                 }
                 Section {
-                    Text("把目标写清楚，之后可以随时查看、编辑、暂停或继续。")
+                    Text("电脑会围绕这个目标持续工作。开始后可查看进度、暂停或继续；电脑需要保持联网。")
                         .foregroundStyle(.secondary)
+                    if let failure { Text(failure).foregroundStyle(.red).accessibilityIdentifier("goal.error") }
                 }
             }
             .navigationTitle("追求目标").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { submission?.cancel(); dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        guard store.canManageGoals else { return }
-                        if let sessionID {
-                            store.goals[sessionID] = TaskGoal(text: goalText, isPaused: true, elapsed: "尚未开始")
-                        } else {
-                            store.setDraft(goalText, for: "new:\(store.selectedProjectID ?? "")")
+                    Button {
+                        guard !submitting else { return }
+                        submitting = true; failure = nil
+                        submission = Task {
+                            do {
+                                try await store.startGoal(goalText, sessionID: sessionID)
+                                guard !Task.isCancelled else { return }
+                                submitting = false; dismiss()
+                            } catch {
+                                guard !Task.isCancelled else { return }
+                                submitting = false; failure = error.localizedDescription
+                            }
                         }
-                        dismiss()
-                    }.disabled(goalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    } label: {
+                        if submitting { ProgressView() }
+                        else { Text(store.isReferenceMode ? "保存" : "开始") }
+                    }.disabled(submitting || goalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canStartGoal(sessionID))
+                        .accessibilityIdentifier("goal.start")
                 }
             }
-        }.task { goalText = sessionID.flatMap { store.goals[$0]?.text } ?? "" }
+        }
+        .task { goalText = store.pendingGoalText(sessionID) ?? sessionID.flatMap { store.goals[$0]?.text } ?? "" }
+        .onDisappear { submission?.cancel() }
     }
 }
 
@@ -184,7 +219,7 @@ struct AgentDetailView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Label(agent.status.label, systemImage: "checkmark.circle").foregroundStyle(.green)
+                    Label(agent.statusText ?? agent.status.label, systemImage: "checkmark.circle").foregroundStyle(.green)
                     Text(agent.detail).textSelection(.enabled)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
             }.navigationTitle(agent.title).navigationBarTitleDisplayMode(.inline)

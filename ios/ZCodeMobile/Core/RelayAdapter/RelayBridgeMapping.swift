@@ -51,7 +51,8 @@ enum RelayBridgeMapping {
     }
     /// Legacy session/read is the only verified existing-runtime-only child history service.
     /// Visibility metadata, original message IDs and every visible content part are preserved.
-    static func snapshotMessages(_ rows: [RelayJSON]) -> [RelayJSON] {
+    static func snapshotMessages(_ rows: [RelayJSON], sessionID: String? = nil) -> [RelayJSON] {
+        let semantics = RelayTranscriptSemantics.snapshot(rows, sessionID: sessionID)
         func visible(_ value: RelayJSON) -> Bool {
             let semantics = value["semantics"].object != nil ? value["semantics"] : value["metadata"]["semantics"]
             return semantics["uiVisibility"].string != "hidden" && semantics["transcriptVisibility"].string != "hidden" && value["visibility"].string != "model-only" && value["metadata"]["visibility"].string != "model-only"
@@ -72,7 +73,9 @@ enum RelayBridgeMapping {
             }
             guard !text.isEmpty || !reasoning.isEmpty || !tools.isEmpty || !attachments.isEmpty else { return nil }
             let role = info["role"].string ?? "system"
-            return .object(["id": .string(id), "role": .string(["user", "assistant", "system", "tool"].contains(role) ? role : "system"), "text": .string(text), "reasoning": .string(reasoning), "toolCalls": .array(tools), "attachments": .array(attachments), "createdAt": date(info["time"]["created"].number ?? info["time_created"].number), "isStreaming": .bool(false)])
+            var message: [String: RelayJSON] = ["id": .string(id), "role": .string(["user", "assistant", "system", "tool"].contains(role) ? role : "system"), "text": .string(text), "reasoning": .string(reasoning), "toolCalls": .array(tools), "attachments": .array(attachments), "createdAt": date(info["time"]["created"].number ?? info["time_created"].number), "isStreaming": .bool(false)]
+            if let meaning = semantics[id] { message["transcript"] = meaning.wire }
+            return .object(message)
         }
     }
     static func models(_ options: [RelayJSON]) -> RelayJSON {
@@ -87,9 +90,16 @@ enum RelayBridgeMapping {
         if let permissionMode { value["permissionMode"] = .string(permissionMode) }
         return .object(value)
     }
-    static func activity(_ projection: RelayConversationProjection) -> RelayJSON {
-        // Keep the original host keys. Absence is represented by the host's explicit null/empty collections.
-        .object(["goal": projection.raw["goal"], "subagents": projection.raw["subagents"].object != nil ? projection.raw["subagents"] : .object(["revision": .int(0), "childSessionIds": .array([]), "running": .array([]), "endedTotal": .int(0)]), "availability": projection.raw["availability"].object != nil ? projection.raw["availability"] : .object([:]), "rows": .object(["window": .array(projection.rows.filter { $0["kind"].string == "subagent" })]), "revision": .int(projection.revision), "logEpoch": .string(projection.logEpoch), "seq": .int(projection.sequence)])
+    static func activity(_ projection: RelayConversationProjection, directory: RelaySubagentDirectory? = nil, directoryError: String? = nil) -> RelayJSON {
+        var agents = projection.raw["subagents"].object ?? ["revision": .int(0), "childSessionIds": .array([]), "running": .array([]), "endedTotal": .int(0)]
+        if let directory {
+            agents["ended"] = directory.raw["ended"]
+            agents["childSessionIds"] = .array(Array(Set((agents["childSessionIds"]?.array ?? []).compactMap(\.string) + directory.childSessionIDs)).sorted().map(RelayJSON.string))
+            agents["directoryRevision"] = .int(directory.revision)
+        }
+        if let directoryError { agents["directoryError"] = .string(directoryError) }
+        // Directory records stay in their own official collection, not fabricated transcript rows.
+        return .object(["goal": projection.raw["goal"], "subagents": .object(agents), "availability": projection.raw["availability"].object != nil ? projection.raw["availability"] : .object([:]), "rows": .object(["window": .array(projection.rows.filter { $0["kind"].string == "subagent" })]), "revision": .int(projection.revision), "logEpoch": .string(projection.logEpoch), "seq": .int(projection.sequence)])
     }
     static func interaction(_ pending: RelayPendingInteraction, sessionID: String) -> RelayJSON {
         let p = pending.payload
@@ -107,16 +117,20 @@ enum RelayBridgeMapping {
     static func messages(_ projection: RelayConversationProjection, olderRows: [RelayJSON] = []) -> [RelayJSON] {
         var byRow: [Int: RelayJSON] = [:]
         for row in olderRows + projection.rows { if let id = row["rowId"].integer { byRow[id] = row } }
+        let orderedRows = byRow.keys.sorted().compactMap { byRow[$0] }
+        let semantics = RelayTranscriptSemantics.rows(orderedRows, sessionID: projection.sessionID)
         var messages: [[String: RelayJSON]] = [], groups: [String: Int] = [:]
-        for row in byRow.keys.sorted().compactMap({ byRow[$0] }) {
+        for row in orderedRows {
             guard let rowID = row["rowId"].integer, let kind = row["kind"].string else { continue }
             let turn = row["turnId"].string ?? "row-\(rowID)"
             if kind == "userInput" {
                 let role = row["origin"].string == "realUser" ? "user" : "system"
-                messages.append(["id": .string("relay:\(projection.sessionID):user:\(rowID)"), "role": .string(role), "text": row["text"], "createdAt": date(row["createdAt"].number), "isStreaming": .bool(false), "attachments": .array((row["attachments"].array ?? []).compactMap { attachment in
+                var message: [String: RelayJSON] = ["id": .string("relay:\(projection.sessionID):user:\(rowID)"), "role": .string(role), "text": row["text"], "createdAt": date(row["createdAt"].number), "isStreaming": .bool(false), "attachments": .array((row["attachments"].array ?? []).compactMap { attachment in
                     guard let ref = attachment["ref"].string else { return nil }
                     return .object(["id": .string(ref), "fileName": attachment["fileName"], "mimeType": attachment["mime"]])
-                })]); continue
+                })]
+                if let meaning = semantics[rowID] { message["transcript"] = meaning.wire }
+                messages.append(message); continue
             }
             guard ["assistantText", "reasoning", "toolCall", "subagent"].contains(kind) else { continue }
             let identity = row["assistantResponseId"].string ?? "turn:\(turn)"
@@ -124,6 +138,12 @@ enum RelayBridgeMapping {
             let index: Int
             if let existing = groups[key] { index = existing }
             else { index = messages.count; groups[key] = index; messages.append(["id": .string(key), "role": .string("assistant"), "text": .string(""), "reasoning": .string(""), "toolCalls": .array([]), "createdAt": date(row["createdAt"].number), "isStreaming": .bool(false)]) }
+            if let meaning = semantics[rowID] {
+                if let previous = messages[index]["transcript"], previous["turnId"].string != meaning.turnID {
+                    // Preserve original response identity without inventing a turn for ambiguous legacy grouping.
+                    messages[index]["transcript"] = .object(["turnId": .string(key), "state": .string("unknown"), "role": .string("unknown")])
+                } else if messages[index]["transcript"]?["role"].string != "finalAnswer" || meaning.role == .finalAnswer { messages[index]["transcript"] = meaning.wire }
+            }
             if kind == "assistantText" { messages[index]["text"] = .string((messages[index]["text"]?.string ?? "") + (row["text"].string ?? "")) }
             if let target = projection.forkTargets.first(where: { $0.rowId == rowID }) { messages[index]["forkTarget"] = target.wire }
             if kind == "reasoning" { messages[index]["reasoning"] = .string((messages[index]["reasoning"]?.string ?? "") + (row["text"].string ?? "")) }

@@ -127,6 +127,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var reasoning: String? = nil
     var attachments: [MessageAttachment] = []
     var forkTarget: MessageForkTarget?
+    var transcript: TranscriptMessageSemantics? = nil
 }
 
 struct MessageAttachment: Identifiable, Codable, Hashable, Sendable {
@@ -172,6 +173,7 @@ struct AgentTask: Identifiable, Codable, Hashable {
     var status: SessionStatus
     var detail: String
     var colorIndex: Int
+    var statusText: String? = nil
 }
 
 struct TaskGoal: Codable, Hashable {

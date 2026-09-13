@@ -1,6 +1,10 @@
 import Foundation
 import CryptoKit
 
+private enum RelayChildHistoryOperation {
+    @TaskLocal static var sessionID: String?
+}
+
 /// Injectable so the complete client can be exercised without contacting a real account.
 public protocol RelaySocketTransport: Sendable {
     func connect(to url: URL) async throws
@@ -345,7 +349,8 @@ public actor RelayClient {
     func rpc(_ channel: String, _ method: String, _ params: [String: RelayJSON] = [:], timeout: TimeInterval? = nil) async throws -> RelayJSON {
         guard !workspaceOpening else { throw RelayFailure("relay_busy", "Wait for the selected desktop workspace to finish opening.") }
         let target = params["sessionId"]?.string ?? params["taskId"]?.string ?? params["envelope"]?["sessionId"].string
-        if let target, readOnlySubagents.contains(target), !(channel == "zcode-agent" && method == "readSession" && params["runtimePolicy"]?.string == "existing-only") {
+        let childHistorySubscribe = method == "subscribeConversationV4" && target != nil && RelayChildHistoryOperation.sessionID == target
+        if let target, readOnlySubagents.contains(target), !(channel == "zcode-agent" && (method == "readSession" && params["runtimePolicy"]?.string == "existing-only" || childHistorySubscribe)) {
             throw RelayFailure("session_read_only", "Subagent records can only be read through their existing host runtime.")
         }
         try await waitForIPC(); try Task.checkCancellation(); guard let bridge else { throw RelayFailure.closed() }
@@ -395,27 +400,47 @@ public actor RelayClient {
         if result.activeTurnID == nil, !["running", "waiting"].contains(result.status) { stoppedSessions.remove(sessionID) }
         return result
     }
-    /// Child authorization comes from an already loaded original-parent projection.
-    /// Never subscribe/rowsRange/cold-resume a child merely to make its history readable.
-    public func readSubagentSession(_ sessionID: String, parentSessionID: String) async throws -> RelaySessionSnapshot {
+    public func listSubagentDirectory(parentSessionID: String, cursor: String? = nil, limit: Int = 100) async throws -> RelaySubagentDirectory {
+        guard RelayWire.validID(parentSessionID), !readOnlySubagents.contains(parentSessionID), reducers[parentSessionID]?.projection != nil,
+              (1...100).contains(limit), cursor == nil || (!cursor!.isEmpty && cursor!.utf8.count <= 8192) else { throw RelayFailure.invalid("Open the original parent before reading its subagent directory.") }
+        var params: [String: RelayJSON] = ["sessionId": .string(parentSessionID), "endedLimit": .int(limit)]
+        if let cursor { params["endedCursor"] = .string(cursor) }
+        let directory = try RelaySubagentDirectory(raw: await rpc("zcode-agent", "listSessionSubagents", params))
+        guard directory.ended.count <= limit else { throw RelayFailure.invalid("The desktop exceeded the requested subagent page size.") }
+        return directory
+    }
+    /// The optional cold path follows the official child pane: revalidate the host's parent
+    /// directory, materialize its runtime through V4, then read and remove our subscription.
+    /// Host resume hooks may run; no input, model override, registration or child command is sent.
+    public func readSubagentSession(_ sessionID: String, parentSessionID: String, allowColdRestore: Bool = false) async throws -> RelaySessionSnapshot {
         guard RelayWire.validID(sessionID), sessionID != parentSessionID, let selected = bridge,
               let parent = reducers[parentSessionID]?.projection, parent.referencedSubagentIDs.contains(sessionID) else {
             throw RelayFailure("session_not_found", "The selected parent's activity does not reference this subagent.")
         }
         readOnlySubagents.insert(sessionID)
-        let raw: RelayJSON
-        do { raw = try await rpc("zcode-agent", "readSession", ["sessionId": .string(sessionID), "runtimePolicy": .string("existing-only")]) }
+        var raw: RelayJSON
+        let readParams: [String: RelayJSON] = ["sessionId": .string(sessionID), "runtimePolicy": .string("existing-only")]
+        do { raw = try await rpc("zcode-agent", "readSession", readParams) }
         catch let failure as RelayFailure where failure.code == "desktop_rpc_error" {
-            throw RelayFailure("relay_subagent_history_unavailable", "The host has no readable active runtime for this subagent. Loading a cold record would restore a runtime, so open it on the computer.")
+            guard allowColdRestore else { throw RelayFailure("relay_subagent_history_unavailable", "The host has no readable active runtime for this subagent.") }
+            // The ordinary session list contains roots only. The parent's dedicated directory
+            // reads its persisted relationships and admits only actual subagent_child records.
+            let directory = try await listSubagentDirectory(parentSessionID: parentSessionID)
+            guard bridge == selected, directory.childSessionIDs.contains(sessionID) else { throw RelayFailure("relay_subagent_scope_mismatch", "The desktop no longer lists this child under the selected parent.") }
+            raw = try await RelayChildHistoryOperation.$sessionID.withValue(sessionID) {
+                _ = try await subscribe(sessionID: sessionID, resume: false)
+                do {
+                    let snapshot = try await rpc("zcode-agent", "readSession", readParams)
+                    try await unsubscribe(sessionID: sessionID)
+                    return snapshot
+                } catch {
+                    try? await unsubscribe(sessionID: sessionID)
+                    throw error
+                }
+            }
         }
-        let result = try RelaySessionSnapshot(raw: raw), workspace = raw["session"]["workspace"]
-        guard bridge == selected, result.sessionID == sessionID, raw["session"]["sessionKind"].string == "subagent_child",
-              raw["session"]["parentSessionId"].string == parentSessionID,
-              workspace["workspacePath"].string == selected.workspacePath,
-              workspace["workspaceIdentity"].string == selected.workspaceIdentity,
-              workspace["remoteSessionId"].string == selected.remoteSessionId else {
-            throw RelayFailure("relay_subagent_scope_mismatch", "The host's subagent ancestry or workspace differs from the parent's activity.")
-        }
+        let result = try RelaySessionSnapshot(raw: raw)
+        try validateSubagentIdentity(raw["session"], sessionID: sessionID, parentSessionID: parentSessionID, selected: selected)
         guard raw["messages"].array != nil, result.messages.allSatisfy({ ($0["info"]["messageId"].string ?? $0["info"]["id"].string)?.isEmpty == false }) else {
             throw RelayFailure.invalid("The host omitted subagent history or original message identities.")
         }
@@ -426,10 +451,18 @@ public actor RelayClient {
         }
         return result
     }
+    private func validateSubagentIdentity(_ session: RelayJSON, sessionID: String, parentSessionID: String, selected: RelayBridge) throws {
+        let workspace = session["workspace"]
+        guard bridge == selected, session["sessionId"].string == sessionID, session["sessionKind"].string == "subagent_child",
+              session["parentSessionId"].string == parentSessionID,
+              workspace["workspacePath"].string == selected.workspacePath,
+              workspace["workspaceIdentity"].string == selected.workspaceIdentity,
+              workspace["remoteSessionId"].string == selected.remoteSessionId else { throw RelayFailure("relay_subagent_scope_mismatch", "The host's subagent ancestry or workspace differs from the parent's activity.") }
+    }
     public func currentProjection(sessionID: String) -> RelayConversationProjection? { reducers[sessionID]?.projection }
     public func subscribe(sessionID: String, resume: Bool = true) async throws -> RelaySubscription {
         guard !workspaceOpening else { throw RelayFailure("relay_busy", "Wait for the selected desktop workspace to finish opening.") }
-        guard !readOnlySubagents.contains(sessionID) else { throw RelayFailure("session_read_only", "Subagent history uses an existing-runtime read, not a new conversation subscription.") }
+        guard !readOnlySubagents.contains(sessionID) || RelayChildHistoryOperation.sessionID == sessionID else { throw RelayFailure("session_read_only", "A child can only be opened through its verified parent history.") }
         guard !sessionID.isEmpty, subscriptionRequests.insert(sessionID).inserted else { throw RelayFailure("relay_subscription_in_progress", "This task subscription is already opening.") }
         defer { subscriptionRequests.remove(sessionID) }
         try await waitForIPC(); guard let bridge else { throw RelayFailure.closed() }
@@ -577,9 +610,12 @@ public actor RelayClient {
         if ["requestWorkspaceHookReview", "respondWorkspaceHookReview", "toggleWorkspaceHookReviewItem", "revokeWorkspaceHookTrust"].contains(command.type) {
             try validateHookReviewCommand(command, authorization: hookReviewAuthorization); return
         }
-        let keys: [String: Set<String>] = ["sendText": ["text", "attachments", "requestedDelivery"], "stop": ["expectedForegroundExecutionId"], "forkAssistant": ["target"], "renameSession": ["title"], "resolveInteraction": ["interactionId", "answer"], "switchModelConfig": ["provider", "model", "thought"], "switchCollaborationMode": ["mode"], "pauseGoal": [], "resumeGoal": []]
+        let keys: [String: Set<String>] = ["sendText": ["text", "attachments", "requestedDelivery"], "sendGoalCommand": ["text", "displayText"], "stop": ["expectedForegroundExecutionId"], "forkAssistant": ["target"], "renameSession": ["title"], "resolveInteraction": ["interactionId", "answer"], "switchModelConfig": ["provider", "model", "thought"], "switchCollaborationMode": ["mode"], "pauseGoal": [], "resumeGoal": []]
         guard let allowed = keys[command.type], Set(payload.keys).isSubset(of: allowed) else { throw RelayFailure("relay_command_unsupported", "This command or payload field is not exposed by the native adapter.") }
         switch command.type {
+        case "sendGoalCommand":
+            guard let text = payload["text"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 128_000,
+                  payload["displayText"]?.string == "/goal " + text else { throw RelayFailure.invalid("A goal requires objective text and its matching command display.") }
         case "sendText":
             guard let text = payload["text"]?.string, text.utf8.count <= 128_000, payload["attachments"]?.array.map({ $0.count <= 6 }) ?? (payload["attachments"] == nil) else { throw RelayFailure.invalid("Invalid message or attachments.") }
             if let delivery = payload["requestedDelivery"], !["startNow", "queue", "guide"].contains(delivery.string ?? "") { throw RelayFailure.invalid("Unsupported message delivery mode.") }
@@ -717,6 +753,18 @@ public actor RelayClient {
     }
     public func resumeGoal(sessionID: String, commandID: String, explicitUserAction: Bool) async throws -> RelayCommandAck {
         try await submit(makeCommand(sessionID: sessionID, type: "resumeGoal", payload: .object([:]), commandID: commandID), explicitUserAction: explicitUserAction)
+    }
+    public func makeGoalCommand(sessionID: String, text: String, commandID: String) throws -> RelayCommandEnvelope {
+        let objective = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !readOnlySubagents.contains(sessionID), let projection = reducers[sessionID]?.projection else { throw RelayFailure("goal_start_unavailable", "Open an ordinary task before starting a goal.") }
+        guard !objective.isEmpty, objective.utf8.count <= 128_000 else { throw RelayFailure("goal_start_invalid", "A goal needs a nonempty objective of at most 128 KB.") }
+        guard projection.config["mode"].string != "plan" else { throw RelayFailure("goal_plan_mode", "请先关闭方案模式，再开始追求目标。") }
+        guard !projection.canStop, projection.pendingInteractions.isEmpty, projection.hostGoal?.isActive != true,
+              !["running", "prewarming"].contains(projection.phase) else { throw RelayFailure("goal_start_unavailable", "请先停止或暂停当前任务，再设置新的目标。") }
+        return makeCommand(sessionID: sessionID, type: "sendGoalCommand", payload: .object(["text": .string(objective), "displayText": .string("/goal " + objective)]), commandID: commandID)
+    }
+    public func startGoal(sessionID: String, text: String, commandID: String, explicitUserAction: Bool) async throws -> RelayCommandAck {
+        try await submit(makeGoalCommand(sessionID: sessionID, text: text, commandID: commandID), explicitUserAction: explicitUserAction)
     }
     public func removeGoal(sessionID: String) throws {
         throw RelayFailure("goal_remove_unsupported", "The verified desktop protocol has no goal removal command.")

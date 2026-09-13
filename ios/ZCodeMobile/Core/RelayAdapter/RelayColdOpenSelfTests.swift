@@ -98,11 +98,11 @@ private struct ColdFixture {
         let value: RelayJSON = try await f.adapter.get("v1/sessions/" + childID)
         await f.socket.setSubagentUnavailable(childID, value: true)
         var coldError: String?
-        do { let _: RelayJSON = try await f.adapter.get("v1/sessions/" + childID) } catch { coldError = (error as? BridgeFailure)?.code }
+        do { _ = try await f.client.readSubagentSession(childID, parentSessionID: session) } catch { coldError = (error as? RelayFailure)?.code }
         let childCalls = await f.socket.serviceCalls.filter { $0["params"]["sessionId"].string == childID }
         var evidence = await facts(f); evidence["childCalls"] = .array(childCalls); evidence["coldChildError"] = coldError.map(RelayJSON.string) ?? .null
         let onlyRead = childCalls.count == 2 && childCalls.allSatisfy { $0["method"].string == "readSession" && $0["channel"].string == "zcode-agent" && $0["params"]["runtimePolicy"].string == "existing-only" && $0["params"]["messageLimit"] == .null }
-        let answer = result("child_stays_existing_only_and_cold_child_is_not_resumed", passed: parent.error == nil && value["messages"].array?.first?["text"].string == "Existing child history" && value["session"]["capabilities"]["send"].bool == false && coldError == "relay_subagent_history_unavailable" && onlyRead && evidence["subscribeCalls"]?.integer == 1 && evidence["commandCalls"]?.integer == 0, facts: evidence)
+        let answer = result("warm_child_read_and_default_core_read_remain_existing_only", passed: parent.error == nil && value["messages"].array?.first?["text"].string == "Existing child history" && value["session"]["capabilities"]["send"].bool == false && coldError == "relay_subagent_history_unavailable" && onlyRead && evidence["subscribeCalls"]?.integer == 1 && evidence["commandCalls"]?.integer == 0, facts: evidence)
         await f.close(); return answer
     }
     static func main() async throws {

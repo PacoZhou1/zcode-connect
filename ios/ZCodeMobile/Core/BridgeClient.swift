@@ -177,6 +177,7 @@ struct BridgeMessage: Decodable, Sendable {
     var reasoning: String?
     var attachments: [MessageAttachment]?
     var forkTarget: MessageForkTarget?
+    var transcript: TranscriptMessageSemantics?
     var local: ChatMessage {
         ChatMessage(id: id, role: ChatMessage.Role(rawValue: role) ?? .system,
                     text: text, createdAt: Date.fromBridge(createdAt),
@@ -186,7 +187,7 @@ struct BridgeMessage: Decodable, Sendable {
                                  status: ["running", "in_progress"].contains($0.status) ? .running :
                                     (["error", "failed", "rejected"].contains($0.status) ? .failed : .completed))
                     },
-                    isStreaming: isStreaming, reasoning: reasoning, attachments: attachments ?? [], forkTarget: forkTarget)
+                    isStreaming: isStreaming, reasoning: reasoning, attachments: attachments ?? [], forkTarget: forkTarget, transcript: transcript)
     }
 }
 

@@ -38,7 +38,6 @@ struct ComposerView: View {
         "\(store.isReferenceMode)|\(store.activeProfileID ?? "unconnected")|\(store.activeProfile?.baseURL ?? "")|\(draftKey)"
     }
     private var expanded: Bool { focused || !text.isEmpty || !attachments.isEmpty || sessionID == nil }
-    private var hasDraftContent: Bool { !text.isEmpty || !attachments.isEmpty }
     private var canSend: Bool {
         (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) && !submitting
             && !isRunning && (sessionID.map { !store.sendingSessions.contains($0) } ?? true)
@@ -71,10 +70,6 @@ struct ComposerView: View {
                     reasoningPanel
                 }
             }
-        }
-        .anchorPreference(key: FloatingPanelPreference.self, value: .bounds) { anchor in
-            showAttachmentMenu ? FloatingPanelPresentation(anchor: anchor, content: AnyView(attachmentPanel),
-                                                           dismiss: { showAttachmentMenu = false }) : nil
         }
         .padding(.horizontal, expanded ? 12 : 38)
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: expanded)
@@ -351,21 +346,19 @@ struct ComposerView: View {
         Button {
             if isRunning, let sessionID { Task { await store.stop(sessionID) } }
             else if canSend { submit() }
-            else if sessionID != nil && !hasDraftContent { focused = false; store.sheet = .voice }
         } label: {
             Group {
                 if sessionID.map({ store.stoppingSessions.contains($0) }) ?? false { ProgressView().tint(.white) }
                 else if isRunning { Image(systemName: "stop.fill").font(.system(size: 14)) }
                 else if submitting { ProgressView().tint(.white) }
-                else if hasDraftContent || sessionID == nil { Image(systemName: "arrow.up").font(.system(size: 22, weight: .semibold)) }
-                else { VoiceBarsGlyph().stroke(style: StrokeStyle(lineWidth: 2.2, lineCap: .round)).frame(width: 20, height: 22) }
+                else { Image(systemName: "arrow.up").font(.system(size: 22, weight: .semibold)) }
             }
             .foregroundStyle(.white).frame(width: 34, height: 34)
-            .background((!isRunning && (hasDraftContent || sessionID == nil) && !canSend) ? Color.gray.opacity(0.28) : ZTheme.accent, in: Circle())
+            .background(!isRunning && !canSend ? Color.gray.opacity(0.28) : ZTheme.accent, in: Circle())
         }
         .disabled(isRunning ? (sessionID.map { store.stoppingSessions.contains($0) } ?? false)
-                  : submitting || (sessionID.map { store.sendingSessions.contains($0) } ?? false) || ((hasDraftContent || sessionID == nil) && !canSend))
-        .accessibilityLabel(isRunning ? "停止任务" : (hasDraftContent || sessionID == nil) ? "发送消息" : "语音模式")
+                  : !canSend)
+        .accessibilityLabel(isRunning ? "停止任务" : "发送消息")
         .accessibilityIdentifier("composer.send").accessibilityHidden(voiceActive)
     }
 
@@ -375,6 +368,7 @@ struct ComposerView: View {
         }
         .disabled(attachmentDraftIdentity != draftIdentity)
         .tint(.primary).accessibilityLabel("添加附件或模式").accessibilityIdentifier("composer.add").accessibilityHidden(voiceActive)
+        .nativeFloatingPanel(isPresented: $showAttachmentMenu, preferredWidth: 320) { attachmentPanel }
     }
 
     private var attachmentPanel: some View {
@@ -384,7 +378,7 @@ struct ComposerView: View {
                         if isPlanMode && permission == .full && !store.isReferenceMode { confirmPlanExit = true }
                         else { setPlanMode(!isPlanMode) }
                     }
-                    attachmentAction("追求目标", symbol: "scope", enabled: store.canManageGoals) { showGoalEditor = true }
+                    attachmentAction("追求目标", symbol: "scope", enabled: store.canStartGoal(sessionID)) { showGoalEditor = true }
                     attachmentAction("文件", symbol: "paperclip") { showFiles = true }
                     attachmentAction("相机", symbol: "camera") {
                         if UIImagePickerController.isSourceTypeAvailable(.camera) { showCamera = true }
@@ -393,14 +387,15 @@ struct ComposerView: View {
                     attachmentAction("照片", symbol: "photo.on.rectangle") { showPhotos = true }
                     if store.isReferenceMode {
                         Text("插件").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                            .padding(.horizontal, 28).padding(.top, 18).padding(.bottom, 0)
+                            .padding(.horizontal, 28).padding(.top, 18)
                         attachmentAction("Documents", symbol: "doc.text.fill", rowHeight: 44) { showFiles = true }
-                    } else if !store.canManageGoals {
-                        Text("主机暂未提供目标控制").font(.footnote).foregroundStyle(.secondary)
-                            .padding(.horizontal, 28).padding(.bottom, 20)
+                    } else if !store.canStartGoal(sessionID) {
+                        Text(store.connection.isOnline ? "请在可控制的任务中设置目标。" : "连接电脑后可以设置目标。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .padding(.horizontal, 28).padding(.top, 4).padding(.bottom, 8)
                     }
                 }.padding(.top, 10)
-            }.frame(width: 320, height: 420)
+            }.frame(height: 420.666667)
                 .accessibilityIdentifier("composer.attachmentsPanel")
     }
 
@@ -426,7 +421,7 @@ struct ComposerView: View {
                     .background(symbol == "doc.text.fill" ? Color.clear : Color.primary.opacity(0.045), in: Circle())
                 Text(title).font(.system(size: 20))
                 Spacer(minLength: 0)
-            }.padding(.horizontal, 28).frame(height: rowHeight).contentShape(Rectangle())
+            }.padding(.horizontal, 28).frame(minHeight: rowHeight).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(!enabled)
     }
 

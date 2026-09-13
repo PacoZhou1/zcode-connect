@@ -5,9 +5,10 @@ import CryptoKit
 @MainActor final class UIPasteboard { static let general = UIPasteboard(); var string: String? }
 @MainActor final class UISelectionFeedbackGenerator { func selectionChanged() {} }
 @MainActor enum CredentialStore {
-    static func read(_ id: String) -> String? { "synthetic-test-token" }
-    static func save(_ value: String, id: String) throws {}
-    static func remove(_ id: String) {}
+    static var values: [String: String] = [:]
+    static func read(_ id: String) -> String? { values[id] ?? "synthetic-test-token" }
+    static func save(_ value: String, id: String) throws { values[id] = value }
+    static func remove(_ id: String) { values[id] = nil }
 }
 @MainActor enum OutboxTestSandbox { static var directory = URL(fileURLWithPath: "/invalid-unconfigured-test-directory") }
 
@@ -30,7 +31,7 @@ struct TestEvent: Sendable { let envelope: BridgeEnvelope; let delivered: Checke
     static var created = 0
     static var uploaded = 0
     static var drafts: [String: String] = [:]
-    static func reset() { requests = []; handler = nil; eventExitHandler = nil; subscribers = [:]; eventSubscriptions = [:]; status = "idle"; title = "Synthetic task"; created = 0; uploaded = 0; drafts = [:] }
+    static func reset() { requests = []; handler = nil; eventExitHandler = nil; subscribers = [:]; eventSubscriptions = [:]; status = "idle"; title = "Synthetic task"; created = 0; uploaded = 0; drafts = [:]; CredentialStore.values = [:] }
     static func session(_ id: String = "S", status: String? = nil, title: String? = nil) -> JSONValue {
         .object(["id": .string(id), "title": .string(title ?? self.title), "projectId": .string("P"),
                  "projectName": .string("Synthetic project"), "status": .string(status ?? self.status),

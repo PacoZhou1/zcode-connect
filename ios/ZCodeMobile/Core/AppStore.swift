@@ -33,6 +33,12 @@ final class AppStore {
     var hostGoals: [String: RelayHostGoal] = [:]
     var hostAgents: [String: RelayHostAgents] = [:]
     var changingGoals: Set<String> = []
+    @ObservationIgnored private var goalStarts: Set<String> = []
+    private var childSessions: [String: RemoteSession] = [:]
+    @ObservationIgnored private var openedAgentParents: [String: String] = [:]
+    private(set) var loadingAgentDirectories: Set<String> = []
+    private var agentDirectoryErrors: [String: String] = [:]
+
     @ObservationIgnored private var changingHookReviews: Set<String> = []
     var hasConnectedBefore = false
     var requiresInitialConnection: Bool { !isReferenceMode && !hasConnectedBefore }
@@ -82,14 +88,25 @@ final class AppStore {
     @ObservationIgnored private var eventCursor: String?
     @ObservationIgnored private var connectionEpoch = UUID()
     @ObservationIgnored private var relayConnectionAttempt = UUID()
+    @ObservationIgnored private var automaticConnectionTask: Task<Void, Never>?
+    @ObservationIgnored private var automaticConnectionGeneration = UUID()
+    @ObservationIgnored private var automaticConnectionAttempt = 0
+    @ObservationIgnored private var automaticConnectionBlocks: [String: String] = [:]
+    @ObservationIgnored private var isApplicationActive = true
+    @ObservationIgnored private var didStart = false
+    @ObservationIgnored private var connectedAt: Date?
+    @ObservationIgnored private let reconnectDelay: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private var uploadedAttachments: [String: String] = [:]
     @ObservationIgnored private var localTitles: [String: String] = [:]
     @ObservationIgnored private var pinnedIDs: Set<String> = []
     @ObservationIgnored private var archivedIDs: Set<String> = []
     @ObservationIgnored private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard,
+         reconnectDelay: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.defaults = defaults
+        self.reconnectDelay = reconnectDelay
+        automaticConnectionBlocks = defaults.dictionary(forKey: "automaticConnectionBlocks") as? [String: String] ?? [:]
         profiles = decode([ConnectionProfile].self, key: "connections") ?? []
         hasConnectedBefore = defaults.object(forKey: "hasConnectedBefore") == nil
             ? !profiles.isEmpty : defaults.bool(forKey: "hasConnectedBefore")
@@ -114,6 +131,9 @@ final class AppStore {
             if let index = args.firstIndex(of: "--screen"), args.count > index + 1 {
                 switch args[index + 1] {
                 case "chat", "goal", "agents", "keyboard", "reasoning", "permissions", "attachments", "thread-menu", "rename":
+                    path = [.session(ReferenceData.conversationID)]
+                case "turn-review":
+                    transcripts[ReferenceData.conversationID] = ReferenceData.transcriptReviewMessages
                     path = [.session(ReferenceData.conversationID)]
                 case "new", "voice": path = [.newSession]
                 case "hooks", "hooks-expired":
@@ -160,6 +180,8 @@ final class AppStore {
     var canManageGoals: Bool { isReferenceMode }
 
     func start() async {
+        guard !didStart else { return }
+        didStart = true
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--bridge-acceptance"),
            let token = ProcessInfo.processInfo.environment["ZCODE_ACCEPTANCE_TOKEN"] {
@@ -177,13 +199,130 @@ final class AppStore {
             return
         }
         #endif
-        guard !isReferenceMode, let profile = activeProfile else { return }
-        guard !profile.isRelay else { return }
-        await connect(profile)
+        await restoreSavedConnection()
+    }
+
+    func applicationDidBecomeActive() async {
+        let wasActive = isApplicationActive
+        isApplicationActive = true
+        if !wasActive { automaticConnectionAttempt = 0 }
+        guard !isReferenceMode else { return }
+        if let task = automaticConnectionTask { await task.value; return }
+        if connection.isOnline, client != nil {
+            await refresh()
+            if connection.isOnline, let id = currentSessionID { await loadTranscript(id) }
+        } else { await restoreSavedConnection() }
+    }
+
+    func applicationDidEnterBackground() {
+        isApplicationActive = false
+        let wasRestoring = automaticConnectionTask != nil
+        cancelAutomaticConnection()
+        // Keep a healthy transport attached. Only an unfinished automatic attempt
+        // is cancelled; desktop tasks never receive stop/abort from lifecycle code.
+        if wasRestoring, connection == .connecting, relayWorkspaceSelection == nil { tearDownConnection() }
+    }
+
+    private func cancelAutomaticConnection() {
+        automaticConnectionGeneration = UUID()
+        automaticConnectionTask?.cancel()
+        automaticConnectionTask = nil
+    }
+
+    private func setAutomaticConnectionBlock(_ reason: String?, profileID: String) {
+        automaticConnectionBlocks[profileID] = reason
+        defaults.set(automaticConnectionBlocks, forKey: "automaticConnectionBlocks")
+    }
+
+    private static func retryableConnectionFailure(_ error: Error) -> Bool {
+        let code = (error as? RelayFailure)?.code ?? (error as? BridgeFailure)?.code
+        if let code {
+            return ["relay_transport_failed", "relay_disconnected", "relay_pairing_timeout", "relay_desktop_unpaired",
+                    "relay_heartbeat_timeout", "relay_request_timeout", "relay_rpc_timeout"].contains(code)
+        }
+        let failure = error as NSError
+        guard failure.domain == NSURLErrorDomain else { return false }
+        return [URLError.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
+                .dnsLookupFailed, .notConnectedToInternet, .internationalRoamingOff, .callIsActive,
+                .dataNotAllowed].contains(URLError.Code(rawValue: failure.code))
+    }
+
+    private func relayConnectionFailed(_ error: Error, profile: ConnectionProfile, reportFailure: Bool) {
+        tearDownConnection()
+        let code = (error as? RelayFailure)?.code ?? (error as? BridgeFailure)?.code ?? "connection_failed"
+        let message = code == "controller_replaced"
+            ? "另一台手机已接管连接。自动重连已暂停，你可以在连接页面手动重新连接。"
+            : Self.connectionErrorMessage(error)
+        if !Self.retryableConnectionFailure(error) { setAutomaticConnectionBlock(code, profileID: profile.id) }
+        connection = .failed(message)
+        if reportFailure || !Self.retryableConnectionFailure(error) { errorMessage = message }
+    }
+
+    private func restoreSavedConnection() async {
+        guard !isReferenceMode, isApplicationActive, let profile = activeProfile,
+              automaticConnectionBlocks[profile.id] == nil, relayWorkspaceSelection == nil else { return }
+        if let task = automaticConnectionTask { await task.value; return }
+        guard !connection.isOnline, connection != .connecting else { return }
+        guard profile.isRelay else { await connect(profile); return }
+        let delays: [Duration] = [.zero, .seconds(2), .seconds(5), .seconds(10)]
+        guard automaticConnectionAttempt < delays.count else { return }
+        let generation = automaticConnectionGeneration
+        let retainedPath = path
+        automaticConnectionTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if generation == self.automaticConnectionGeneration { self.automaticConnectionTask = nil } }
+            while !Task.isCancelled, generation == self.automaticConnectionGeneration,
+                  self.isApplicationActive, self.activeProfile == profile,
+                  self.automaticConnectionBlocks[profile.id] == nil,
+                  self.automaticConnectionAttempt < delays.count {
+                let delay = delays[self.automaticConnectionAttempt]
+                self.automaticConnectionAttempt += 1
+                do { if delay != .zero { try await self.reconnectDelay(delay) } }
+                catch { return }
+                guard !Task.isCancelled, generation == self.automaticConnectionGeneration,
+                      self.isApplicationActive, self.activeProfile == profile else { return }
+                do {
+                    // A saved device/workspace is already authorized for restoration.
+                    // This never scans a new QR or silently substitutes a workspace.
+                    try await self.connectSavedRelay(profile, reportFailure: false)
+                    guard !Task.isCancelled, generation == self.automaticConnectionGeneration else { return }
+                    if self.connection.isOnline, self.activeProfileID == profile.id {
+                        self.path = retainedPath
+                        if let id = self.currentSessionID { await self.loadTranscript(id) }
+                    }
+                    return
+                } catch {
+                    guard !Task.isCancelled, generation == self.automaticConnectionGeneration,
+                          self.activeProfile == profile else { return }
+                    if error is CancellationError { return }
+                    if self.relayWorkspaceSelection != nil { return }
+                    self.relayConnectionFailed(error, profile: profile, reportFailure: false)
+                    guard Self.retryableConnectionFailure(error) else { return }
+                }
+            }
+        }
+        await automaticConnectionTask?.value
+    }
+
+    private func relayStreamEnded(_ error: Error, epoch: UUID) {
+        guard epoch == connectionEpoch, let profile = activeProfile, profile.isRelay else { return }
+        // Brief successful handshakes do not replenish the retry budget. A stable
+        // connection or a new foreground visit may start a new bounded cycle.
+        if let connectedAt, Date().timeIntervalSince(connectedAt) >= 30 { automaticConnectionAttempt = 1 }
+        relayConnectionFailed(error, profile: profile, reportFailure: false)
+        guard Self.retryableConnectionFailure(error), isApplicationActive else { return }
+        let generation = automaticConnectionGeneration
+        Task { [weak self] in
+            guard let self, generation == self.automaticConnectionGeneration else { return }
+            if let task = self.automaticConnectionTask { await task.value }
+            guard generation == self.automaticConnectionGeneration else { return }
+            await self.restoreSavedConnection()
+        }
     }
 
     func enterReferenceMode() {
-        disconnect()
+        cancelAutomaticConnection()
+        tearDownConnection()
         isReferenceMode = true
         localUnreadIDs = []; locallyReadTimestamps = [:]
         hostName = "Example-Mac.local"
@@ -201,7 +340,8 @@ final class AppStore {
     }
 
     func leaveReferenceMode() {
-        disconnect()
+        cancelAutomaticConnection()
+        tearDownConnection()
         isReferenceMode = false
         referenceReview = false
         sessions = []
@@ -213,6 +353,7 @@ final class AppStore {
         hostName = activeProfile?.name ?? "你的电脑"
         options = SessionOptions()
         path = []
+        didStart = false
         Task { await start() }
     }
 
@@ -226,7 +367,8 @@ final class AppStore {
             return
         }
         guard !profile.isRelay || confirmedControllerReplacement else { return }
-        disconnect()
+        cancelAutomaticConnection()
+        tearDownConnection()
         isReferenceMode = false; referenceReview = false
         activeProfileID = profile.id
         hostName = profile.name
@@ -247,38 +389,30 @@ final class AppStore {
     func connect(_ profile: ConnectionProfile, token: String? = nil, confirmedControllerReplacement: Bool = false) async {
         if profile.isRelay {
             guard confirmedControllerReplacement else { return }
-            guard let raw = token ?? CredentialStore.read(profile.id), let workspace = profile.relayWorkspaceKey else {
-                errorMessage = "连接信息已失效，请重新扫描电脑上的二维码。"; return
-            }
-            let attempt = UUID()
+            cancelAutomaticConnection()
+            automaticConnectionAttempt = 0
+            setAutomaticConnectionBlock(nil, profileID: profile.id)
+            let generation = automaticConnectionGeneration
             do {
-                let context = try await beginRelayPairing(raw, confirmedControllerReplacement: true, attempt: attempt, reportFailure: true)
-                guard isCurrentRelaySelection(context) else { return }
-                if !relayWorkspaces.contains(where: { $0.id == workspace && $0.canAttach }) {
-                    offerRelayWorkspaceSelection(context, name: profile.name)
-                    sheet = .pairing
-                    return
-                }
-                try await completeRelayPairing(workspaceKey: workspace, name: profile.name, context: context, reportFailure: true)
+                try await connectSavedRelay(profile, token: token, reportFailure: true)
             } catch {
-                if error is CancellationError { return }
-                guard relayConnectionAttempt == attempt else { return }
+                guard generation == automaticConnectionGeneration, !(error is CancellationError) else { return }
                 if (error as? BridgeFailure)?.code == "relay_workspace_unavailable", relayWorkspaceSelection != nil {
                     sheet = .pairing
                     return
                 }
-                disconnect()
-                let message = Self.connectionErrorMessage(error)
-                connection = .failed(message); errorMessage = message
+                relayConnectionFailed(error, profile: profile, reportFailure: true)
             }
             return
         }
+        cancelAutomaticConnection()
+        setAutomaticConnectionBlock(nil, profileID: profile.id)
         guard let url = Self.validatedURL(profile.baseURL),
               let secret = token ?? CredentialStore.read(profile.id), !secret.isEmpty else {
             connection = .failed("请检查连接地址和密钥。")
             return
         }
-        disconnect()
+        tearDownConnection()
         let epoch = connectionEpoch
         connection = .connecting
         if let pin = profile.certificateSHA256,
@@ -317,14 +451,29 @@ final class AppStore {
             connection = .connected
             try await loadRemoteIndex()
             guard epoch == connectionEpoch else { return }
+            connectedAt = Date()
             beginStreaming()
         } catch {
             guard epoch == connectionEpoch else { return }
-            disconnect()
+            tearDownConnection()
             let message = Self.connectionErrorMessage(error)
             connection = .failed(message)
             errorMessage = message
         }
+    }
+
+    private func connectSavedRelay(_ profile: ConnectionProfile, token: String? = nil, reportFailure: Bool) async throws {
+        guard let raw = token ?? CredentialStore.read(profile.id), let workspace = profile.relayWorkspaceKey else {
+            throw BridgeFailure(message: "连接信息已失效，请重新扫描电脑上的二维码。", code: "relay_credentials_unavailable")
+        }
+        let context = try await pairRelay(raw, confirmedControllerReplacement: true, attempt: UUID(), reportFailure: reportFailure)
+        guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+        if !relayWorkspaces.contains(where: { $0.id == workspace && $0.canAttach }) {
+            offerRelayWorkspaceSelection(context, name: profile.name)
+            sheet = .pairing
+            return
+        }
+        try await completeRelayPairing(workspaceKey: workspace, name: profile.name, context: context, reportFailure: reportFailure)
     }
 
     private static func connectionErrorMessage(_ error: Error) -> String {
@@ -360,7 +509,7 @@ final class AppStore {
 
     private func failRelaySelection(_ error: Error, context: RelayWorkspaceSelectionContext, reportFailure: Bool = false) {
         guard isCurrentRelaySelection(context) else { return }
-        disconnect()
+        tearDownConnection()
         guard !(error is CancellationError) else { return }
         let message = Self.connectionErrorMessage(error)
         connection = .failed(message)
@@ -393,6 +542,15 @@ final class AppStore {
         guard confirmedControllerReplacement else { throw BridgeFailure(message: "请先确认连接这台电脑。", code: "controller_confirmation_required") }
         guard !Task.isCancelled else { throw CancellationError() }
         disconnect()
+        return try await pairRelay(raw, confirmedControllerReplacement: confirmedControllerReplacement, attempt: attempt, reportFailure: reportFailure, pairing: pairing)
+    }
+
+    private func pairRelay(_ raw: String, confirmedControllerReplacement: Bool, attempt: UUID,
+                           reportFailure: Bool, pairing parsed: RelayPairing? = nil) async throws -> RelayWorkspaceSelectionContext {
+        let pairing = try parsed ?? RelayPairing(scannedURL: raw)
+        guard confirmedControllerReplacement else { throw BridgeFailure(message: "请先确认连接这台电脑。", code: "controller_confirmation_required") }
+        guard !Task.isCancelled else { throw CancellationError() }
+        tearDownConnection()
         relayConnectionAttempt = attempt
         let context = RelayWorkspaceSelectionContext(attempt: attempt, epoch: connectionEpoch, name: pairing.deviceName, reason: "")
         connection = .connecting
@@ -458,6 +616,9 @@ final class AppStore {
             connection = .connected
             try await loadRemoteIndex()
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+            connectedAt = Date()
+            if automaticConnectionTask == nil { automaticConnectionAttempt = 1 }
+            setAutomaticConnectionBlock(nil, profileID: profile.id)
             relayWorkspaceSelection = nil
             beginStreaming()
         } catch {
@@ -493,6 +654,12 @@ final class AppStore {
     }
 
     func disconnect() {
+        cancelAutomaticConnection()
+        if !isReferenceMode, let profile = activeProfile { setAutomaticConnectionBlock("manual_disconnect", profileID: profile.id) }
+        tearDownConnection()
+    }
+
+    private func tearDownConnection() {
         connectionEpoch = UUID()
         relayConnectionAttempt = UUID()
         streamTask?.cancel()
@@ -522,11 +689,13 @@ final class AppStore {
         goals = [:]; hostGoals = [:]; hostAgents = [:]; agentTasks = [:]
         indexRequest = UUID()
         eventRevision = 0
+        connectedAt = nil
         connection = .disconnected
         sessionListTruncated = false
         sendingSessions = []
         stoppingSessions = []
         changingGoals = []
+        loadingAgentDirectories = []; agentDirectoryErrors = [:]
         rejectedSubmissionIDs = []
     }
 
@@ -547,7 +716,7 @@ final class AppStore {
 
     func refresh() async {
         guard !isReferenceMode else { return }
-        if client == nil, let activeProfile { await connect(activeProfile); return }
+        if client == nil { await restoreSavedConnection(); return }
         let request = UUID()
         refreshRequest = request
         isLoading = true
@@ -559,8 +728,8 @@ final class AppStore {
             connection = .connected
         } catch {
             guard epoch == connectionEpoch, refreshRequest == request else { return }
-            connection = .failed(error.localizedDescription)
-            errorMessage = error.localizedDescription
+            if activeProfile?.isRelay == true { relayStreamEnded(error, epoch: epoch) }
+            else { connection = .failed(error.localizedDescription); errorMessage = error.localizedDescription }
         }
     }
 
@@ -658,6 +827,13 @@ final class AppStore {
         transcriptRequests[id] = request
         let revision = eventRevision
         do {
+            // A restored child view must re-establish its parent scope on the new adapter.
+            if let parentID = openedAgentParents[persistenceScope + "|" + id], hostAgents[parentID] == nil {
+                let parent: BridgeDetail = try await client.get("v1/sessions/\(parentID)")
+                guard epoch == connectionEpoch, transcriptRequests[id] == request, !Task.isCancelled else { return }
+                applyHostActivity(parent.hostActivity, sessionID: parentID)
+                upsert(decorate(parent.session.local))
+            }
             let detail: BridgeDetail = try await client.get("v1/sessions/\(id)")
             guard epoch == connectionEpoch, transcriptRequests[id] == request else { return }
             let current = Dictionary((transcripts[id] ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, newest in newest })
@@ -1151,13 +1327,145 @@ final class AppStore {
         return response.files
     }
 
-    func session(_ id: String) -> RemoteSession? { sessions.first { $0.id == id } }
+    func session(_ id: String) -> RemoteSession? { sessions.first { $0.id == id } ?? childSessions[persistenceScope + "|" + id] }
     func messages(_ id: String) -> [ChatMessage] { transcripts[id] ?? [] }
     func agentCount(_ id: String) -> Int {
         if isReferenceMode { return (agentTasks[id]?.isEmpty == false) ? 30 : 0 }
         guard let host = hostAgents[id], host.isVisible else { return 0 }
         return max(Set(host.childSessionIDs).count, Set(host.running.map(\.childSessionID)).count + host.endedTotal)
     }
+    func canStartGoal(_ id: String?) -> Bool {
+        if isReferenceMode { return true }
+        guard connection.isOnline, activeProfile?.isRelay == true else { return false }
+        return id.map { session($0)?.canControl == true } ?? !projects.isEmpty
+    }
+
+    func pendingGoalText(_ id: String?) -> String? {
+        let key = id ?? "new:\(selectedProjectID ?? "")"
+        guard let records = try? GoalSubmissionJournal().read(scope: persistenceScope) else { return nil }
+        return records[key]?.text ?? id.flatMap { id in records.values.first(where: { $0.sessionID == id })?.text }
+    }
+
+    func startGoal(_ text: String, sessionID originalID: String?) async throws {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.utf8.count <= 48_000 else { throw BridgeFailure(message: "请填写目标，内容需小于 48 KB。", code: "goal_invalid") }
+        guard canStartGoal(originalID) else { throw BridgeFailure(message: "请先连接可控制的 ZCode 会话。", code: "goal_unavailable") }
+        if isReferenceMode {
+            if let originalID { goals[originalID] = TaskGoal(text: text, isPaused: false, elapsed: "刚刚开始") }
+            else { setDraft(text, for: "new:\(selectedProjectID ?? "")") }
+            return
+        }
+        guard let client else { throw BridgeFailure(message: "连接已断开，目标尚未发送。", code: "offline") }
+        let scope = persistenceScope, epoch = connectionEpoch
+        let journal = GoalSubmissionJournal()
+        let records = try journal.read(scope: scope)
+        var key = originalID ?? "new:\(selectedProjectID ?? "")"
+        if let originalID, records[key] == nil {
+            let matches = records.filter { $0.value.sessionID == originalID }
+            guard matches.count <= 1 else { throw BridgeFailure(message: "该会话有多个待确认目标，请先核对电脑上的状态。", code: "goal_pending_conflict") }
+            if let existing = matches.first { key = existing.key }
+        }
+        let busyKey = scope + "|" + key
+        guard goalStarts.insert(busyKey).inserted else { throw BridgeFailure(message: "目标正在提交，请稍候。", code: "goal_busy") }
+        defer { goalStarts.remove(busyKey) }
+        var pending: PendingGoal
+        if let existing = records[key] {
+            guard existing.rejected || existing.text == text else { throw BridgeFailure(message: "上一个目标还未确认送达，请先用原目标重试。", code: "goal_pending") }
+            pending = existing
+            if existing.rejected {
+                pending.id = UUID().uuidString; pending.text = text; pending.rejected = false
+                try journal.set(pending, key: key, scope: scope)
+            }
+        } else {
+            pending = PendingGoal(text: text, sessionID: originalID)
+            if originalID == nil {
+                guard let project = projects.first(where: { $0.id == selectedProjectID }) ?? projects.first else { throw BridgeFailure(message: "请先选择项目。", code: "project_required") }
+                guard !options.isPlanMode else { throw BridgeFailure(message: "请先关闭方案模式，再开始追求目标。", code: "goal_plan_mode") }
+                var creation: [String: JSONValue] = ["projectId": .string(project.id), "title": .string(String(text.prefix(36))),
+                    "mode": .string(options.permission.wireValue), "clientDraftId": .string("goal-session-" + pending.id)]
+                if options.permission == .full { creation["confirmFullAccess"] = .bool(true) }
+                if let newModelSelection { creation["model"] = newModelSelection.json }
+                pending.creation = creation
+            }
+            try journal.set(pending, key: key, scope: scope)
+        }
+        if pending.sessionID == nil {
+            guard let creation = pending.creation else { throw BridgeFailure(message: "目标的会话信息不完整。", code: "goal_pending_invalid") }
+            struct Created: Decodable, Sendable { var session: BridgeSession }
+            let result: Created = try await client.mutate("v1/sessions", body: creation)
+            guard epoch == connectionEpoch, scope == persistenceScope else { throw CancellationError() }
+            pending.sessionID = result.session.id; try journal.set(pending, key: key, scope: scope)
+            upsert(result.session.local)
+        }
+        guard let id = pending.sessionID else { throw BridgeFailure(message: "尚未创建目标会话。", code: "goal_pending_invalid") }
+        struct Accepted: Decodable, Sendable { var accepted: Bool; var hostActivity: JSONValue? }
+        let response: Accepted
+        do {
+            response = try await client.mutate("v1/sessions/\(id)/goal/start", body: ["text": .string(pending.text), "clientGoalId": .string(pending.id)])
+        } catch {
+            guard epoch == connectionEpoch, scope == persistenceScope else { throw CancellationError() }
+            let code = (error as? BridgeFailure)?.code ?? (error as? RelayFailure)?.code
+            if let code, ["goal_start_invalid", "goal_plan_mode", "goal_start_unavailable", "goal_start_rejected"].contains(code) {
+                pending.rejected = true; try journal.set(pending, key: key, scope: scope)
+                let message = code == "goal_plan_mode" ? "请先关闭方案模式，再开始追求目标。" : "电脑未接受这个目标，请检查任务状态后重试。"
+                throw BridgeFailure(message: message, code: code)
+            }
+            throw error
+        }
+        guard epoch == connectionEpoch, scope == persistenceScope else { throw CancellationError() }
+        guard response.accepted else { throw BridgeFailure(message: "电脑未接受目标，请刷新后重试。", code: "goal_not_accepted") }
+        try journal.set(nil, key: key, scope: scope)
+        if let activity = response.hostActivity { applyHostActivity(activity, sessionID: id) }
+        await loadTranscript(id)
+        guard epoch == connectionEpoch else { throw CancellationError() }
+        if currentSessionID != id { path.append(.session(id)) }
+    }
+
+    func openAgent(_ agent: AgentTask, parentID: String) {
+        guard !isReferenceMode, let parent = session(parentID),
+              agentTasks[parentID]?.contains(where: { $0.id == agent.id }) == true else { return }
+        let key = persistenceScope + "|" + agent.id
+        openedAgentParents[key] = parentID
+        childSessions[key] = RemoteSession(id: agent.id, title: agent.title, projectID: parent.projectID,
+            projectName: parent.projectName, updatedAt: .now, status: agent.status,
+            canControl: false, source: "official-relay-subagent", canMarkUnread: false,
+            canFork: false, canReviewHooks: false, canRename: false, canPin: false, canArchive: false)
+        path.append(.session(agent.id))
+    }
+
+    func agentDirectoryError(_ id: String) -> String? {
+        agentDirectoryErrors[id] ?? (hostAgents[id]?.directoryError == nil ? nil : "智能体详情暂未加载，请重试。")
+    }
+
+    func refreshAgents(_ id: String, loadMore: Bool = false) async {
+        guard !isReferenceMode, connection.isOnline, let client,
+              loadingAgentDirectories.insert(id).inserted else { return }
+        let epoch = connectionEpoch
+        defer { if epoch == connectionEpoch { loadingAgentDirectories.remove(id) } }
+        agentDirectoryErrors[id] = nil
+        struct DirectoryResponse: Decodable, Sendable { var hostActivity: JSONValue }
+        let base = "v1/sessions/\(id)/agents"
+        var endpoint = base
+        if loadMore, let cursor = hostAgents[id]?.nextEndedCursor {
+            var query = URLComponents(); query.queryItems = [URLQueryItem(name: "endedCursor", value: cursor)]
+            endpoint += "?" + (query.percentEncodedQuery ?? "")
+        }
+        do {
+            let response: DirectoryResponse
+            do { response = try await client.get(endpoint) }
+            catch {
+                let code = (error as? BridgeFailure)?.code ?? (error as? RelayFailure)?.code
+                guard loadMore, code == "subagent_directory_changed", epoch == connectionEpoch else { throw error }
+                response = try await client.get(base)
+            }
+            guard epoch == connectionEpoch, !Task.isCancelled else { return }
+            applyHostActivity(response.hostActivity, sessionID: id)
+        } catch {
+            guard epoch == connectionEpoch, !Task.isCancelled else { return }
+            agentDirectoryErrors[id] = "无法加载智能体详情，请重试。"
+        }
+    }
+
     func goalTitle(_ id: String) -> String {
         guard let host = hostGoals[id], !isReferenceMode else {
             return goals[id]?.isPaused == true ? "已暂停的目标" : "正在追求目标"
@@ -1212,17 +1520,31 @@ final class AppStore {
         hostAgents[id] = agents
         guard let agents, agents.isVisible else { agentTasks[id] = nil; return }
         let rows = projection["rows"]["window"].array ?? []
-        let ids = Array(Set(agents.childSessionIDs + agents.running.map(\.childSessionID))).sorted()
+        var seen: Set<String> = []
+        let ids = (agents.running.map(\.childSessionID) + agents.ended.map(\.childSessionID) + agents.childSessionIDs)
+            .filter { seen.insert($0).inserted }
         agentTasks[id] = ids.enumerated().map { index, childID in
-            if let active = agents.running.first(where: { $0.childSessionID == childID }) {
-                return AgentTask(id: childID, title: active.title.isEmpty ? active.subagentType : active.title,
-                                 status: active.status == "running" ? .running : .waiting,
-                                 detail: active.summary ?? "", colorIndex: index % 4)
+            if let record = (agents.running + agents.ended).first(where: { $0.childSessionID == childID }) {
+                let status: SessionStatus
+                switch record.status {
+                case "running": status = .running
+                case "waiting", "pending", "queued": status = .waiting
+                case "success", "completed": status = .completed
+                case "failed", "error": status = .failed
+                default: status = .idle
+                }
+                let title = record.title.isEmpty ? (record.subagentType.isEmpty ? "子任务 " + String(childID.suffix(6)) : record.subagentType) : record.title
+                let labels = ["running": "进行中", "waiting": "等待中", "pending": "准备中", "queued": "排队中",
+                              "success": "已完成", "completed": "已完成", "failed": "失败", "error": "失败",
+                              "cancelled": "已取消", "lost": "已中断", "idle": "就绪"]
+                return AgentTask(id: childID, title: title, status: status, detail: record.summary ?? "", colorIndex: index % 4,
+                                 statusText: labels[record.status] ?? "状态待更新")
             }
             let row = rows.last { $0["kind"].string == "subagent" && $0["childSessionId"].string == childID }
-            let title = row?["title"].string ?? session(childID)?.title ?? "智能体任务"
+            let title = row?["title"].string ?? session(childID)?.title ?? "子任务 " + String(childID.suffix(6))
             return AgentTask(id: childID, title: title, status: row?["status"].string.flatMap(SessionStatus.init(rawValue:)) ?? .idle,
-                             detail: row?["summaryText"].string ?? "打开以查看主机上的任务记录。", colorIndex: index % 4)
+                             detail: row?["summaryText"].string ?? "打开以查看主机上的任务记录。", colorIndex: index % 4,
+                             statusText: row == nil ? "详情待加载" : nil)
         }
     }
     func loadDraftAttachments(for id: String) async {
@@ -1462,6 +1784,10 @@ final class AppStore {
         }
     }
     private func upsert(_ session: RemoteSession) {
+        if session.source == "official-relay-subagent" {
+            childSessions[persistenceScope + "|" + session.id] = session
+            return
+        }
         if let i = sessions.firstIndex(where: { $0.id == session.id }) { sessions[i] = session }
         else { sessions.insert(session, at: 0) }
     }
@@ -1485,14 +1811,14 @@ final class AppStore {
                     guard !Task.isCancelled, epoch == self.connectionEpoch else { return }
                     self.streamConnected = false
                     if self.activeProfile?.isRelay == true {
-                        self.connection = .failed("远程连接已结束，请在连接页面重新连接电脑。")
+                        self.relayStreamEnded(RelayFailure("relay_disconnected", "远程连接已中断，草稿已保留。"), epoch: epoch)
                         return
                     }
                 } catch {
                     guard !Task.isCancelled, epoch == self.connectionEpoch else { return }
                     self.streamConnected = false
                     if self.activeProfile?.isRelay == true {
-                        self.connection = .failed((error as? BridgeFailure)?.code == "controller_replaced" ? "另一台手机已接管连接。你可以在连接页面手动重新连接。" : "远程连接已断开，草稿已保留。请手动重新连接电脑。")
+                        self.relayStreamEnded(error, epoch: epoch)
                         return
                     }
                 }
@@ -1543,6 +1869,9 @@ final class AppStore {
         }
         if event.type == "connection.changed", event.data?.connectionStatus == "disconnected" {
             connection = .failed("电脑上的 ZCode 已断开，正在等待恢复。")
+            // The Relay stream terminates with its exact failure next. Wait for
+            // that reason before deciding whether restoration is permitted.
+            if activeProfile?.isRelay == true { return }
         }
         guard !dirtySessionIDs.isEmpty || needsIndexRefresh, refreshTask == nil else { return }
         refreshTask = Task { [weak self] in

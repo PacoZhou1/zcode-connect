@@ -52,6 +52,7 @@ actor RelayClient {
 
 actor RelayRemoteTransport: RemoteTransport {
     let fixtureHost: String
+    private var eventContinuation: AsyncStream<TestEvent>.Continuation?
     init(client: RelayClient, bootstrap: RelayBootstrap, bridge: RelayBridge, hostName: String) async throws {
         let device = await client.deviceID()
         fixtureHost = "relay:\(device):\(bridge.workspaceKey)"
@@ -69,14 +70,15 @@ actor RelayRemoteTransport: RemoteTransport {
     }
     func events(after cursor: String?, onEvent: @Sendable (BridgeEnvelope) async -> Void) async throws {
         let host = fixtureHost
-        let stream = await MainActor.run {
+        let pair = AsyncStream<TestEvent>.makeStream()
+        eventContinuation = pair.continuation
+        await MainActor.run {
             TestTransport.eventSubscriptions[host, default: 0] += 1
-            return AsyncStream<TestEvent> { TestTransport.subscribers[host] = $0 }
+            TestTransport.subscribers[host] = pair.continuation
         }
-        for await event in stream { await onEvent(event.envelope); event.delivered.resume() }
+        for await event in pair.stream { await onEvent(event.envelope); event.delivered.resume() }
+        try await Self.exiting(host)
     }
-    func shutdown() async {
-        let host = fixtureHost
-        await MainActor.run { TestTransport.subscribers[host]?.finish() }
-    }
+    @MainActor private static func exiting(_ host: String) async throws { try await TestTransport.eventExitHandler?(host) }
+    func shutdown() async { eventContinuation?.finish() }
 }

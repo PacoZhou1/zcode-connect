@@ -75,21 +75,24 @@ import Foundation
             }
         }
         for code in [String?.none, "offline", "controller_replaced"] {
-            await run("current Relay-classified stream \(code ?? "normal end") still reports its real disconnect") {
+            await run("background Relay-classified stream \(code ?? "normal end") reports disconnect without taking over") {
                 let f = Fixture(); defer { f.close() }
                 await f.connect(); try classifyAsRelay(f.store); try await ready("a.invalid")
                 f.store.setDraft("Preserve disconnected draft", for: "S")
+                // Saved-Relay restoration now has its own full branch suite. This
+                // inert HTTP transport only checks stale callbacks/background exit.
+                f.store.applicationDidEnterBackground()
                 TestTransport.eventExitHandler = { _ in
                     if let code { throw BridgeFailure(message: "synthetic current stream failure", code: code) }
                 }
                 TestTransport.subscribers["a.invalid"]?.finish()
                 try await until { !f.store.streamConnected }
-                let expected = code == nil ? "远程连接已结束，请在连接页面重新连接电脑。"
-                    : code == "controller_replaced" ? "另一台手机已接管连接。你可以在连接页面手动重新连接。"
-                    : "远程连接已断开，草稿已保留。请手动重新连接电脑。"
+                let expected = code == nil ? "远程连接已中断，草稿已保留。"
+                    : code == "controller_replaced" ? "另一台手机已接管连接。自动重连已暂停，你可以在连接页面手动重新连接。"
+                    : "synthetic current stream failure"
                 try check(f.store.connection == .failed(expected), "Current stream disconnect was ignored or misclassified")
                 try check(f.store.drafts["S"] == "Preserve disconnected draft", "Current disconnect discarded draft")
-                try check(TestTransport.eventSubscriptions["a.invalid"] == 1, "Relay policy unexpectedly retried automatically")
+                try check(TestTransport.eventSubscriptions["a.invalid"] == 1, "Background exit unexpectedly retried")
             }
         }
         for fails in [false, true] {

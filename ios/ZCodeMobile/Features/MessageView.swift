@@ -5,6 +5,7 @@ struct MessageView: View {
     @Environment(AppStore.self) private var store
     let message: ChatMessage
     let sessionID: String
+    var showsResponseActions = false
     @State private var showSteps = false
     @State private var changesExpanded = true
     private var feedback: Int { store.localFeedback["\(sessionID)|\(message.id)"] ?? 0 }
@@ -70,8 +71,9 @@ struct MessageView: View {
                         ProgressView().controlSize(.mini)
                         Text("正在继续…").font(.caption).foregroundStyle(.secondary)
                     }
-                } else if message.role == .assistant {
+                } else if message.role == .assistant && showsResponseActions && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     responseActions.padding(.top, -6)
+                        .accessibilityIdentifier("message.responseActions.\(message.id)")
                 }
             }
         }.frame(maxWidth: .infinity, alignment: .leading)

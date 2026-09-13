@@ -15,14 +15,14 @@ import tempfile
 import sys
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--suite", choices=("outbox", "session-pagination", "unread", "metadata-actions", "computer-switch", "stream-lifecycle", "relay-workspace", "fork", "file-listing", "hook-review"), default="outbox")
+parser.add_argument("--suite", choices=("outbox", "session-pagination", "unread", "metadata-actions", "computer-switch", "stream-lifecycle", "relay-workspace", "relay-autoconnect", "goal-start", "fork", "file-listing", "hook-review"), default="outbox")
 parser.add_argument("--app-store-ref", help="For metadata-actions or stream-lifecycle: compile AppStore from a local Git revision without checking it out")
 args = parser.parse_args()
 suite = args.suite
 if args.app_store_ref and suite not in ("metadata-actions", "stream-lifecycle"):
     parser.error("--app-store-ref is limited to metadata-actions and stream-lifecycle")
 uses_shared_fixtures = suite != "outbox"
-artifact_prefix = {"outbox": "OUTBOX", "session-pagination": "SESSION_PAGINATION", "unread": "UNREAD", "metadata-actions": "METADATA_ACTION", "computer-switch": "COMPUTER_SWITCH", "stream-lifecycle": "STREAM_LIFECYCLE", "relay-workspace": "RELAY_WORKSPACE_RECOVERY", "fork": "FORK", "file-listing": "FILE_LISTING", "hook-review": "HOOK_REVIEW"}[suite]
+artifact_prefix = {"outbox": "OUTBOX", "session-pagination": "SESSION_PAGINATION", "unread": "UNREAD", "metadata-actions": "METADATA_ACTION", "computer-switch": "COMPUTER_SWITCH", "stream-lifecycle": "STREAM_LIFECYCLE", "relay-workspace": "RELAY_WORKSPACE_RECOVERY", "relay-autoconnect": "RELAY_AUTOCONNECT", "goal-start": "GOAL_START", "fork": "FORK", "file-listing": "FILE_LISTING", "hook-review": "HOOK_REVIEW"}[suite]
 if args.app_store_ref:
     artifact_prefix += "_BASELINE"
 root = Path(__file__).resolve().parents[2]
@@ -40,12 +40,18 @@ if (core / "Relay/RelayHookReview.swift").exists():
     dependencies.append(core / "Relay/RelayHookReview.swift")
 if (core / "DraftAttachmentJournal.swift").exists():
     dependencies.append(core / "DraftAttachmentJournal.swift")
+if (core / "PendingGoal.swift").exists():
+    dependencies.append(core / "PendingGoal.swift")
+if (core / "Relay/RelayTranscriptSemantics.swift").exists():
+    dependencies.append(core / "Relay/RelayTranscriptSemantics.swift")
 sources += dependencies
 outbox_fixture_source = root / "scripts/tests/OutboxStateTests.swift"
-test_source = root / "scripts/tests" / {"outbox": "OutboxStateTests.swift", "session-pagination": "SessionPaginationStateTests.swift", "unread": "UnreadStateTests.swift", "metadata-actions": "MetadataActionStateTests.swift", "computer-switch": "ComputerSwitchStateTests.swift", "stream-lifecycle": "StreamLifecycleStateTests.swift", "relay-workspace": "RelayWorkspaceRecoveryStateTests.swift", "fork": "ForkStateTests.swift", "file-listing": "FileListingStateTests.swift", "hook-review": "HookReviewStateTests.swift"}[suite]
-relay_stub_source = root / "scripts/tests" / ("RelayWorkspaceRecoveryAdapters.swift" if suite == "relay-workspace" else "HostActivityStateTests.swift")
+test_source = root / "scripts/tests" / {"outbox": "OutboxStateTests.swift", "session-pagination": "SessionPaginationStateTests.swift", "unread": "UnreadStateTests.swift", "metadata-actions": "MetadataActionStateTests.swift", "computer-switch": "ComputerSwitchStateTests.swift", "stream-lifecycle": "StreamLifecycleStateTests.swift", "relay-workspace": "RelayWorkspaceRecoveryStateTests.swift", "relay-autoconnect": "RelayAutoConnectStateTests.swift", "goal-start": "GoalStartStateTests.swift", "fork": "ForkStateTests.swift", "file-listing": "FileListingStateTests.swift", "hook-review": "HookReviewStateTests.swift"}[suite]
+relay_stub_source = root / "scripts/tests" / ("RelayWorkspaceRecoveryAdapters.swift" if suite in ("relay-workspace", "relay-autoconnect", "goal-start") else "HostActivityStateTests.swift")
 sources += [test_source, relay_stub_source]
 sources.append(Path(__file__).resolve())
+if suite == "relay-autoconnect":
+    sources.append(root / "ios/ZCodeMobile/App/AppShell.swift")
 if suite == "computer-switch":
     sources += [root / "scripts/tests/run-computer-switch-tests.py", root / "ios/ZCodeMobile/App/AppShell.swift", root / "ios/ZCodeMobile/Features/ConnectionViews.swift"]
 if uses_shared_fixtures:
@@ -68,6 +74,7 @@ with tempfile.TemporaryDirectory(prefix=f"zcode-{suite}-tests-") as raw:
             text = text.replace("import UIKit", "// UIKit is replaced by inert test-only adapters.")
             text = text.replace("private let submissionJournal = SubmissionJournal()", "private let submissionJournal = SubmissionJournal(directory: OutboxTestSandbox.directory)")
             text = text.replace("DraftAttachmentJournal()", "DraftAttachmentJournal(directory: OutboxTestSandbox.directory.appendingPathComponent(\"draft-attachments\"))")
+            text = text.replace("GoalSubmissionJournal()", "GoalSubmissionJournal(directory: OutboxTestSandbox.directory.appendingPathComponent(\"pending-goals\"))")
         target = temp / name
         target.write_text(text)
         swift_inputs.append(str(target))
@@ -92,7 +99,7 @@ with tempfile.TemporaryDirectory(prefix=f"zcode-{suite}-tests-") as raw:
     # The workspace suite has a controllable, successful in-memory Relay boundary.
     # Other suites retain the default-throwing adapters. Neither links real I/O.
     relay_stubs = contents[relay_stub_source].decode().split("@main struct HostActivityStateTests {", 1)
-    assert suite == "relay-workspace" or len(relay_stubs) == 2
+    assert suite in ("relay-workspace", "relay-autoconnect", "goal-start") or len(relay_stubs) == 2
     target = temp / "InertRelayAdapters.swift"
     target.write_text(relay_stubs[0])
     swift_inputs.append(str(target))
@@ -112,6 +119,8 @@ with tempfile.TemporaryDirectory(prefix=f"zcode-{suite}-tests-") as raw:
     if build.returncode:
         print(build.stdout + build.stderr)
         sys.exit(build.returncode)
+    if suite == "relay-autoconnect":
+        print("Isolated test progress: " + str(temp / "results.json.progress"), flush=True)
     run = subprocess.run([str(temp / "outbox-tests"), str(temp / "state"), str(temp / "results.json")], text=True, capture_output=True, timeout=90)
     output = run.stdout + run.stderr
     print(output, end="")

@@ -20,6 +20,16 @@ actor RelayRemoteTransport: RemoteTransport {
     }
     private var subagentParents: [String: String] = [:]
     private var subagentHistories: [String: SubagentHistory] = [:]
+    private var subagentReads: [String: Task<RelaySessionSnapshot, any Error>] = [:]
+    private var subagentDirectories: [String: RelaySubagentDirectory] = [:]
+    private var directoryVersions: [String: String] = [:]
+    private var directoryErrors: [String: String] = [:]
+    private struct DirectoryLoad {
+        let id = UUID()
+        let version: String
+        let task: Task<RelaySubagentDirectory, any Error>
+    }
+    private var directoryLoads: [String: DirectoryLoad] = [:]
     private var sessionPages = RelaySessionPages()
     private var projections: [String: RelayConversationProjection] = [:]
     private var loads: [String: Task<RelayConversationProjection, any Error>] = [:]
@@ -49,6 +59,8 @@ actor RelayRemoteTransport: RemoteTransport {
     func shutdown() async {
         closed = true; pump?.cancel(); pump = nil
         for task in loads.values { task.cancel() }; loads.removeAll()
+        for task in subagentReads.values { task.cancel() }; subagentReads.removeAll()
+        for loading in directoryLoads.values { loading.task.cancel() }; directoryLoads.removeAll()
         for sink in sinks.values { sink.finish() }; sinks.removeAll()
         if await client.bridge == bridge {
             for id in projections.keys { try? await client.unsubscribe(sessionID: id) }
@@ -94,6 +106,9 @@ actor RelayRemoteTransport: RemoteTransport {
     }
 
     private func checkScope() async throws {
+        let state = await client.state
+        if state == .replaced { throw RelayFailure("controller_replaced", "当前连接已被其他设备接管，请重新连接。") }
+        if state == .disconnected { throw lastRelayFailure ?? RelayFailure("relay_disconnected", "连接已断开，正在等待重新连接。") }
         guard !closed, await client.pairedDeviceID == deviceID, await client.bridge == bridge else {
             throw RelayFailure("relay_workspace_changed", "Reconnect this view to the selected desktop workspace.")
         }
@@ -171,6 +186,10 @@ actor RelayRemoteTransport: RemoteTransport {
                     let snapshot = try await client.readSession(id); snapshots[id] = snapshot
                     return try RelayBridgeMapping.settings(snapshot, permissionMode: permissionMode(snapshot))
                 case ("PATCH", "settings"): return try await settingsMutation(id, body)
+                case ("GET", "agents"):
+                    guard q.keys.allSatisfy({ $0 == "endedCursor" }) else { throw RelayFailure.invalid("Use the desktop's ended cursor for the agent directory.") }
+                    let projection = try await loadProjection(id)
+                    return try await subagentDirectoryPage(id, projection: projection, cursor: q["endedCursor"])
                 case ("GET", "messages"): return try await olderMessages(id, query: q)
                 case ("POST", "messages"): return try await message(id, body)
                 case ("POST", "attachments"): return try await attachment(id, body)
@@ -184,6 +203,7 @@ actor RelayRemoteTransport: RemoteTransport {
                 return try await hookReview(id, action: p[5], body: body)
             }
             if p.count == 5, p[3] == "goal", method == "POST" {
+                if p[4] == "start" { return try await startGoal(id, body) }
                 guard ["pause", "resume"].contains(p[4]) else { throw RelayFailure("goal_remove_unsupported", "The desktop protocol has no goal removal command.") }
                 _ = try await loadProjection(id)
                 let type = p[4] == "pause" ? "pauseGoal" : "resumeGoal"
@@ -210,7 +230,7 @@ actor RelayRemoteTransport: RemoteTransport {
             "hook.revoke": ["clientCommandId": "string", "request": "object", "reviewItemIds": "array", "confirmation": "object"],
             "hook.toggle": ["clientCommandId": "string", "request": "object", "reviewItemId": "string", "enabled": "bool", "confirmation": "object"],
             "hook.request": ["clientCommandId": "string", "workspaceIdentity": "string", "bundleDigest": "string", "remoteSessionId": "string"],
-            "stop": [:], "pause": [:], "resume": [:]
+            "stop": [:], "pause": [:], "resume": [:], "start": ["text": "string", "clientGoalId": "string"]
         ]
         let hookRoute = path.count == 6 && path[3] == "hooks" && path[4] == "review"
         let route = hookRoute ? "hook." + (path.last ?? "") : path == ["v1", "sessions"] ? "create" : path.count == 3 && method == "PATCH" ? "metadata" : path.last ?? ""
@@ -294,18 +314,69 @@ actor RelayRemoteTransport: RemoteTransport {
         let projection = try await loadProjection(id)
         let snapshot = try await client.readSession(id)
         snapshots[id] = snapshot
-        return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.messages(projection)), "pendingInteractions": .array(projection.pendingInteractions.map { RelayBridgeMapping.interaction($0, sessionID: id) }), "hostActivity": RelayBridgeMapping.activity(projection), "history": RelayBridgeMapping.history(projection)])
+        await refreshSubagentDirectory(id, projection: projection)
+        return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.messages(projection)), "pendingInteractions": .array(projection.pendingInteractions.map { RelayBridgeMapping.interaction($0, sessionID: id) }), "hostActivity": hostActivity(projection), "history": RelayBridgeMapping.history(projection)])
+    }
+    private func directoryVersion(_ projection: RelayConversationProjection) -> String { projection.logEpoch + ":" + String(projection.hostAgents?.revision ?? 0) }
+    private func hostActivity(_ projection: RelayConversationProjection) -> RelayJSON {
+        let current = directoryVersions[projection.sessionID] == directoryVersion(projection)
+        return RelayBridgeMapping.activity(projection, directory: current ? subagentDirectories[projection.sessionID] : nil, directoryError: current ? directoryErrors[projection.sessionID] : nil)
+    }
+    private func refreshSubagentDirectory(_ id: String, projection: RelayConversationProjection, force: Bool = false) async {
+        guard projection.showsHostAgents || force, directoryVersions[id] != directoryVersion(projection), subagentParents[id] == nil else { return }
+        let version = directoryVersion(projection), loading: DirectoryLoad
+        if let existing = directoryLoads[id], existing.version == version { loading = existing }
+        else { let client = client; loading = .init(version: version, task: Task { try await client.listSubagentDirectory(parentSessionID: id) }); directoryLoads[id] = loading }
+        defer { if directoryLoads[id]?.id == loading.id { directoryLoads.removeValue(forKey: id) } }
+        do {
+            let directory = try await loading.task.value; try await checkScope()
+            guard directoryLoads[id]?.id == loading.id, let latest = await client.currentProjection(sessionID: id), directoryVersion(latest) == version else { return }
+            subagentDirectories[id] = directory; directoryErrors[id] = nil; directoryVersions[id] = version
+        } catch {
+            guard !closed, await client.bridge == bridge, directoryLoads[id]?.id == loading.id else { return }
+            directoryErrors[id] = (error as? RelayFailure)?.code ?? "subagent_directory_unavailable"; directoryVersions[id] = version
+        }
+        if let latest = projections[id], directoryVersion(latest) == version { try? emit(type: "host.activity", sessionID: id, data: ["hostActivity": hostActivity(latest)]) }
+    }
+    private func subagentDirectoryPage(_ id: String, projection: RelayConversationProjection, cursor: String?) async throws -> RelayJSON {
+        let version = directoryVersion(projection)
+        if let cursor {
+            guard directoryVersions[id] == version, let prior = subagentDirectories[id], prior.nextCursor == cursor else { throw RelayFailure("subagent_directory_changed", "智能体列表已更新，请刷新后继续加载。") }
+            let page = try await client.listSubagentDirectory(parentSessionID: id, cursor: cursor)
+            try await checkScope()
+            guard let latest = await client.currentProjection(sessionID: id), directoryVersion(latest) == version,
+                  directoryVersions[id] == version, subagentDirectories[id] == prior, page.revision == prior.revision else {
+                directoryVersions[id] = nil
+                throw RelayFailure("subagent_directory_changed", "智能体列表已更新，请刷新后继续加载。")
+            }
+            var raw = try page.raw.requiringObject(), ended = try page.raw["ended"].requiringObject()
+            let old = prior.raw["ended"]["items"].array ?? [], incoming = page.raw["ended"]["items"].array ?? []
+            let replaced = Set(incoming.compactMap { $0["childSessionId"].string })
+            ended["items"] = .array(old.filter { !replaced.contains($0["childSessionId"].string ?? "") } + incoming)
+            raw["ended"] = .object(ended); subagentDirectories[id] = try RelaySubagentDirectory(raw: .object(raw))
+        } else {
+            if directoryErrors[id] != nil { directoryVersions[id] = nil }
+            await refreshSubagentDirectory(id, projection: projection, force: true)
+        }
+        guard directoryVersions[id] == version, let directory = subagentDirectories[id], directoryErrors[id] == nil else { throw RelayFailure("subagent_directory_unavailable", "主机尚未返回完整智能体列表，请稍后刷新。") }
+        let activity = hostActivity(projection)
+        try emit(type: "host.activity", sessionID: id, data: ["hostActivity": activity])
+        return .object(["hostActivity": activity, "directory": directory.raw])
     }
     private func subagentDetail(_ id: String) async throws -> RelayJSON {
         guard let parentID = subagentParents[id] else { throw RelayFailure("session_not_found", "Open the original parent's subagent activity first.") }
         guard subagentHistories[id] != nil || subagentHistories.count < 32 else { throw RelayFailure("relay_history_limit", "Reopen this workspace before reading more subagent histories.") }
-        let snapshot = try await client.readSubagentSession(id, parentSessionID: parentID)
+        let task: Task<RelaySessionSnapshot, any Error>
+        if let existing = subagentReads[id] { task = existing }
+        else { let client = client; task = Task { try await client.readSubagentSession(id, parentSessionID: parentID, allowColdRestore: true) }; subagentReads[id] = task }
+        defer { subagentReads.removeValue(forKey: id) }
+        let snapshot = try await task.value
         try await checkScope()
         let epoch = "relay-subagent-" + relayDigest(try RelayJSON.object(["sessionId": .string(id), "messages": .array(snapshot.messages)]).data())
         let loaded = subagentHistories[id].flatMap { $0.epoch == epoch ? $0.loadedCount : nil } ?? min(500, snapshot.messages.count)
         let history = SubagentHistory(parentID: parentID, snapshot: snapshot, epoch: epoch, loadedCount: loaded)
         subagentHistories[id] = history
-        return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.snapshotMessages(Array(snapshot.messages.suffix(loaded)))),
+        return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.snapshotMessages(Array(snapshot.messages.suffix(loaded)), sessionID: id)),
                         "pendingInteractions": .array([]), "history": subagentHistoryJSON(history),
                         "hostActivity": .object(["supported": .bool(false), "reasonCode": .string("subagentReadOnly"), "goal": .null,
                                                  "subagents": .object(["revision": .int(0), "childSessionIds": .array([]), "running": .array([]), "endedTotal": .int(0)]), "availability": .object([:]), "rows": .object(["window": .array([])])])])
@@ -325,7 +396,7 @@ actor RelayRemoteTransport: RemoteTransport {
             throw RelayFailure("relay_history_changed", "Reload the subagent history before requesting an older page.")
         }
         value.loadedCount = min(value.snapshot.messages.count, value.loadedCount + limit); subagentHistories[id] = value
-        return .object(["messages": .array(RelayBridgeMapping.snapshotMessages(Array(value.snapshot.messages.suffix(value.loadedCount)))), "history": subagentHistoryJSON(value)])
+        return .object(["messages": .array(RelayBridgeMapping.snapshotMessages(Array(value.snapshot.messages.suffix(value.loadedCount)), sessionID: id)), "history": subagentHistoryJSON(value)])
     }
     private func olderMessages(_ id: String, query: [String: String]) async throws -> RelayJSON {
         guard query.keys.allSatisfy({ ["beforeRowId", "logEpoch", "limit"].contains($0) }),
@@ -356,6 +427,7 @@ actor RelayRemoteTransport: RemoteTransport {
         } else {
             let envelope: RelayCommandEnvelope
             if type == "createSession" { envelope = try await client.makeCreateSessionCommand(commandID: key) }
+            else if type == "sendGoalCommand" { envelope = try await client.makeGoalCommand(sessionID: sessionID!, text: payload.requiringString("text"), commandID: key) }
             else if type == "forkAssistant" { envelope = try await client.makeForkCommand(sessionID: sessionID!, target: payload["target"] == .null ? nil : RelayRowTarget(wire: payload["target"]), commandID: key) }
             else if let hookReviewAuthorization { envelope = try await client.makeHookReviewCommand(authorization: hookReviewAuthorization, commandID: key) }
             else if type == "requestWorkspaceHookReview" {
@@ -383,6 +455,10 @@ actor RelayRemoteTransport: RemoteTransport {
     }
     private func admitted(_ ack: RelayCommandAck, type: String) throws -> RelayCommandAck {
         guard ack.admitted else {
+            if type == "sendGoalCommand" {
+                let rejected = ["rejected", "stale"].contains(ack.status)
+                throw RelayFailure(rejected ? "goal_start_rejected" : "goal_start_uncertain", rejected ? "主机拒绝了这个目标，请调整后重试。" : "主机尚未确认目标是否已设置，请用原请求重试。", outcomeUncertain: !rejected)
+            }
             if type == "forkAssistant" {
                 let description = [ack.reasonCode, ack.message].compactMap { $0 }.joined(separator: ": ")
                 throw RelayFailure("fork_rejected", description.isEmpty ? "The desktop declined this fork." : description)
@@ -405,6 +481,19 @@ actor RelayRemoteTransport: RemoteTransport {
         let duplicate = journal.state.commands[inputID]?.acknowledgement?.admitted == true
         _ = try await durableCommand(key: inputID, intent: intent, sessionID: id, type: "sendText", payload: .object(payload))
         return .object(["accepted": .bool(true), "sessionId": .string(id), "inputId": .string(inputID), "duplicate": .bool(duplicate)])
+    }
+    private func startGoal(_ id: String, _ body: RelayJSON) async throws -> RelayJSON {
+        let requestID = try body.requiringString("clientGoalId"), text = try body.requiringString("text").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard RelayWire.validID(requestID), !text.isEmpty, text.utf8.count <= 128_000 else { throw RelayFailure("goal_start_invalid", "Use a stable goal request ID and nonempty objective.") }
+        let key = "goal-start-" + requestID
+        guard RelayWire.validID(key) else { throw RelayFailure("goal_start_invalid", "The goal request ID is too long.") }
+        // Reconcile a retained command before lifecycle guards; its successful ACK may have been lost.
+        if journal.state.commands[key] == nil { try ensureWritable(id); _ = try await loadProjection(id) }
+        let intent: RelayJSON = .object(["sessionId": .string(id), "text": .string(text)])
+        _ = try await durableCommand(key: key, intent: intent, sessionID: id, type: "sendGoalCommand", payload: .object(["text": .string(text)]))
+        var response: [String: RelayJSON] = ["accepted": .bool(true), "sessionId": .string(id)]
+        if let projection = await client.currentProjection(sessionID: id) { response["hostActivity"] = hostActivity(projection) }
+        return .object(response)
     }
     private func attachment(_ id: String, _ body: RelayJSON) async throws -> RelayJSON {
         try ensureWritable(id)
@@ -632,17 +721,21 @@ actor RelayRemoteTransport: RemoteTransport {
             switch event {
             case .projection(let projection):
                 guard await client.bridge == bridge else { return }
+                if subagentParents[projection.sessionID] != nil { return }
                 let previous = projections[projection.sessionID]; projections[projection.sessionID] = projection
                 let oldMessages = previous.map { RelayBridgeMapping.messages($0) } ?? [], newMessages = RelayBridgeMapping.messages(projection)
                 let oldIDs = Set(oldMessages.compactMap { $0["id"].string }), newIDs = Set(newMessages.compactMap { $0["id"].string })
                 if previous?.logEpoch != nil && (previous?.logEpoch != projection.logEpoch || !oldIDs.isSubset(of: newIDs)) { try emit(type: "resync.required", sessionID: projection.sessionID) }
                 let oldByID = Dictionary(uniqueKeysWithValues: oldMessages.compactMap { message in message["id"].string.map { ($0, message) } })
                 for message in newMessages where oldByID[message["id"].string ?? ""] != message { try emit(type: "message.updated", sessionID: projection.sessionID, data: ["message": message]) }
-                let activity = RelayBridgeMapping.activity(projection)
+                let activity = hostActivity(projection)
                 // Sequence/revision change on every token; only substantive activity changes trigger a detail refresh.
-                let oldActivity = previous.map(RelayBridgeMapping.activity)
+                let oldActivity = previous.map { hostActivity($0) }
                 if oldActivity?["goal"] != activity["goal"] || oldActivity?["subagents"] != activity["subagents"] || oldActivity?["availability"] != activity["availability"] || oldActivity?["rows"] != activity["rows"] {
                     try emit(type: "host.activity", sessionID: projection.sessionID, data: ["hostActivity": activity])
+                }
+                if projection.showsHostAgents, directoryVersions[projection.sessionID] != directoryVersion(projection) {
+                    Task { [weak self] in await self?.refreshSubagentDirectory(projection.sessionID, projection: projection) }
                 }
                 let previousPending = previous?.pendingInteractions ?? [], pending = projection.pendingInteractions
                 for item in pending where !previousPending.contains(item) { try emit(type: "interaction.requested", sessionID: projection.sessionID, data: ["interaction": RelayBridgeMapping.interaction(item, sessionID: projection.sessionID)]) }

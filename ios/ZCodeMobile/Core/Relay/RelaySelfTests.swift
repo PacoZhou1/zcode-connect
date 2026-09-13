@@ -1,4 +1,4 @@
-#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS || RELAY_RECOVERY_SELF_TESTS || RELAY_AUTH_SELF_TESTS || RELAY_COLD_OPEN_SELF_TESTS
+#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS || RELAY_RECOVERY_SELF_TESTS || RELAY_AUTH_SELF_TESTS || RELAY_COLD_OPEN_SELF_TESTS || RELAY_AGENT_GOAL_SELF_TESTS
 import Foundation
 
 private struct TestFailure: Error { let message: String }
@@ -64,6 +64,9 @@ actor MockRelaySocket: RelaySocketTransport {
     var conversationInitialized = false
     var serviceCalls: [RelayJSON] = []
     var subagentSnapshots: [String: RelayJSON] = [:]
+    var subagentDirectoryOverride: RelayJSON?
+    var directoryFailure = false
+    var nextCommandStatus: String?
     var unavailableSubagents = Set<String>()
     var recoveryBehavior = "normal"
     var recoveryRequests = 0
@@ -76,6 +79,27 @@ actor MockRelaySocket: RelaySocketTransport {
     var sessionReadReadiness: [RelayJSON] = []
     var coldOpenOrder: [String] = []
     func makeSessionCold(_ sessionID: String, delay: Duration = .milliseconds(120)) { coldSessions.insert(sessionID); coldOpenDelay = delay }
+    func useSubagentDirectory(_ value: RelayJSON) { subagentDirectoryOverride = value }
+    func failSubagentDirectory() { directoryFailure = true }
+    func useProjection(_ value: RelayJSON) { alternateProjection = value }
+    func setNextCommandStatus(_ value: String) { nextCommandStatus = value }
+    func useGoalFixture(mode: String = "build", active: Bool = false) {
+        var value = try! baseProjection().requiringObject()
+        var config = try! value["config"]!.requiringObject(); config["mode"] = .string(mode); value["config"] = .object(config)
+        configurationMode = mode
+        value["goal"] = active ? value["goal"] : .null
+        value["control"] = .object(["canStop": .bool(active), "phase": .string(active ? "running" : "draft")])
+        value["pendingInteractions"] = .array([]); alternateProjection = .object(value)
+    }
+    func publishGoalActive() throws {
+        var value = try (alternateProjection ?? baseProjection()).requiringObject()
+        value["goal"] = baseProjection()["goal"]
+        value["control"] = .object(["canStop": .bool(true), "phase": .string("running")])
+        value["seq"] = .int(11); value["revision"] = .int(2); alternateProjection = .object(value)
+        let frame = logical(.object(["kind": .string("snapshot"), "snapshot": .object(value)]), to: 11)
+        var envelope = try wire(frame, ordinal: 2).requiringObject(); envelope["deliveryKind"] = .string("online")
+        try sendRPC(.init(header: [.int32(204), .int32(listenerID!)], body: try .object(.object(envelope))))
+    }
     func failSessionRead(_ sessionID: String) { sessionReadFailures.insert(sessionID) }
     func setRecoveryBehavior(_ value: String) { recoveryBehavior = value }
     func setDropHeartbeats(_ value: Bool) { dropHeartbeats = value }
@@ -199,6 +223,12 @@ actor MockRelaySocket: RelaySocketTransport {
             case "listTasks", "listPinnedTasks", "listArchivedTasks":
                 let tasks = registeredSessions.filter { archivedSessions.contains($0) == (method == "listArchivedTasks") }
                 try success(id, .array(tasks.sorted().map { .object(["taskId": .string($0), "title": .string(titles[$0] ?? "Original desktop task"), "workspacePath": .string("/workspace"), "provider": .string("glm"), "unreadAt": unreadAt[$0].map(RelayJSON.number) ?? .null]) }))
+            case "listSessionSubagents":
+                if directoryFailure { try sendRPC(.init(header: [.int32(202), .int32(id)], body: try .object(.object(["message": .string("Directory unavailable")])))); break }
+                let source = (alternateProjection ?? baseProjection())["subagents"]
+                let ended: RelayJSON = .object(["childSessionId": .string("child-ended"), "title": .string("Original ended agent"), "status": .string("success"), "subagentType": .string("Explore"), "summary": .string("Original child summary"), "endedAt": .int(2_000)])
+                let directory = subagentDirectoryOverride ?? .object(["revision": source["revision"], "childSessionIds": source["childSessionIds"], "running": source["running"], "ended": .object(["total": source["endedTotal"], "items": source["endedTotal"].integer == 0 ? .array([]) : .array([ended])])])
+                try success(id, directory)
             case "readSession", "resumeSession":
                 if method == "resumeSession" { registeredSessions.insert(params["sessionId"].string!) }
                 let sessionID = params["sessionId"].string!
@@ -239,8 +269,8 @@ actor MockRelaySocket: RelaySocketTransport {
                 commandEnvelopes[commandID] = envelope
                 let kind = envelope["type"].string
                 let result: RelayJSON? = kind == "createSession" ? .object(["type": .string("createSession"), "sessionId": .string("session-created")]) : kind == "forkAssistant" ? .object(["type": .string("forkAssistant"), "sessionId": .string("fork-child-" + commandID)]) : nil
-                let rejection = nextRejectedCommand; nextRejectedCommand = nil
-                let ack = prior.map { old in old.admitted ? RelayCommandAck(commandId: old.commandId, status: "duplicate", revisionAtDecision: old.revisionAtDecision, reasonCode: old.reasonCode, message: old.message, result: old.result) : old } ?? RelayCommandAck(commandId: commandID, status: rejection == nil ? "accepted" : "stale", revisionAtDecision: 2, reasonCode: rejection, message: rejection == nil ? nil : "Host target changed", result: rejection == nil ? result : nil)
+                let rejection = nextRejectedCommand, status = nextCommandStatus; nextRejectedCommand = nil; nextCommandStatus = nil
+                let ack = prior.map { old in old.admitted ? RelayCommandAck(commandId: old.commandId, status: "duplicate", revisionAtDecision: old.revisionAtDecision, reasonCode: old.reasonCode, message: old.message, result: old.result) : old } ?? RelayCommandAck(commandId: commandID, status: status ?? (rejection == nil ? "accepted" : "stale"), revisionAtDecision: 2, reasonCode: rejection, message: rejection == nil ? nil : "Host target changed", result: rejection == nil ? result : nil)
                 commands[commandID] = ack
                 if dropNextCommandAck { dropNextCommandAck = false; return }
                 try success(id, RelayJSON(data: JSONEncoder().encode(ack)))
