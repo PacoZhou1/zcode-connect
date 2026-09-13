@@ -23,7 +23,9 @@ final class SpeechCapture {
         defer { if generation == self.generation { isStarting = false } }
         error = nil
         let speechPermission = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+            SFSpeechRecognizer.requestAuthorization { @Sendable status in
+                continuation.resume(returning: status)
+            }
         }
         guard generation == self.generation, !Task.isCancelled else { return }
         guard speechPermission == .authorized else {
@@ -50,7 +52,7 @@ final class SpeechCapture {
             guard format.sampleRate > 0, format.channelCount > 0 else {
                 error = "当前设备没有可用的音频输入。"; stop(); return
             }
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable [weak self] buffer, _ in
                 request.append(buffer)
                 guard let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return }
                 var sum: Float = 0
@@ -67,7 +69,7 @@ final class SpeechCapture {
             engine.prepare()
             try engine.start()
             isRecording = true
-            task = recognizer.recognitionTask(with: request) { [weak self] result, failure in
+            task = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, failure in
                 let transcript = result?.bestTranscription.formattedString
                 let final = result?.isFinal ?? false
                 let errorText = failure?.localizedDescription
