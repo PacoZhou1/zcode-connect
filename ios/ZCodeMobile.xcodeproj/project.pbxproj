@@ -20,6 +20,7 @@
 		27FCA7C1FF07EB62BBD009A6 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4F0D7A5AEC3CA5D59D29459 /* ComposerView.swift */; };
 		2CDEA0D081FA2A893C52F2C4 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93034B5E7A5C99E815F3E561 /* Models.swift */; };
 		2CF4836A8B0C7AB3CF1EB773 /* ConversationControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4403F2376625B4E0EBCDC325 /* ConversationControls.swift */; };
+		31B714F7C62041947FE7DFE7 /* RelaySelfHostedSelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 417B739FC35E4B59F745FD8A /* RelaySelfHostedSelfTests.swift */; };
 		3C94CBD0D10C86D20F223FC5 /* ReasoningDial.swift in Sources */ = {isa = PBXBuildFile; fileRef = A441192B1E3F9AFF28558E73 /* ReasoningDial.swift */; };
 		3F7635DED66F9E6833F63915 /* RelayFork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30B33762AB958F3D465C206F /* RelayFork.swift */; };
 		40AB6ACE12EF2DCD6CF2A62F /* RelayAdapterSelfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78D420C8B98F6F6363D856CD /* RelayAdapterSelfTests.swift */; };
@@ -98,6 +99,7 @@
 		3ADEF78963A492551AD4C392 /* BridgeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeClient.swift; sourceTree = "<group>"; };
 		3BC69DB47BC6EE1CF2679C33 /* WorkspaceHookReviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceHookReviewSheet.swift; sourceTree = "<group>"; };
 		3BF3D2F5C6EF69336805ECB6 /* ZCodeMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZCodeMobileApp.swift; sourceTree = "<group>"; };
+		417B739FC35E4B59F745FD8A /* RelaySelfHostedSelfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelaySelfHostedSelfTests.swift; sourceTree = "<group>"; };
 		4403F2376625B4E0EBCDC325 /* ConversationControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationControls.swift; sourceTree = "<group>"; };
 		45ABF471E89EC2926E7D9F24 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		4A4D7C8E7CE4761317F95DCD /* FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesView.swift; sourceTree = "<group>"; };
@@ -227,6 +229,7 @@
 				B1A7AEF11C23B545FFA5CBB6 /* RelayHookReviewAdapterSelfTests.swift */,
 				989E8ECC2115076A0FB69D5E /* RelayRecoverySelfTests.swift */,
 				F6DEB58E9F6876A8D7EC2FC3 /* RelayRemoteTransport.swift */,
+				417B739FC35E4B59F745FD8A /* RelaySelfHostedSelfTests.swift */,
 				D662DA4FFEF70F22E12102FC /* RelaySessionPages.swift */,
 				C767E3C8EC8EDAF8D852ABBE /* RelaySubagentAdapterSelfTests.swift */,
 				BBF5FD46539D8104CE7816C7 /* RelayTranscriptSelfTests.swift */,
@@ -438,6 +441,7 @@
 				DB213445FBAD56173B1FC4CB /* RelayProjection.swift in Sources */,
 				8219CB1DC8BE4109E268C7FD /* RelayRecoverySelfTests.swift in Sources */,
 				63A903167B36D6C07C960E1E /* RelayRemoteTransport.swift in Sources */,
+				31B714F7C62041947FE7DFE7 /* RelaySelfHostedSelfTests.swift in Sources */,
 				6731B17F2D94BC58E5595BB0 /* RelaySelfTests.swift in Sources */,
 				A9CFFE490BAF1DEBB03A4252 /* RelaySessionPages.swift in Sources */,
 				8D0A7F95B2C7B465C23567E2 /* RelaySubagentAdapterSelfTests.swift in Sources */,
