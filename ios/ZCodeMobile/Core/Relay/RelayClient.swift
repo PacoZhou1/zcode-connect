@@ -8,22 +8,50 @@ private enum RelayChildHistoryOperation {
 /// Injectable so the complete client can be exercised without contacting a real account.
 public protocol RelaySocketTransport: Sendable {
     func connect(to url: URL) async throws
+    func connect(pairing: RelayPairing) async throws
     func send(text: String) async throws
     func receive() async throws -> String
     func close() async
 }
 
-/// Official relay uses normal platform TLS validation; no custom trust delegate or HTTP fallback.
+public extension RelaySocketTransport {
+    func connect(pairing: RelayPairing) async throws { try await connect(to: pairing.relayURL) }
+}
+
+/// A pairing authorizes one endpoint, never a redirect to a different server.
+final class RelaySocketRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
+/// Official and explicitly paired custom services use normal platform TLS.
+/// No custom trust root, certificate bypass, or insecure HTTP fallback is installed.
 public actor RelayURLSessionSocket: RelaySocketTransport {
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     public init() {}
     public func connect(to url: URL) async throws {
-        guard url.scheme == "wss", url.host == "zcode.z.ai", url.path == "/ws", task == nil else { throw RelayFailure("relay_invalid_endpoint", "Only the official encrypted relay endpoint is supported.") }
+        guard url.scheme == "wss", url.host == "zcode.z.ai", url.path == "/ws",
+              url.port == nil || url.port == 443, url.user == nil, url.password == nil, url.fragment == nil else {
+            throw RelayFailure("relay_invalid_endpoint", "A custom relay endpoint requires explicit pairing information.")
+        }
+        try open(to: url)
+    }
+    public func connect(pairing: RelayPairing) async throws {
+        // RelayPairing is immutable and constructible only through the validated
+        // official URL or explicit same-origin custom transport envelope.
+        try open(to: pairing.relayURL)
+    }
+    private func open(to url: URL) throws {
+        guard task == nil else { throw RelayFailure("relay_already_connected", "Disconnect before opening another relay endpoint.") }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil; configuration.httpCookieStorage = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        let session = URLSession(configuration: configuration), task = session.webSocketTask(with: url)
+        let session = URLSession(configuration: configuration, delegate: RelaySocketRedirectDelegate(), delegateQueue: nil)
+        let task = session.webSocketTask(with: url)
         task.maximumMessageSize = RelayWire.maxFrame
         self.session = session; self.task = task; task.resume()
     }
@@ -46,6 +74,7 @@ public actor RelayClient {
     public private(set) var state: RelayClientState = .idle
     public private(set) var bridge: RelayBridge?
     public var pairedDeviceID: String? { paired ? lastDeviceID : nil }
+    public var pairedServiceID: String? { paired ? lastServiceID : nil }
     public var connectedAppVersion: String? { pairing?.appVersion }
     public private(set) var workspaceHookReviewSupported = false
     public nonisolated let liveVerified = false
@@ -55,7 +84,7 @@ public actor RelayClient {
     private let requestTimeout: TimeInterval
     private var receiveTask: Task<Void, Never>?, heartbeatTask: Task<Void, Never>?, outboundTail: Task<Void, Error>?
     private var pairing: RelayPairing?, connectionID: UUID?
-    private var lastDeviceID: String?, workspaceScopeID: String?
+    private var lastDeviceID: String?, lastServiceID: String?, workspaceScopeID: String?
     private var paired = false, rpcReady = false, closing = false, workspaceOpening = false, eventOverflowReported = false
     private var lastHeartbeat = 0.0, bridgeGeneration = 0
     private var rpcSequence: Int32 = 0
@@ -125,11 +154,11 @@ public actor RelayClient {
     public func connect(pairing: RelayPairing, confirmedControllerReplacement: Bool) async throws {
         guard confirmedControllerReplacement else { throw RelayFailure("controller_confirmation_required", "Connecting can replace another mobile controller. Confirm the selected desktop first.") }
         guard connectionID == nil, !closing else { throw RelayFailure("relay_already_connected", "Disconnect before pairing another desktop.") }
-        if lastDeviceID != pairing.deviceID { reducers.removeAll(); snapshots.removeAll(); commandHashes.removeAll(); stoppedSessions.removeAll(); workspaceScopeID = nil }
-        lastDeviceID = pairing.deviceID
+        if lastDeviceID != pairing.deviceID || lastServiceID != pairing.serviceID { reducers.removeAll(); snapshots.removeAll(); commandHashes.removeAll(); stoppedSessions.removeAll(); workspaceScopeID = nil }
+        lastDeviceID = pairing.deviceID; lastServiceID = pairing.serviceID
         let id = UUID(); connectionID = id; self.pairing = pairing; setState(.connecting)
         do {
-            try await transport.connect(to: pairing.relayURL)
+            try await transport.connect(pairing: pairing)
             receiveTask = Task { [weak self, transport] in
                 do {
                     while !Task.isCancelled {

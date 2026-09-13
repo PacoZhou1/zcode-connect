@@ -466,7 +466,12 @@ final class AppStore {
         guard let raw = token ?? CredentialStore.read(profile.id), let workspace = profile.relayWorkspaceKey else {
             throw BridgeFailure(message: "连接信息已失效，请重新扫描电脑上的二维码。", code: "relay_credentials_unavailable")
         }
-        let context = try await pairRelay(raw, confirmedControllerReplacement: true, attempt: UUID(), reportFailure: reportFailure)
+        let pairing = try RelayPairing(payload: raw)
+        guard profile.relayDeviceID == pairing.deviceID,
+              (profile.relayServiceID ?? RelayPairing.legacyServiceID(profileURL: profile.baseURL)) == pairing.serviceID else {
+            throw BridgeFailure(message: "保存的连接与配对服务不一致，请重新添加连接。", code: "relay_profile_mismatch")
+        }
+        let context = try await pairRelay(raw, confirmedControllerReplacement: true, attempt: UUID(), reportFailure: reportFailure, pairing: pairing)
         guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
         if !relayWorkspaces.contains(where: { $0.id == workspace && $0.canAttach }) {
             offerRelayWorkspaceSelection(context, name: profile.name)
@@ -538,7 +543,7 @@ final class AppStore {
 
     @discardableResult
     func beginRelayPairing(_ raw: String, confirmedControllerReplacement: Bool, attempt: UUID = UUID(), reportFailure: Bool = false) async throws -> RelayWorkspaceSelectionContext {
-        let pairing = try RelayPairing(scannedURL: raw)
+        let pairing = try RelayPairing(payload: raw)
         guard confirmedControllerReplacement else { throw BridgeFailure(message: "请先确认连接这台电脑。", code: "controller_confirmation_required") }
         guard !Task.isCancelled else { throw CancellationError() }
         disconnect()
@@ -547,7 +552,7 @@ final class AppStore {
 
     private func pairRelay(_ raw: String, confirmedControllerReplacement: Bool, attempt: UUID,
                            reportFailure: Bool, pairing parsed: RelayPairing? = nil) async throws -> RelayWorkspaceSelectionContext {
-        let pairing = try parsed ?? RelayPairing(scannedURL: raw)
+        let pairing = try parsed ?? RelayPairing(payload: raw)
         guard confirmedControllerReplacement else { throw BridgeFailure(message: "请先确认连接这台电脑。", code: "controller_confirmation_required") }
         guard !Task.isCancelled else { throw CancellationError() }
         tearDownConnection()
@@ -592,14 +597,15 @@ final class AppStore {
             streamTask?.cancel(); refreshTask?.cancel()
             let bridge = try await paired.openWorkspace(key: workspaceKey)
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
-            let pairing = try RelayPairing(scannedURL: raw)
+            let pairing = try RelayPairing(payload: raw)
             let adapter = try await RelayRemoteTransport(client: paired, bootstrap: bootstrap, bridge: bridge,
                                                          hostName: name.isEmpty ? pairing.deviceName : name)
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { await adapter.shutdown(); throw CancellationError() }
-            let existing = profiles.first { $0.relayDeviceID == pairing.deviceID && $0.relayWorkspaceKey == workspaceKey }
+            let existing = profiles.first { $0.relayDeviceID == pairing.deviceID && $0.relayWorkspaceKey == workspaceKey
+                && ($0.relayServiceID ?? RelayPairing.legacyServiceID(profileURL: $0.baseURL)) == pairing.serviceID }
             let profile = ConnectionProfile(id: existing?.id ?? UUID().uuidString,
-                name: name.isEmpty ? pairing.deviceName : name, baseURL: "https://zcode.z.ai/remote/v4",
-                relayDeviceID: pairing.deviceID, relayWorkspaceKey: workspaceKey)
+                name: name.isEmpty ? pairing.deviceName : name, baseURL: pairing.profileURL.absoluteString,
+                relayDeviceID: pairing.deviceID, relayWorkspaceKey: workspaceKey, relayServiceID: pairing.serviceID)
             try CredentialStore.save(raw, id: profile.id)
             client = adapter
             sessions = []; transcripts = [:]; histories = [:]; loadingHistory = []; pendingInteractions = [:]

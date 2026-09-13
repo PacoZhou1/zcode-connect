@@ -264,6 +264,7 @@ struct ConnectionProfile: Identifiable, Codable, Hashable {
     var certificateSHA256: String?
     var relayDeviceID: String?
     var relayWorkspaceKey: String?
+    var relayServiceID: String?
     var isRelay: Bool { relayDeviceID != nil }
 }
 

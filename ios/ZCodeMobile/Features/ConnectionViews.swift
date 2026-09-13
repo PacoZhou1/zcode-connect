@@ -24,7 +24,7 @@ struct ConnectionsView: View {
                                 Image(systemName: "laptopcomputer")
                                 VStack(alignment: .leading) {
                                     Text(profile.name).foregroundStyle(.primary)
-                                    Text(profile.isRelay ? "ZCode 远程 · \(profile.relayWorkspaceKey?.split(separator: "/").last.map(String.init) ?? "项目")" : profile.baseURL).font(.caption).foregroundStyle(.secondary)
+                                    Text(profile.isRelay ? "\(profile.relayServiceID != nil && profile.relayServiceID != RelayPairing.officialServiceID ? "自建 Relay · " + (URL(string: profile.baseURL)?.host ?? "中转服务") : "ZCode 远程") · \(profile.relayWorkspaceKey?.split(separator: "/").last.map(String.init) ?? "项目")" : profile.baseURL).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 if profile.id == store.activeProfileID {
@@ -82,6 +82,7 @@ struct PairingView: View {
     @State private var scanner = false
     @State private var failure: String?
     @State private var relayPayload: String?
+    @State private var relayServiceHost: String?
     @State private var confirmRelay = false
     @State private var choosingWorkspace = false
     @State private var beganRelay = false
@@ -97,7 +98,7 @@ struct PairingView: View {
         .confirmationDialog("连接这台电脑？", isPresented: $confirmRelay, titleVisibility: .visible) {
             Button("连接并使用此手机控制") { Task { await connectRelay() } }
             Button("取消", role: .cancel) {}
-        } message: { Text("连接 ZCode 远程可能替换另一台手机的控制连接。确认后将读取电脑上的项目，由你选择要打开的项目。") }
+        } message: { Text(relayServiceHost.map { "将通过自建中转 \($0) 连接电脑，可能替换另一台手机的控制连接。确认后由你选择项目。" } ?? "连接 ZCode 远程可能替换另一台手机的控制连接。确认后将读取电脑上的项目，由你选择要打开的项目。") }
         .onAppear { isVisible = true; restoreWorkspaceSelection() }
         .onChange(of: store.relayWorkspaceSelection?.id) { _, _ in restoreWorkspaceSelection() }
         .onDisappear {
@@ -185,12 +186,12 @@ struct PairingView: View {
                 if choosingWorkspace {
                     Label("已连接电脑，等待选择项目", systemImage: "checkmark.shield").foregroundStyle(.secondary)
                 } else if relayPayload != nil {
-                    Label("已识别 ZCode 官方远程连接", systemImage: "checkmark.shield").foregroundStyle(.secondary)
+                    Label(relayServiceHost.map { "自建 Relay · \($0)" } ?? "已识别 ZCode 官方远程连接", systemImage: "checkmark.shield").foregroundStyle(.secondary)
                 } else {
                 TextField(manualConnection ? "服务地址（https://…）" : "ZCode 连接链接", text: $address)
                     .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .accessibilityIdentifier("pairing.address")
-                    .onSubmit { if (try? RelayPairing(scannedURL: address.trimmingCharacters(in: .whitespacesAndNewlines))) != nil { parse(address) } }
+                    .onSubmit { if (try? RelayPairing(payload: address.trimmingCharacters(in: .whitespacesAndNewlines))) != nil { parse(address) } }
                 if manualConnection {
                 SecureField("连接密钥", text: $token)
                     .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -202,9 +203,9 @@ struct PairingView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             } header: {
-                Text(choosingWorkspace ? "电脑连接" : manualConnection ? "自托管连接" : "ZCode 远程控制（推荐）")
+                Text(choosingWorkspace ? "电脑连接" : manualConnection ? "HTTP 桥接（高级）" : relayServiceHost != nil ? "自建 Relay" : "ZCode 远程控制（推荐）")
             } footer: {
-                Text(choosingWorkspace ? "选择其它项目不会删除原项目的任务或草稿。" : manualConnection ? "需要已运行的兼容连接服务。SSH 地址本身不是 ZCode 远控链接。密钥保存在钥匙串中。" : "电脑左下角手机图标 → 移动端远程控制 → 复制链接。首次连接后选择项目。")
+                Text(choosingWorkspace ? "选择其它项目不会删除原项目的任务或草稿。" : manualConnection ? "兼容原有 HTTP 桥接服务；它不等同于自建 Relay，不能接管原桌面任务。连接密钥保存在钥匙串中。" : "官方连接：电脑左下角手机图标 → 复制链接。自建 Relay：扫描或粘贴自有中转服务导出的完整连接信息。首次连接后选择项目。")
             }
             if let failure {
                 Section { Text(failure).foregroundStyle(.red).font(.subheadline) }
@@ -224,17 +225,17 @@ struct PairingView: View {
                 }
                 .disabled(connecting || choosingWorkspace || (relayPayload == nil && (manualConnection
                     ? (AppStore.validatedURL(address) == nil || token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    : (try? RelayPairing(scannedURL: address.trimmingCharacters(in: .whitespacesAndNewlines))) == nil)))
+                    : (try? RelayPairing(payload: address.trimmingCharacters(in: .whitespacesAndNewlines))) == nil)))
                 .accessibilityIdentifier("pairing.connect")
             } }
             Section {
                 if !choosingWorkspace {
-                    Button(manualConnection ? "使用 ZCode 远程链接" : "自托管连接（高级）") {
-                        manualConnection.toggle(); address = ""; token = ""; certificateSHA256 = ""; relayPayload = nil; failure = nil
+                    Button(manualConnection ? "使用 Relay 连接" : "HTTP 桥接（高级）") {
+                        manualConnection.toggle(); address = ""; token = ""; certificateSHA256 = ""; relayPayload = nil; relayServiceHost = nil; failure = nil
                     }.disabled(connecting).accessibilityIdentifier("pairing.connectionMethod")
                 }
                 DisclosureGroup("在哪里找到连接信息？") {
-                    Text("在电脑 ZCode 左下角点击手机图标，复制远控链接。电脑可以在家里，也可以在外面，但都需要联网且保持 ZCode 运行。\n\n若项目通过 SSH 运行，先在电脑 ZCode 中连接该项目，再从这里接入。手机不会新建 SSH 环境。\n\n自托管方式需要另行部署兼容服务及安全网络，目前不等同于官方桌面远控。")
+                    Text("在电脑 ZCode 左下角点击手机图标，复制远控链接。电脑可以在家里，也可以在外面，但都需要联网且保持 ZCode 运行。\n\n若项目通过 SSH 运行，先在电脑 ZCode 中连接该项目，再从这里接入。手机不会新建 SSH 环境。\n\n自建 Relay 需要已部署的兼容中转服务与有效 HTTPS 证书，请粘贴它导出的完整连接信息。中转只转发控制流量，任务仍在原电脑执行。HTTP 桥接是另一种高级连接方式，不会接管原桌面会话。")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             }
@@ -257,7 +258,7 @@ struct PairingView: View {
         relayAttempt = context.attempt
         name = context.name
         beganRelay = true; choosingWorkspace = true; connecting = false; failure = nil
-        relayPayload = nil; address = ""; token = ""; certificateSHA256 = ""
+        relayPayload = nil; relayServiceHost = nil; address = ""; token = ""; certificateSHA256 = ""
     }
     private func connectRelay() async {
         guard isVisible, !connecting, let raw = relayPayload else { return }
@@ -307,14 +308,18 @@ struct PairingView: View {
         guard !connecting, !choosingWorkspace else { return }
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         // A replacement payload must never reuse another host's address or credential.
-        address = ""; token = ""; certificateSHA256 = ""; relayPayload = nil; failure = nil
-        if let pairing = try? RelayPairing(scannedURL: value) {
+        address = ""; token = ""; certificateSHA256 = ""; relayPayload = nil; relayServiceHost = nil; failure = nil
+        if let pairing = try? RelayPairing(payload: value) {
             manualConnection = false
-            relayPayload = value; name = pairing.deviceName
+            relayPayload = value; relayServiceHost = pairing.isSelfHosted ? pairing.profileURL.host : nil; name = pairing.deviceName
             address = ""; token = ""; certificateSHA256 = ""; failure = nil
             return
         }
-        relayPayload = nil
+        relayPayload = nil; relayServiceHost = nil
+        if let data = value.data(using: .utf8), let envelope = try? RelayJSON(data: data), envelope.object?["transport"] != nil {
+            failure = "自建 Relay 连接信息无效，请核对同一服务的加密配对地址和中转地址。"
+            return
+        }
         struct PairingPayload: Decodable {
             var url: String?; var baseURL: String?; var token: String; var name: String?
             var certificateSHA256: String?

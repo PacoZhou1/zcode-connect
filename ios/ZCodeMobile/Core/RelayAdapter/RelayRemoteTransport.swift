@@ -8,6 +8,7 @@ actor RelayRemoteTransport: RemoteTransport {
     let projectID: String
     let hostName: String
     private let deviceID: String
+    private let serviceID: String
     private let version: String?
     private let journal: RelayAdapterJournal
     private var metadata: [String: RelayTaskMetadata] = [:]
@@ -43,14 +44,17 @@ actor RelayRemoteTransport: RemoteTransport {
     private var sinks: [UUID: AsyncThrowingStream<BridgeEnvelope, any Error>.Continuation] = [:]
 
     init(client: RelayClient, bootstrap: RelayBootstrap, bridge: RelayBridge, hostName: String, journalDirectory: URL? = nil) async throws {
-        guard await client.bridge == bridge, let deviceID = await client.pairedDeviceID,
+        guard await client.bridge == bridge, let deviceID = await client.pairedDeviceID, let serviceID = await client.pairedServiceID,
               bootstrap.workspaces.contains(where: { $0.id == bridge.workspaceKey && $0.workspacePath == bridge.workspacePath }) else {
             throw RelayFailure("relay_workspace_mismatch", "The adapter needs the currently attached desktop workspace.")
         }
-        self.client = client; self.bridge = bridge; self.deviceID = deviceID; self.hostName = hostName
+        self.client = client; self.bridge = bridge; self.deviceID = deviceID; self.serviceID = serviceID; self.hostName = hostName
         version = await client.connectedAppVersion
-        projectID = "relay-" + String(relayDigest(Data((deviceID + "\n" + bridge.workspaceKey).utf8)).prefix(24))
-        journal = try RelayAdapterJournal(scope: deviceID + "\n" + bridge.workspaceKey + "\n" + client.clientID, directory: journalDirectory)
+        // Preserve the official scope byte-for-byte so existing uncertain commands
+        // remain recoverable. A custom service can never read that journal.
+        let scopedDevice = serviceID == RelayPairing.officialServiceID ? deviceID : "service:" + relayDigest(Data(serviceID.utf8)) + "\n" + deviceID
+        projectID = "relay-" + String(relayDigest(Data((scopedDevice + "\n" + bridge.workspaceKey).utf8)).prefix(24))
+        journal = try RelayAdapterJournal(scope: scopedDevice + "\n" + bridge.workspaceKey + "\n" + client.clientID, directory: journalDirectory)
         for task in bootstrap.tasks ?? [] where Self.belongs(task, to: bridge) { metadata[task.id] = task }
     }
     deinit { pump?.cancel(); for sink in sinks.values { sink.finish() } }
@@ -62,7 +66,7 @@ actor RelayRemoteTransport: RemoteTransport {
         for task in subagentReads.values { task.cancel() }; subagentReads.removeAll()
         for loading in directoryLoads.values { loading.task.cancel() }; directoryLoads.removeAll()
         for sink in sinks.values { sink.finish() }; sinks.removeAll()
-        if await client.bridge == bridge {
+        if await client.bridge == bridge, await client.pairedDeviceID == deviceID, await client.pairedServiceID == serviceID {
             for id in projections.keys { try? await client.unsubscribe(sessionID: id) }
         }
     }
@@ -109,7 +113,7 @@ actor RelayRemoteTransport: RemoteTransport {
         let state = await client.state
         if state == .replaced { throw RelayFailure("controller_replaced", "当前连接已被其他设备接管，请重新连接。") }
         if state == .disconnected { throw lastRelayFailure ?? RelayFailure("relay_disconnected", "连接已断开，正在等待重新连接。") }
-        guard !closed, await client.pairedDeviceID == deviceID, await client.bridge == bridge else {
+        guard !closed, await client.pairedDeviceID == deviceID, await client.pairedServiceID == serviceID, await client.bridge == bridge else {
             throw RelayFailure("relay_workspace_changed", "Reconnect this view to the selected desktop workspace.")
         }
     }
