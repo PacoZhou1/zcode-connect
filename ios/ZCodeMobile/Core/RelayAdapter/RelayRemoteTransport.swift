@@ -683,7 +683,7 @@ actor RelayRemoteTransport: RemoteTransport {
         if let permission, !["build", "edit", "yolo"].contains(permission) { throw RelayFailure("mode_unsupported", "Choose an explicit permission mode.") }
         if permission == "yolo" || requestedMode == "yolo", !full { throw RelayFailure("full_access_confirmation_required", "Confirm full access for this change.") }
         if let requestedMode, let permission, requestedMode != "plan", requestedMode != permission { throw RelayFailure.invalid("The requested permission and collaboration modes conflict.") }
-        let mode = requestedMode ?? (current.mode == "plan" ? nil : permission)
+        let mode = requestedMode ?? permission
         let selection = body["model"]
         let model: RelayJSON? = selection.object == nil ? nil : .object(["providerId": .string(try selection.requiringString("providerId")), "modelId": .string(try selection.requiringString("modelId"))])
         let snapshot = try await client.setSessionConfiguration(sessionID: id, model: model, thoughtLevel: body["thoughtLevel"].string ?? selection["thoughtLevel"].string, mode: mode, explicitUserAction: true, confirmFullAccess: full)

@@ -77,20 +77,24 @@ import Foundation
             let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
             try check(reopened.requiresInitialConnection && !reopened.hasConnectedBefore, "Failed handshake became a successful prior connection on relaunch")
         }
-        await run("saving a profile before failed initial index does not bypass the gate on relaunch") {
+        await run("a failed initial index commits no profile and remains gated on relaunch") {
             let f = Fixture(); defer { f.close() }
             TestTransport.handler = { request in
                 if request.path.hasPrefix("v1/sessions?") { throw BridgeFailure(message: "Synthetic initial index failure", code: "offline") }
                 return nil
             }
             await f.connect()
-            try check(f.store.profiles == [f.profile] && f.defaults.data(forKey: "connections") != nil, "Fixture did not reach persisted-profile-before-index boundary")
-            try check(f.store.requiresInitialConnection && !f.store.hasConnectedBefore, "Saved profile was mistaken for initial connection success")
+            try check(f.store.connection == .failed("Synthetic initial index failure"), "Initial index failure was hidden")
+            try check(f.store.profiles.isEmpty && f.store.activeProfileID == nil && f.defaults.data(forKey: "connections") == nil, "Failed index committed an unverified profile")
+            try check(CredentialStore.values[f.profile.id] == nil && f.defaults.string(forKey: "activeConnection") == nil, "Failed index saved credentials or an active connection")
+            try check(f.store.projects.isEmpty && f.store.sessions.isEmpty && TestTransport.eventSubscriptions.isEmpty, "Failed index published partial content or opened a stream")
+            try check(f.store.requiresInitialConnection && !f.store.hasConnectedBefore, "Failed index was mistaken for initial connection success")
             try check(f.defaults.object(forKey: "hasConnectedBefore") as? Bool == false, "Index failure changed the persistent gate")
             let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
-            try check(reopened.profiles == [f.profile] && reopened.requiresInitialConnection, "Existing failed profile bypassed onboarding during migration")
+            try check(reopened.profiles.isEmpty && reopened.activeProfileID == nil && reopened.requiresInitialConnection, "Failed preflight became a saved or successful connection on relaunch")
+            let requestsBeforeRestart = TestTransport.requests.count
             await reopened.start()
-            try check(reopened.requiresInitialConnection, "Automatic failed reconnect unlocked Home")
+            try check(reopened.requiresInitialConnection && TestTransport.requests.count == requestsBeforeRestart, "Relaunch retried an uncommitted profile or unlocked Home")
         }
         await run("only a completed initial index unlocks Home and the result survives disconnect and relaunch") {
             let f = Fixture(); defer { f.close() }
@@ -102,15 +106,19 @@ import Foundation
             let connecting = Task { await f.connect() }
             defer { gate.release(); connecting.cancel() }
             try await gate.waitUntilEntered()
-            try check(f.store.connection.isOnline && f.store.requiresInitialConnection, "Status handshake alone unlocked Home before index completion")
+            try check(f.store.connection == .connecting && f.store.requiresInitialConnection, "Status handshake reported online or unlocked Home before index completion")
+            try check(f.store.profiles.isEmpty && f.store.activeProfileID == nil && CredentialStore.values[f.profile.id] == nil, "Profile or credentials committed while the initial index was pending")
+            try check(f.defaults.data(forKey: "connections") == nil && f.defaults.string(forKey: "activeConnection") == nil && TestTransport.eventSubscriptions.isEmpty, "Pending index was persisted or opened a stream")
             try check(!f.defaults.bool(forKey: "hasConnectedBefore"), "Success persisted while the initial index was pending")
             gate.release(); await connecting.value
-            try check(f.store.session("S") != nil && f.store.hasConnectedBefore && !f.store.requiresInitialConnection, "Successful initial index did not unlock Home")
-            try check(f.defaults.bool(forKey: "hasConnectedBefore"), "Connection success was not persisted")
+            try check(f.store.connection.isOnline && f.store.session("S") != nil && f.store.hasConnectedBefore && !f.store.requiresInitialConnection, "Successful initial index did not unlock Home")
+            try check(f.store.profiles == [f.profile] && f.store.activeProfileID == f.profile.id && CredentialStore.values[f.profile.id] == "synthetic-test-token", "Completed index did not commit its profile and credentials")
+            try check(f.defaults.bool(forKey: "hasConnectedBefore") && f.defaults.string(forKey: "activeConnection") == f.profile.id, "Connection success was not persisted")
             f.store.disconnect()
             try check(!f.store.requiresInitialConnection, "An ordinary disconnect reset completed onboarding")
             let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
             try check(reopened.connection == .disconnected && reopened.hasConnectedBefore && !reopened.requiresInitialConnection, "Offline relaunch lost successful connection history")
+            try check(reopened.profiles == [f.profile] && reopened.activeProfileID == f.profile.id, "Offline relaunch lost the verified profile")
         }
         await run("reference mode skips onboarding without persisting a real connection") {
             let f = Fixture(); defer { f.close() }
@@ -151,55 +159,63 @@ import Foundation
             let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
             try check(reopened.requiresInitialConnection, "Cancelled connection unlocked Home on relaunch")
         }
-        await run("superseded initial index cannot unlock onboarding when its replacement fails") {
+        await run("refresh during first connection is a no-op and preserves a failed preflight gate") {
             let f = Fixture(); defer { f.close() }
-            let first = Gate(), replacement = Gate()
+            let first = Gate()
             var sessionReads = 0
             TestTransport.handler = { request in
                 if request.path.hasPrefix("v1/sessions?") {
                     sessionReads += 1
-                    if sessionReads == 1 { await first.hold() }
-                    else { await replacement.hold(); throw BridgeFailure(message: "Synthetic replacement index failure", code: "offline") }
+                    if sessionReads == 1 {
+                        await first.hold()
+                        throw BridgeFailure(message: "Synthetic preflight index failure", code: "offline")
+                    }
+                    return listing("unexpected replacement")
                 }
                 return nil
             }
             let connecting = Task { await f.connect() }
-            defer { first.release(); replacement.release(); connecting.cancel() }
+            defer { first.release(); connecting.cancel() }
             try await first.waitUntilEntered()
-            let refreshing = Task { await f.store.refresh() }
-            defer { refreshing.cancel() }
-            try await replacement.waitUntilEntered()
+            // The candidate transport is private to connect until the full preflight
+            // succeeds. A user refresh must not manufacture a replacement index.
+            await f.store.refresh()
+            try check(sessionReads == 1 && TestTransport.requests.filter { $0.path == "v1/status" }.count == 1, "Refresh started a second handshake or replacement index")
+            try check(f.store.connection == .connecting && f.store.requiresInitialConnection && !f.store.isLoading, "Refresh changed pending connection state or unlocked Home")
+            try check(f.store.profiles.isEmpty && f.store.activeProfileID == nil && f.store.sessions.isEmpty && f.store.projects.isEmpty, "Refresh published an incomplete preflight")
             first.release(); await connecting.value
-            replacement.release(); await refreshing.value
-            try check(f.store.sessions.isEmpty && f.store.connection == .failed("Synthetic replacement index failure"), "Fixture did not supersede the initial index before replacement failure")
-            try check(f.store.requiresInitialConnection && !f.store.hasConnectedBefore, "An index discarded by indexRequest guard was treated as successful onboarding")
+            try check(f.store.sessions.isEmpty && f.store.connection == .failed("Synthetic preflight index failure"), "Refresh masked the original preflight failure")
+            try check(f.store.requiresInitialConnection && !f.store.hasConnectedBefore && !f.defaults.bool(forKey: "hasConnectedBefore"), "Refresh or failed preflight was treated as successful onboarding")
+            try check(f.store.profiles.isEmpty && CredentialStore.values[f.profile.id] == nil && TestTransport.eventSubscriptions.isEmpty, "Failed preflight committed a profile, credential or stream after refresh")
             let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
-            try check(reopened.requiresInitialConnection, "Discarded initial index permanently unlocked Home")
+            try check(reopened.requiresInitialConnection && reopened.profiles.isEmpty && reopened.activeProfileID == nil, "Refresh plus failed preflight permanently unlocked Home or saved a profile")
         }
-        await run("a successful replacement index completes initial onboarding") {
+        await run("refresh during first connection is a no-op and only the original preflight commits success") {
             let f = Fixture(); defer { f.close() }
-            let first = Gate(), replacement = Gate()
+            let first = Gate()
             var sessionReads = 0
             TestTransport.handler = { request in
                 if request.path.hasPrefix("v1/sessions?") {
                     sessionReads += 1
-                    if sessionReads == 1 { await first.hold() }
-                    else { await replacement.hold(); return listing("successful replacement") }
+                    if sessionReads == 1 { await first.hold(); return listing("completed preflight") }
+                    return listing("unexpected replacement")
                 }
                 return nil
             }
             let connecting = Task { await f.connect() }
-            defer { first.release(); replacement.release(); connecting.cancel() }
+            defer { first.release(); connecting.cancel() }
             try await first.waitUntilEntered()
-            let refreshing = Task { await f.store.refresh() }
-            defer { refreshing.cancel() }
-            try await replacement.waitUntilEntered()
+            await f.store.refresh()
+            try check(sessionReads == 1 && TestTransport.requests.filter { $0.path == "v1/status" }.count == 1, "Refresh replaced the pending preflight or reconnected")
+            try check(f.store.connection == .connecting && f.store.requiresInitialConnection && !f.store.isLoading, "Refresh marked the unverified candidate online")
+            try check(f.store.profiles.isEmpty && CredentialStore.values[f.profile.id] == nil && !f.defaults.bool(forKey: "hasConnectedBefore"), "Refresh committed a profile or unlocked onboarding before index completion")
             first.release(); await connecting.value
-            let gatedWhileReplacementPending = f.store.requiresInitialConnection
-            replacement.release(); await refreshing.value
-            try check(gatedWhileReplacementPending, "Discarded first index unlocked onboarding before its successful replacement")
-            try check(f.store.session("S")?.title == "successful replacement task" && f.store.hasConnectedBefore && !f.store.requiresInitialConnection, "Applied replacement index failed to complete onboarding")
-            try check(f.defaults.bool(forKey: "hasConnectedBefore"), "Replacement success was not durable")
+            await drainActor()
+            try check(sessionReads == 1 && f.store.connection.isOnline && f.store.session("S")?.title == "completed preflight task" && f.store.hasConnectedBefore && !f.store.requiresInitialConnection, "Only the completed original index should unlock onboarding")
+            try check(f.store.profiles == [f.profile] && f.store.activeProfileID == f.profile.id && CredentialStore.values[f.profile.id] == "synthetic-test-token", "Successful preflight did not commit its profile and credential")
+            try check(f.defaults.bool(forKey: "hasConnectedBefore") && TestTransport.eventSubscriptions["a.invalid"] == 1, "Success was not durable or started duplicate streams")
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
+            try check(reopened.hasConnectedBefore && !reopened.requiresInitialConnection && reopened.profiles == [f.profile] && reopened.activeProfileID == f.profile.id, "Successful preflight after refresh was lost on relaunch")
         }
         await run("A to B clears old content and drafts before the first response") {
             let f = await fixture(); defer { f.close() }; seedPrivateA(f.store)

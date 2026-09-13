@@ -64,7 +64,7 @@ public extension RelayClient {
         return ack
     }
 
-    /// Session-scoped setters let the original host resolve its credentials. Workspace defaults are never written.
+    /// Original host setters resolve credentials; setMode may also persist the host project permission preference.
     func setSessionConfiguration(sessionID: String, model: RelayJSON? = nil, thoughtLevel: String? = nil, mode: String? = nil, explicitUserAction: Bool, confirmFullAccess: Bool = false, registerCreatedTask: Bool = false) async throws -> RelaySessionSnapshot {
         try RelayWire.requireAction(explicitUserAction)
         if let mode {
@@ -72,7 +72,13 @@ public extension RelayClient {
             if mode == "yolo", !confirmFullAccess { throw RelayFailure("full_access_confirmation_required", "Confirm full access for this request.") }
         }
         var snapshot = try await readSession(sessionID)
-        guard snapshot.activeTurnID == nil, !["running", "waiting"].contains(snapshot.status) else { throw RelayFailure("session_busy", "Wait for the current turn before changing its settings.") }
+        let changesModel = model.map { $0 != snapshot.model } ?? false
+        let changesThought = thoughtLevel.map { $0 != snapshot.thoughtLevel } ?? false
+        if changesModel || changesThought || registerCreatedTask {
+            guard snapshot.activeTurnID == nil, !["running", "waiting"].contains(snapshot.status) else {
+                throw RelayFailure("session_busy", "任务进行中，请结束当前轮次后更改模型或思考强度。批准方式可以随时调整。")
+            }
+        }
         if registerCreatedTask, model == nil { throw RelayFailure.invalid("Registering a newly created task requires its exact selected model.") }
         // The host session service's setModel path calls ensureSessionSubscription and syncSnapshotAndBroadcast.
         // A raw v4 create/read alone does not run the task service's index registration path.

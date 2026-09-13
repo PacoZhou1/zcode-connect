@@ -23,6 +23,8 @@ final class AppStore {
     var errorMessage: String?
     var toast: String?
     var isLoading = false
+    var changingSettings: Set<String> = []
+    private var settingsRevisions: [String: UUID] = [:]
     var sendingSessions: Set<String> = []
     // Presentation-only messages; the durable outbox remains the authority for retries.
     var outgoingMessages: [String: ChatMessage] = [:]
@@ -433,39 +435,44 @@ final class AppStore {
         let newClient = BridgeClient(baseURL: url, token: secret, certificateSHA256: profile.certificateSHA256)
         do {
             let status: BridgeStatus = try await newClient.get("v1/status")
+            try Task.checkCancellation()
             guard epoch == connectionEpoch else { return }
-            try CredentialStore.save(secret, id: profile.id)
-            client = newClient
-            sessions = []
-            transcripts = [:]
-            histories = [:]; loadingHistory = []
-            pendingInteractions = [:]
-            modelSelections = [:]
-            remoteSettings = [:]
-            uploadedAttachments = [:]
-            options = SessionOptions()
-            newModelSelection = nil
-            projectSettings = [:]
-            goals = [:]
-            agentTasks = [:]
-            if isReferenceMode || activeProfileID != profile.id { path = [] }
-            isReferenceMode = false
-            hostName = status.hostName
-            bridgeVersion = status.zcodeVersion
-            activeProfileID = profile.id
-            if let i = profiles.firstIndex(where: { $0.id == profile.id }) { profiles[i] = profile }
-            else { profiles.append(profile) }
-            try loadScopedState()
-            save(profiles, key: "connections")
-            defaults.set(profile.id, forKey: "activeConnection")
-            connection = .connected
-            try await loadRemoteIndex()
+            // Validate the entire index before committing a new profile or clearing the old UI.
+            try await loadRemoteIndex(using: newClient, beforeApplying: { [self] in
+                try CredentialStore.save(secret, id: profile.id)
+                client = newClient
+                sessions = []
+                transcripts = [:]
+                histories = [:]; loadingHistory = []
+                pendingInteractions = [:]
+                modelSelections = [:]
+                remoteSettings = [:]
+                uploadedAttachments = [:]
+                options = SessionOptions()
+                newModelSelection = nil
+                projectSettings = [:]
+                goals = [:]
+                agentTasks = [:]
+                if isReferenceMode || activeProfileID != profile.id { path = [] }
+                isReferenceMode = false
+                hostName = status.hostName
+                bridgeVersion = status.zcodeVersion
+                activeProfileID = profile.id
+                if let i = profiles.firstIndex(where: { $0.id == profile.id }) { profiles[i] = profile }
+                else { profiles.append(profile) }
+                try loadScopedState()
+                save(profiles, key: "connections")
+                defaults.set(profile.id, forKey: "activeConnection")
+                connection = .connected
+            })
+            try Task.checkCancellation()
             guard epoch == connectionEpoch else { return }
             connectedAt = Date()
             beginStreaming()
         } catch {
             guard epoch == connectionEpoch else { return }
             tearDownConnection()
+            if error is CancellationError || Task.isCancelled { connection = .disconnected; return }
             let message = Self.connectionErrorMessage(error)
             connection = .failed(message)
             errorMessage = message
@@ -709,6 +716,8 @@ final class AppStore {
         connection = .disconnected
         sessionListTruncated = false
         sendingSessions = []
+        changingSettings = []
+        settingsRevisions = [:]
         outgoingMessages = [:]
         outgoingBaselineIDs = [:]
         stoppingSessions = []
@@ -751,8 +760,8 @@ final class AppStore {
         }
     }
 
-    private func loadRemoteIndex() async throws {
-        guard let client else { return }
+    private func loadRemoteIndex(using source: (any RemoteTransport)? = nil, beforeApplying: (() throws -> Void)? = nil) async throws {
+        guard let client = source ?? self.client else { return }
         struct Projects: Decodable, Sendable { var projects: [RemoteProject] }
         struct Pagination: Decodable, Sendable {
             var snapshotId: String
@@ -806,6 +815,8 @@ final class AppStore {
             }
         }
         guard epoch == connectionEpoch, indexRequest == request else { return }
+        try Task.checkCancellation()
+        try beforeApplying?()
         projects = projectResponse.projects
         sessionListTruncated = truncated
         let current = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { _, newest in newest })
@@ -1279,15 +1290,25 @@ final class AppStore {
         }
     }
 
+    func canEditSettings(_ id: String?, model: Bool = false) -> Bool {
+        if isReferenceMode || id == nil { return true }
+        guard let id, connection.isOnline, session(id)?.canControl == true,
+              !changingSettings.contains(id) else { return false }
+        if model { return ![SessionStatus.running, .waiting].contains(session(id)?.status ?? .idle) && remoteSettings[id]?.mutable == true }
+        if activeProfile?.isRelay == true { return true }
+        return ![SessionStatus.running, .waiting].contains(session(id)?.status ?? .idle) && remoteSettings[id]?.mutable == true
+    }
+
     func loadSettings(_ id: String) async {
         guard !isReferenceMode, session(id)?.canControl == true, let client else { return }
         let epoch = connectionEpoch
+        let revision = UUID(); settingsRevisions[id] = revision
         do {
             let response: RemoteSettings = try await client.get("v1/sessions/\(id)/settings")
-            guard epoch == connectionEpoch else { return }
+            guard epoch == connectionEpoch, settingsRevisions[id] == revision, !changingSettings.contains(id) else { return }
             remoteSettings[id] = response
             modelSelections[id] = response.model
-        } catch { if epoch == connectionEpoch { errorMessage = error.localizedDescription } }
+        } catch { if epoch == connectionEpoch, settingsRevisions[id] == revision, !changingSettings.contains(id) { errorMessage = error.localizedDescription } }
     }
 
     func permission(for id: String?) -> PermissionMode {
@@ -1321,8 +1342,13 @@ final class AppStore {
             if let permissionMode, let permission = PermissionMode(wireValue: permissionMode) { options.permission = permission }
             return true
         }
-        guard let client else { return false }
+        guard let client, canEditSettings(id, model: model != nil || reasoning != nil) else {
+            errorMessage = "当前无法更改此设置。请确认电脑已连接、任务可控制；模型设置需等待当前轮次结束。"
+            return false
+        }
         let epoch = connectionEpoch
+        changingSettings.insert(id); settingsRevisions[id] = UUID()
+        defer { if epoch == connectionEpoch { changingSettings.remove(id) } }
         do {
             var body: [String: JSONValue] = [:]
             if let model { body["model"] = model.json }
@@ -1332,6 +1358,7 @@ final class AppStore {
             if confirmFullAccess { body["confirmFullAccess"] = .bool(true) }
             let response: RemoteSettings = try await client.mutate("v1/sessions/\(id)/settings", method: "PATCH", body: body)
             guard epoch == connectionEpoch else { return false }
+            settingsRevisions[id] = UUID()
             remoteSettings[id] = response
             modelSelections[id] = response.model
             return true

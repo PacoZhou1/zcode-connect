@@ -391,7 +391,7 @@ struct ComposerView: View {
     private var attachmentPanel: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    attachmentAction(isPlanMode ? "关闭方案模式" : "方案模式", symbol: "list.bullet") {
+                    attachmentAction(isPlanMode ? "关闭方案模式" : "方案模式", symbol: "list.bullet", enabled: store.canEditSettings(sessionID)) {
                         if isPlanMode && permission == .full && !store.isReferenceMode { confirmPlanExit = true }
                         else { setPlanMode(!isPlanMode) }
                     }
@@ -481,9 +481,20 @@ struct ComposerView: View {
             }.accessibilityIdentifier("reasoning.advanced")
             ReasoningSlider(level: $reasoningDraft, levels: availableReasoning) { level in
                 if store.isReferenceMode { store.options.reasoning = level }
-                else { Task { _ = await store.updateSettings(sessionID, reasoning: level.wireValue) } }
+                else {
+                    let identity = draftIdentity
+                    Task {
+                        _ = await store.updateSettings(sessionID, reasoning: level.wireValue)
+                        guard identity == draftIdentity else { return }
+                        reasoningDraft = currentReasoning
+                    }
+                }
             }
                 .frame(height: 72).padding(.horizontal, 37.333333)
+                .disabled(!store.canEditSettings(sessionID, model: true))
+            if !store.canEditSettings(sessionID, model: true) {
+                Text("当前轮次结束后可调整模型与思考强度。").font(.footnote).foregroundStyle(.secondary)
+            }
         }
         .padding(.top, 8)
         .onTapGesture(count: 2) { showReasoning = false }

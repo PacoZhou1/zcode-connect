@@ -89,6 +89,7 @@ struct PairingView: View {
     @State private var relayAttempt = UUID()
     @State private var selectionContext: RelayWorkspaceSelectionContext?
     @State private var isVisible = false
+    @State private var httpConnectionTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -103,6 +104,7 @@ struct PairingView: View {
         .onChange(of: store.relayWorkspaceSelection?.id) { _, _ in restoreWorkspaceSelection() }
         .onDisappear {
             isVisible = false
+            httpConnectionTask?.cancel(); httpConnectionTask = nil
             if beganRelay && !store.connection.isOnline {
                 if let selectionContext { store.cancelRelayPairing(context: selectionContext) }
                 else { store.cancelRelayPairing(attempt: relayAttempt) }
@@ -214,7 +216,7 @@ struct PairingView: View {
                 Button {
                     if relayPayload != nil { confirmRelay = true }
                     else if !manualConnection { parse(address); if relayPayload != nil { confirmRelay = true } }
-                    else { Task { await connect() } }
+                    else { httpConnectionTask = Task { await connect() } }
                 } label: {
                     HStack {
                         Spacer()
@@ -234,6 +236,9 @@ struct PairingView: View {
                         manualConnection.toggle(); address = ""; token = ""; certificateSHA256 = ""; relayPayload = nil; relayServiceHost = nil; failure = nil
                     }.disabled(connecting).accessibilityIdentifier("pairing.connectionMethod")
                 }
+                NavigationLink { ConnectionGuideView() } label: {
+                    Label("连接指南：手机与电脑分别怎么做", systemImage: "questionmark.circle")
+                }.disabled(connecting || choosingWorkspace).accessibilityIdentifier("pairing.guide")
                 DisclosureGroup("在哪里找到连接信息？") {
                     Text("在电脑 ZCode 左下角点击手机图标，复制远控链接。电脑可以在家里，也可以在外面，但都需要联网且保持 ZCode 运行。\n\n若项目通过 SSH 运行，先在电脑 ZCode 中连接该项目，再从这里接入。手机不会新建 SSH 环境。\n\n自建 Relay 需要已部署的兼容中转服务与有效 HTTPS 证书，请粘贴它导出的完整连接信息。中转只转发控制流量，任务仍在原电脑执行。HTTP 桥接是另一种高级连接方式，不会接管原桌面会话。")
                         .font(.subheadline).foregroundStyle(.secondary)
@@ -294,6 +299,7 @@ struct PairingView: View {
     private func connect() async {
         guard isVisible, !connecting else { return }
         connecting = true
+        defer { connecting = false }
         failure = nil
         let profile = ConnectionProfile(id: UUID().uuidString,
             name: name.isEmpty ? URL(string: address)?.host ?? "我的电脑" : name, baseURL: address,
@@ -370,5 +376,60 @@ struct QRScanner: UIViewControllerRepresentable {
                 }
             }
         }
+    }
+}
+
+
+struct ConnectionGuideView: View {
+    var body: some View {
+        List {
+            Section("先选择连接方式") {
+                Text("ZCode 官方中转：开启电脑上的远程控制，手机扫码即可。")
+                Text("专属中转：手机 ↔ 常驻 Mac Pro ↔ 工作 MacBook。任务和文件仍在 MacBook；Mac Pro 只转发远控消息，不运行第二份任务。")
+                Text("HTTP 桥接是另一种高级服务，不能用它替代专属中转，也不会接管原桌面会话。")
+            }
+            Section("共同前提") {
+                Label("工作电脑保持开机、联网，ZCode 正在运行。", systemImage: "laptopcomputer")
+                Label("先在电脑 ZCode 打开需要控制的项目；SSH 项目也先在电脑端连好。", systemImage: "folder")
+                Label("手机允许联网。首次配对需在电脑旁完成，之后可用 Wi-Fi 或蜂窝网络。", systemImage: "iphone")
+                Text("MacBook 合盖休眠、关机或断网时，Mac Pro 不能代替它继续运行任务。模型请求仍走电脑原来的模型服务。")
+            }
+            Section("官方连接：电脑端") {
+                Text("1. 打开 ZCode 左下角手机图标 → 移动端远程控制。")
+                Text("2. 开启远控，显示二维码或复制连接链接。")
+            }
+            Section("官方连接：手机端") {
+                Text("1. 主菜单 → 添加连接 → 扫描二维码或粘贴连接信息。")
+                Text("2. 确认目标电脑，选择原有项目。进入任务，核对最新回复。")
+            }
+            Section("专属中转：Mac Pro 先准备") {
+                Text("1. 部署与本 App 兼容的 Relay，配置公网入口和有效 HTTPS/WSS 证书。只开放 SSH 并不足以让本 App 使用中转。")
+                Text("2. 保持服务器在线，配置服务自动恢复。若使用登录启动服务，重启后需要登录对应账号。")
+                Text("3. 为这台 MacBook 签发短期接入许可。许可只用于电脑首次登记，不是手机的连接信息。")
+            }
+            Section("专属中转：MacBook 再切换") {
+                Text("1. 等正在运行的任务结束，再正常退出 ZCode；不要强制退出。")
+                Text("2. 使用已配置的专属中转启动方式打开原 ZCode，保留原用户数据和项目。首次启动需带有效接入许可。")
+                Text("3. 打开“移动端远程控制”，由你点击“刷新二维码”并确认，生成属于新中转的配对信息。旧官方链接会失效。")
+                Text("4. 打开新链接，在中转提供的连接页复制“原生 App 连接信息”。不要复用旧官方二维码。")
+                DisclosureGroup("电脑配置要点") {
+                    Text("桌面启动需配置 ZCODE_WEB_REMOTE_CONTROL_RELAY_WS_URL 和 ZCODE_WEB_REMOTE_CONTROL_URL。首次配置由管理中转的人完成；手机内填入服务器 IP 并不能自动修改桌面启动方式。")
+                    Text("切换成功后，以后也要使用保存的专属中转启动方式。直接从旧 Dock 图标启动不保证仍走专属中转。")
+                }
+            }
+            Section("专属中转：最后连接手机") {
+                Text("1. 主菜单 → 添加连接 → 粘贴连接信息，使用中转页导出的完整内容；不要选择“HTTP 桥接”。")
+                Text("2. 确认显示的是你的中转域名和原 MacBook，再选择项目。手机不需要填写 SSH 私钥或服务器密码。")
+                Text("3. 核对原有任务，发一条测试消息；再切到蜂窝网络确认可收发。保存后，App 会尝试自动恢复连接。")
+            }
+            Section("遇到问题") {
+                Text("连不上：先确认 MacBook 未休眠且 ZCode 远控开启，再确认 Mac Pro 中转和证书正常。")
+                Text("另一台手机接管、配对失效或连接被暂停：在设置中的已保存电脑上手动重新连接；不要反复刷新二维码。")
+                Text("找不到项目：先在电脑端打开项目，再刷新手机项目列表。任务需要批准时，点消息中的“允许本次”或“拒绝”；批准模式是另一项设置。")
+                Text("回到官方中转：需要在电脑端恢复官方启动配置并重新完成配对，不能只修改手机地址。")
+            }
+        }
+        .navigationTitle("连接指南").navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier("connection.guide")
     }
 }

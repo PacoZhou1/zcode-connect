@@ -167,10 +167,10 @@ private actor AdapterEvents {
         var changed = body; changed["mode"] = .string("build")
         try await failure("draft_conflict") { let _: RelayJSON = try await adapter.mutate("v1/sessions", body: changed) }
         let plan: RemoteSettings = try await adapter.mutate("v1/sessions/\(createdID)/settings", method: "PATCH", body: ["permissionMode": .string("edit")])
-        try expect(plan.mode == "plan" && plan.permissionMode == "edit", "Permission selection exited plan")
+        try expect(plan.mode == "edit" && plan.permissionMode == "edit", "Permission choice did not update the actual host mode")
         try await failure("full_access_confirmation_required") { let _: RelayJSON = try await adapter.mutate("v1/sessions/\(createdID)/settings", method: "PATCH", body: ["permissionMode": .string("yolo")]) }
         try expect(await mock.configurationThought == "max", "Thinking level changed")
-        checks.append("durable_empty_create_idempotency_exact_configuration_and_plan_permission_independence")
+        checks.append("durable_empty_create_idempotency_and_explicit_permission_exits_plan")
 
         let upload: [String: JSONValue] = ["fileName": .string("note.txt"), "mimeType": .string("text/plain"), "base64": .string(Data("hello".utf8).base64EncodedString())]
         let first: RelayJSON = try await adapter.mutate("v1/sessions/session-test/attachments", body: upload)

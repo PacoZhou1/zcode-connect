@@ -233,7 +233,7 @@ struct HomeView: View {
         return Button { store.setUnread(false, sessionID: session.id); store.path.append(.session(session.id)) } label: {
             VStack(alignment: .leading, spacing: 6.666667) {
                 HStack(spacing: 8) {
-                    if session.status != .idle { StatusDot(status: session.status) }
+                    if session.status == .running { StatusDot(status: session.status) }
                     else if store.isUnread(session.id) { Circle().fill(ZTheme.accent).frame(width: 7, height: 7).accessibilityLabel("未读") }
                     Text(session.title).font(.system(size: 17))
                         .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)

@@ -513,6 +513,47 @@ struct TestResult: Codable { let name: String; let passed: Bool; let detail: Str
             await f.store.loadTranscript("S")
             try check(attempts == 1, "uncertain operation was blindly retried")
         }
+        await run("late settings read cannot replace acknowledged permission change") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            func settings(_ mode: String) -> JSONValue {
+                .object(["sessionId": .string("S"), "model": .object(["providerId": .string("p"), "modelId": .string("m")]), "mode": .string(mode), "permissionMode": .string(mode), "thoughtLevels": .array([]), "modes": .array([.string("build"), .string("edit"), .string("yolo")]), "mutable": .bool(true)])
+            }
+            TestTransport.handler = { r in r.path.hasSuffix("/settings") ? settings("build") : nil }
+            await f.store.loadSettings("S")
+            let gate = Gate()
+            TestTransport.handler = { r in
+                if r.path.hasSuffix("/settings") {
+                    if r.method == "GET" { await gate.hold(); return settings("build") }
+                    return settings("yolo")
+                }
+                return nil
+            }
+            let stale = Task { await f.store.loadSettings("S") }
+            try await gate.waitUntilEntered()
+            let changed = await f.store.updateSettings("S", permissionMode: "yolo", confirmFullAccess: true)
+            gate.release(); await stale.value
+            try check(changed && f.store.permission(for: "S") == .full, "stale read reverted the approved mode")
+            try check(f.store.changingSettings.isEmpty, "settings remained busy")
+        }
+        for stage in ["v1/status", "v1/projects"] {
+            await run("cancelled HTTP pairing at \(stage) cannot save or activate a late profile") {
+                let f = Fixture(); defer { f.close() }
+                let previousProjectIDs = f.store.projects.map(\.id)
+                let candidate = ConnectionProfile(id: "cancelled", name: "Cancelled B", baseURL: "https://b.invalid")
+                let gate = Gate()
+                TestTransport.handler = { r in
+                    if r.host == "b.invalid", r.path == stage { await gate.hold() }
+                    return nil
+                }
+                let task = Task { await f.store.connect(candidate, token: "synthetic-cancelled") }
+                try await gate.waitUntilEntered()
+                task.cancel(); gate.release(); await task.value
+                try check(f.store.projects.map(\.id) == previousProjectIDs, "cancelled index replaced projects")
+                try check(f.store.activeProfileID == nil && f.store.profiles.isEmpty, "cancelled profile committed")
+                try check(CredentialStore.values[candidate.id] == nil && !f.store.hasConnectedBefore, "cancelled request saved credentials or unlocked onboarding")
+                try check(TestTransport.eventSubscriptions["b.invalid"] == nil && f.store.errorMessage == nil, "cancelled pairing opened stream or alerted")
+            }
+        }
         let report: [String: JSONValue] = ["cases": .number(Double(results.count)), "passed": .number(Double(results.filter(\.passed).count)), "failed": .number(Double(results.filter { !$0.passed }.count)), "assertions": .number(Double(assertions))]
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(JSONValue.object(report))) as! [String: Any]
         object["results"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(results))

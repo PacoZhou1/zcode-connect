@@ -38,6 +38,7 @@ struct SettingsView: View {
                     NavigationLink(profile.name) { ConnectionDetailView(profile: profile) }
                 }
                 NavigationLink { PairingView(embedded: true) } label: { Label("添加连接", systemImage: "plus") }
+                NavigationLink { ConnectionGuideView() } label: { Label("手机与电脑连接指南", systemImage: "questionmark.circle") }
             }
             Section("关于") {
                 LabeledContent("ZCode Mobile", value: "1.0")
@@ -103,7 +104,7 @@ struct AdvancedSettingsView: View {
         store.models.first { $0.providerId == selection?.providerId && $0.modelId == selection?.modelId }
     }
     private var canEdit: Bool {
-        !busy && (sessionID == nil || store.remoteSettings[sessionID!]?.mutable == true)
+        !busy && store.canEditSettings(sessionID, model: true)
     }
     var body: some View {
         @Bindable var store = store
@@ -242,12 +243,22 @@ struct PermissionsView: View {
                             Image(systemName: "checkmark").font(.system(size: 18)).frame(width: 20)
                         } else { Color.clear.frame(width: 20, height: 1) }
                     }.contentShape(Rectangle().inset(by: -5))
-                }.buttonStyle(.plain).disabled(busy || (!store.isReferenceMode && mode == .custom))
+                }.buttonStyle(.plain).disabled(busy || !store.canEditSettings(sessionID) || (!store.isReferenceMode && mode == .custom))
                     .accessibilityIdentifier("permission.\(mode.rawValue)")
                     .accessibilityAddTraits(currentPermission == mode ? .isSelected : [])
                     .accessibilityRemoveTraits(currentPermission != mode ? .isSelected : [])
               }
             }
+            if !store.canEditSettings(sessionID) && !busy {
+                Text("请先连接电脑，并打开可控制的任务。").font(.footnote).foregroundStyle(.secondary)
+            }
+            if sessionID != nil && store.activeProfile?.isRelay == true && store.isPlanMode(for: sessionID) {
+                Text("选择批准方式将退出方案模式。").font(.footnote).foregroundStyle(.secondary)
+            }
+            Text(sessionID != nil && store.activeProfile?.isRelay == true
+                 ? "此设置由电脑执行，可能同时成为该项目的默认批准方式。当前待批准操作仍需选择“允许本次”或“拒绝”。"
+                 : "批准模式决定之后的操作如何请求许可；当前操作仍需单独批准或拒绝。")
+                .font(.footnote).foregroundStyle(.secondary)
             if busy { ProgressView("正在更新权限…").font(.footnote) }
         }.padding(.horizontal, 18).padding(.vertical, 14).frame(width: 320).tint(.primary)
             .measureLayout("permissions.popover")
@@ -261,7 +272,7 @@ struct PermissionsView: View {
                 Button("允许完全访问", role: .destructive) { apply(.full, confirmed: true) }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("ZCode 可以直接编辑文件和运行命令，不再逐次请求批准。只对当前任务生效。")
+                Text(store.activeProfile?.isRelay == true && sessionID != nil ? "ZCode 可以直接编辑文件和运行命令，不再逐次请求批准。电脑可能同时将其保存为该项目的默认批准方式。" : "ZCode 可以直接编辑文件和运行命令，不再逐次请求批准。")
             }
     }
     private func apply(_ mode: PermissionMode, confirmed: Bool = false) {
