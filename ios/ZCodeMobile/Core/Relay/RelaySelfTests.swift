@@ -1,4 +1,4 @@
-#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS || RELAY_RECOVERY_SELF_TESTS || RELAY_AUTH_SELF_TESTS || RELAY_COLD_OPEN_SELF_TESTS || RELAY_AGENT_GOAL_SELF_TESTS || RELAY_SELF_HOSTED_SELF_TESTS
+#if RELAY_SELF_TESTS || RELAY_ADAPTER_SELF_TESTS || RELAY_RECOVERY_SELF_TESTS || RELAY_AUTH_SELF_TESTS || RELAY_COLD_OPEN_SELF_TESTS || RELAY_AGENT_GOAL_SELF_TESTS || RELAY_SELF_HOSTED_SELF_TESTS || RELAY_CONTEXT_SELF_TESTS
 import Foundation
 
 private struct TestFailure: Error { let message: String }
@@ -78,6 +78,20 @@ actor MockRelaySocket: RelaySocketTransport {
     var coldOpenDelay: Duration = .milliseconds(120)
     var sessionReadReadiness: [RelayJSON] = []
     var coldOpenOrder: [String] = []
+    var holdMetadataAcknowledgements = false
+    private var heldMetadataAcknowledgements: [(Int32, RelayJSON)] = []
+    func gateMetadata(_ hold: Bool) throws {
+        holdMetadataAcknowledgements = hold
+        if !hold {
+            let held = heldMetadataAcknowledgements; heldMetadataAcknowledgements.removeAll()
+            for (id, value) in held { try success(id, value) }
+        }
+    }
+    func publishContextDeltas(_ deltas: [RelayJSON], from: Int, to: Int, ordinal: Int) throws {
+        let frame = logical(.object(["kind": .string("deltas"), "deltas": .array(deltas)]), from: from, to: to)
+        var value = try wire(frame, ordinal: ordinal).requiringObject(); value["deliveryKind"] = .string("online")
+        try sendRPC(.init(header: [.int32(204), .int32(listenerID!)], body: try .object(.object(value))))
+    }
     func makeSessionCold(_ sessionID: String, delay: Duration = .milliseconds(120)) { coldSessions.insert(sessionID); coldOpenDelay = delay }
     func useSubagentDirectory(_ value: RelayJSON) { subagentDirectoryOverride = value }
     func failSubagentDirectory() { directoryFailure = true }
@@ -306,7 +320,9 @@ actor MockRelaySocket: RelaySocketTransport {
                 let taskID = params["taskId"].string!; unreadCalls.append(params)
                 if params["unread"].bool == true { unreadClock += 1; unreadAt[taskID] = unreadClock }
                 else if params["expectedUnreadAt"].number == unreadAt[taskID] { unreadAt[taskID] = nil }
-                try success(id, .object(["taskId": .string(taskID), "title": .string(titles[taskID] ?? "Original desktop task"), "workspacePath": .string("/workspace"), "provider": .string("glm"), "unreadAt": unreadAt[taskID].map(RelayJSON.number) ?? .null]))
+                let result: RelayJSON = .object(["taskId": .string(taskID), "title": .string(titles[taskID] ?? "Original desktop task"), "workspacePath": .string("/workspace"), "provider": .string("glm"), "unreadAt": unreadAt[taskID].map(RelayJSON.number) ?? .null])
+                if holdMetadataAcknowledgements { heldMetadataAcknowledgements.append((id, result)) }
+                else { try success(id, result) }
             case "readdir":
                 let path = params["path"].string!, entries: [RelayJSON]
                 if path == "/workspace" {

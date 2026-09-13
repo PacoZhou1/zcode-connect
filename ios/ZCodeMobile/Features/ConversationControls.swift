@@ -74,8 +74,8 @@ struct ConversationControls: View {
         .task {
             #if DEBUG
             let args = ProcessInfo.processInfo.arguments
-            if let i = args.firstIndex(of: "--screen"), args.indices.contains(i + 1), ["goal", "agents"].contains(args[i + 1]) {
-                selectedPanel = args[i + 1]
+            if let i = args.firstIndex(of: "--screen"), args.indices.contains(i + 1), ["goal", "agents", "agents-review"].contains(args[i + 1]) {
+                selectedPanel = args[i + 1] == "agents-review" ? "agents" : args[i + 1]
             }
             #endif
         }
@@ -108,11 +108,12 @@ struct ConversationControls: View {
                 .measureLayout("goal.panel")
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                Text(store.isReferenceMode ? "已完成" : "主机上的智能体")
-                    .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                 ScrollView {
                     LazyVStack(spacing: 6) {
-                        ForEach(store.agentTasks[sessionID] ?? []) { agent in
+                        ForEach(agentGroups, id: \.0) { title, agents in
+                            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
+                        ForEach(agents) { agent in
                             Button {
                                 if store.isReferenceMode { store.sheet = .agent(agent) }
                                 else { selectedPanel = nil; store.openAgent(agent, parentID: sessionID) }
@@ -124,9 +125,11 @@ struct ConversationControls: View {
                                         Text(agent.statusText ?? agent.status.label).font(.system(size: 12)).foregroundStyle(.secondary)
                                     }
                                     Spacer()
+                                    if agent.status == .running { ProgressView().controlSize(.small) }
                                     Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
                                 }.frame(minHeight: 44).contentShape(Rectangle())
                             }.buttonStyle(.plain)
+                        }
                         }
                         if !store.isReferenceMode {
                             if let error = store.agentDirectoryError(sessionID) {
@@ -150,9 +153,18 @@ struct ConversationControls: View {
                 .task { await store.refreshAgents(sessionID) }
         }
     }
+    private var agentGroups: [(String, [AgentTask])] {
+        let all = store.agentTasks[sessionID] ?? []
+        return [("进行中", all.filter { $0.status == .running }),
+                ("等待中", all.filter { $0.status == .waiting }),
+                ("已完成", all.filter { $0.status == .completed }),
+                ("失败", all.filter { $0.status == .failed }),
+                ("其他", all.filter { ![SessionStatus.running, .waiting, .completed, .failed].contains($0.status) })]
+            .filter { !$0.1.isEmpty }
+    }
     private var agentListHeight: CGFloat {
         let count = min(4, (store.agentTasks[sessionID] ?? []).count)
-        return count == 0 ? 64 : CGFloat(count * 44 + max(0, count - 1) * 6)
+        return count == 0 ? 64 : min(300, CGFloat(count * 44 + max(0, count - 1) * 6 + agentGroups.count * 30))
     }
 
     private func toggle(_ panel: String) {

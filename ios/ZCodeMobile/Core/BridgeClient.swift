@@ -8,6 +8,7 @@ struct BridgeFailure: LocalizedError {
     var errorDescription: String? {
         switch code {
         case "input_pending": "电脑尚未确认上一条消息的结果。请重试确认，避免重复发送。"
+        case "relay_operation_in_progress": "正在同步此任务的另一项操作，请稍后再试。"
         case "input_rejected": "电脑未接收这条消息。"
         default: message
         }
@@ -242,6 +243,7 @@ struct BridgeDetail: Decodable, Sendable {
     var messages: [BridgeMessage]
     var pendingInteractions: [PendingInteraction]
     var hostActivity: JSONValue?
+    var contextUsage: ContextUsage? = nil
     var history: ConversationHistory? = nil
 }
 
@@ -253,11 +255,30 @@ struct BridgeEnvelope: Decodable, Sendable {
         var interactionId: String?
         var connectionStatus: String?
         var hostActivity: JSONValue?
+        var contextUsage: ContextUsage?
     }
     var id: String?
     var type: String
     var sessionId: String?
     var data: Payload?
+}
+
+/// Host measurements only; category percentages use the desktop's character basis.
+struct ContextUsage: Decodable, Sendable, Equatable {
+    struct Breakdown: Decodable, Sendable, Equatable { var source: String; var chars: Double; var percent: Double }
+    struct Compaction: Decodable, Sendable, Equatable {
+        struct Latest: Decodable, Sendable, Equatable {
+            var id: String; var status: String; var origin: String
+            var tokensBefore: Double?; var tokensAfter: Double?
+        }
+        var active: Bool; var latest: Latest?
+    }
+    var available: Bool
+    var usedTokens: Double?; var maxTokens: Double?; var usedPercent: Double?
+    var autoCompactThresholdTokens: Double?
+    var breakdown: [Breakdown]
+    var breakdownBasis: String?
+    var compaction: Compaction
 }
 
 struct BridgeClient: Sendable {

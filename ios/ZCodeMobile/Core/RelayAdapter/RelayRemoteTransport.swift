@@ -90,10 +90,30 @@ actor RelayRemoteTransport: RemoteTransport {
             let request = try RelayJSON(data: JSONEncoder().encode(body))
             let parsed = try Self.parse(path)
             let lock = parsed.parts.count >= 3 && parsed.parts[1] == "sessions" ? "session:" + parsed.parts[2] : parsed.parts.joined(separator: "/")
-            guard busy.insert(lock).inserted else { throw RelayFailure("input_pending", "A request for this task is still being reconciled.") }
+            let isSettings = method.uppercased() == "PATCH" && parsed.parts.count == 4 && parsed.parts[1] == "sessions" && parsed.parts[3] == "settings"
+            try await acquireMutationLock(lock, waitForSettings: isSettings)
             defer { busy.remove(lock) }
             return try await RelayWorkspaceOperation.$expectedBridge.withValue(bridge) { try await route(path, method: method.uppercased(), body: request).decode(T.self) }
         } catch { throw relayBridgeFailure(error) }
+    }
+
+    private func acquireMutationLock(_ key: String, waitForSettings: Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        var waited = false
+        while true {
+            try Task.checkCancellation()
+            try await checkScope()
+            try Task.checkCancellation()
+            if waited, ContinuousClock.now >= deadline { throw RelayFailure("relay_operation_in_progress", "当前任务的另一项操作尚未完成，请稍后重试。") }
+            if busy.insert(key).inserted { return }
+            guard waitForSettings, ContinuousClock.now < deadline else {
+                // This is only local operation contention. It says nothing about
+                // whether an earlier message was delivered, so keep its journal.
+                throw RelayFailure("relay_operation_in_progress", "当前任务的另一项操作尚未完成，请稍后重试。")
+            }
+            waited = true
+            try await Task.sleep(for: .milliseconds(40))
+        }
     }
 
     func events(after cursor: String?, onEvent: @Sendable (BridgeEnvelope) async -> Void) async throws {
@@ -179,8 +199,12 @@ actor RelayRemoteTransport: RemoteTransport {
         if p.count >= 3, p[1] == "sessions" {
             let id = p[2]; try await ensureTask(id)
             if subagentParents[id] != nil {
-                guard method == "GET", p.count == 3 || (p.count == 4 && p[3] == "messages") else {
+                guard method == "GET", p.count == 3 || (p.count == 4 && ["messages", "context"].contains(p[3])) else {
                     throw RelayFailure("session_read_only", "Subagent records are read-only; control remains with their parent task.")
+                }
+                if p.count == 4, p[3] == "context" {
+                    if subagentHistories[id] == nil { _ = try await subagentDetail(id) }
+                    return .object(["contextUsage": RelayBridgeMapping.contextUsage(nil, snapshot: subagentHistories[id]?.snapshot)])
                 }
                 return p.count == 3 ? try await subagentDetail(id) : try subagentMessages(id, query: q)
             }
@@ -196,6 +220,9 @@ actor RelayRemoteTransport: RemoteTransport {
                     let snapshot = try await client.readSession(id); snapshots[id] = snapshot
                     return try RelayBridgeMapping.settings(snapshot, permissionMode: permissionMode(snapshot))
                 case ("PATCH", "settings"): return try await settingsMutation(id, body)
+                case ("GET", "context"):
+                    let projection = try await loadProjection(id)
+                    return .object(["contextUsage": RelayBridgeMapping.contextUsage(projection, snapshot: snapshots[id])])
                 case ("GET", "agents"):
                     guard q.keys.allSatisfy({ $0 == "endedCursor" }) else { throw RelayFailure.invalid("Use the desktop's ended cursor for the agent directory.") }
                     let projection = try await loadProjection(id)
@@ -338,7 +365,8 @@ actor RelayRemoteTransport: RemoteTransport {
         let snapshot = try await client.readSession(id)
         snapshots[id] = snapshot
         await refreshSubagentDirectory(id, projection: projection)
-        return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.messages(projection)), "pendingInteractions": .array(projection.pendingInteractions.map { RelayBridgeMapping.interaction($0, sessionID: id) }), "hostActivity": hostActivity(projection), "history": RelayBridgeMapping.history(projection)])
+        let contextProjection = await client.currentProjection(sessionID: id) ?? projection
+        return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.messages(projection)), "pendingInteractions": .array(projection.pendingInteractions.map { RelayBridgeMapping.interaction($0, sessionID: id) }), "hostActivity": hostActivity(projection), "history": RelayBridgeMapping.history(projection), "contextUsage": RelayBridgeMapping.contextUsage(contextProjection, snapshot: snapshot)])
     }
     private func directoryVersion(_ projection: RelayConversationProjection) -> String { projection.logEpoch + ":" + String(projection.hostAgents?.revision ?? 0) }
     private func hostActivity(_ projection: RelayConversationProjection) -> RelayJSON {
@@ -400,7 +428,7 @@ actor RelayRemoteTransport: RemoteTransport {
         let history = SubagentHistory(parentID: parentID, snapshot: snapshot, epoch: epoch, loadedCount: loaded)
         subagentHistories[id] = history
         return .object(["session": sessionJSON(id), "messages": .array(RelayBridgeMapping.snapshotMessages(Array(snapshot.messages.suffix(loaded)), sessionID: id)),
-                        "pendingInteractions": .array([]), "history": subagentHistoryJSON(history),
+                        "pendingInteractions": .array([]), "history": subagentHistoryJSON(history), "contextUsage": RelayBridgeMapping.contextUsage(nil, snapshot: snapshot),
                         "hostActivity": .object(["supported": .bool(false), "reasonCode": .string("subagentReadOnly"), "goal": .null,
                                                  "subagents": .object(["revision": .int(0), "childSessionIds": .array([]), "running": .array([]), "endedTotal": .int(0)]), "availability": .object([:]), "rows": .object(["window": .array([])])])])
     }
@@ -770,6 +798,10 @@ actor RelayRemoteTransport: RemoteTransport {
                 let activity = hostActivity(projection)
                 // Sequence/revision change on every token; only substantive activity changes trigger a detail refresh.
                 let oldActivity = previous.map { hostActivity($0) }
+                let context = RelayBridgeMapping.contextUsage(projection, snapshot: snapshots[projection.sessionID])
+                if previous.map({ RelayBridgeMapping.contextUsage($0, snapshot: snapshots[projection.sessionID]) }) != context {
+                    try emit(type: "context.updated", sessionID: projection.sessionID, data: ["contextUsage": context])
+                }
                 if oldActivity?["goal"] != activity["goal"] || oldActivity?["subagents"] != activity["subagents"] || oldActivity?["availability"] != activity["availability"] || oldActivity?["rows"] != activity["rows"] {
                     try emit(type: "host.activity", sessionID: projection.sessionID, data: ["hostActivity": activity])
                 }

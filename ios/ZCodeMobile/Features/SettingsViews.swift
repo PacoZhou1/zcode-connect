@@ -29,6 +29,8 @@ struct SettingsView: View {
                 }.accessibilityIdentifier("settings.theme")
                 Toggle("触感反馈", isOn: $store.hapticsEnabled)
                 Toggle("显示时间", isOn: $store.showTimestamps)
+                Toggle("显示上下文用量", isOn: $store.showContextUsage)
+                    .accessibilityIdentifier("settings.contextUsage")
             }
             Section("连接") {
                 LabeledContent("电脑", value: store.hostName)
@@ -57,6 +59,7 @@ struct SettingsView: View {
         }
         .onChange(of: store.appearance) { store.savePreferences() }
         .onChange(of: store.hapticsEnabled) { store.savePreferences() }
+        .onChange(of: store.showContextUsage) { store.savePreferences() }
         .onChange(of: store.showTimestamps) { store.savePreferences() }
     }
 }
@@ -253,7 +256,7 @@ struct PermissionsView: View {
                 Text("请先连接电脑，并打开可控制的任务。").font(.footnote).foregroundStyle(.secondary)
             }
             if sessionID != nil && store.activeProfile?.isRelay == true && store.isPlanMode(for: sessionID) {
-                Text("选择批准方式将退出方案模式。").font(.footnote).foregroundStyle(.secondary)
+                Text("选择批准方式将退出计划模式。").font(.footnote).foregroundStyle(.secondary)
             }
             Text(sessionID != nil && store.activeProfile?.isRelay == true
                  ? "此设置由电脑执行，可能同时成为该项目的默认批准方式。当前待批准操作仍需选择“允许本次”或“拒绝”。"

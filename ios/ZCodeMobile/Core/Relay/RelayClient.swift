@@ -801,7 +801,7 @@ public actor RelayClient {
         let objective = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !readOnlySubagents.contains(sessionID), let projection = reducers[sessionID]?.projection else { throw RelayFailure("goal_start_unavailable", "Open an ordinary task before starting a goal.") }
         guard !objective.isEmpty, objective.utf8.count <= 128_000 else { throw RelayFailure("goal_start_invalid", "A goal needs a nonempty objective of at most 128 KB.") }
-        guard projection.config["mode"].string != "plan" else { throw RelayFailure("goal_plan_mode", "请先关闭方案模式，再开始追求目标。") }
+        guard projection.config["mode"].string != "plan" else { throw RelayFailure("goal_plan_mode", "请先关闭计划模式，再开始追求目标。") }
         guard !projection.canStop, projection.pendingInteractions.isEmpty, projection.hostGoal?.isActive != true,
               !["running", "prewarming"].contains(projection.phase) else { throw RelayFailure("goal_start_unavailable", "请先停止或暂停当前任务，再设置新的目标。") }
         return makeCommand(sessionID: sessionID, type: "sendGoalCommand", payload: .object(["text": .string(objective), "displayText": .string("/goal " + objective)]), commandID: commandID)

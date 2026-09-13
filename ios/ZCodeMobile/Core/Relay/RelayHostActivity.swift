@@ -120,3 +120,103 @@ public extension RelayConversationProjection {
     /// Bash/background work is a different host collection, not a fabricated agent list.
     var backgroundWorks: [RelayJSON] { raw["backgroundWorks"].array ?? [] }
 }
+
+/// Host-reported window usage. Breakdown percentages use the desktop's character
+/// shares; category token counts are not exposed by the official protocol.
+public struct RelayContextUsage: Sendable, Equatable {
+    public struct Breakdown: Sendable, Equatable {
+        public let source: String
+        public let chars: Int
+        public let percent: Double
+    }
+    public struct Compaction: Sendable, Equatable {
+        public let id: String
+        public let status: String
+        public let origin: String
+        public let tokensBefore: Int?
+        public let tokensAfter: Int?
+    }
+    public let usedTokens: Int?
+    public let maxTokens: Int?
+    public let autoCompactThresholdTokens: Int?
+    public let breakdown: [Breakdown]
+    public let compacting: Bool
+    public let latestCompaction: Compaction?
+    public var available: Bool { usedTokens != nil && maxTokens != nil }
+    public var usedPercent: Double? {
+        guard let usedTokens, let maxTokens else { return nil }
+        return min(100, max(0, Double(usedTokens) / Double(maxTokens) * 100))
+    }
+
+    public init(projection: RelayConversationProjection?, snapshot: RelaySessionSnapshot? = nil) {
+        let window: RelayJSON
+        // An explicit null is a current host observation, not permission to revive
+        // older runtime counts (especially after compaction/model changes).
+        if let value = projection?.raw["usage"].object?["contextWindow"] {
+            window = value
+        } else {
+            let runtime = snapshot?.raw["runtime"]["contextUsage"] ?? .null
+            window = .object(["usedTokens": runtime["used"], "maxTokens": runtime["size"], "breakdown": runtime["breakdown"]])
+        }
+        let used = Self.count(window["usedTokens"]), maximum = Self.count(window["maxTokens"])
+        if let used, let maximum, maximum > 0 {
+            usedTokens = used; maxTokens = maximum
+            autoCompactThresholdTokens = Self.count(window["autoCompactThresholdTokens"])
+            breakdown = Self.shares(window["breakdown"])
+        } else {
+            usedTokens = nil; maxTokens = nil; autoCompactThresholdTokens = nil; breakdown = []
+        }
+        if let projection {
+            // Current work state wins over a historical running marker.
+            compacting = projection.raw["control"]["activeWorks"].array?.contains { $0["kind"].string == "compact" } == true
+            latestCompaction = projection.rows.filter { $0["kind"].string == "timelineMarker" && $0["marker"]["type"].string == "compact" }.sorted { ($0["rowId"].integer ?? -1) > ($1["rowId"].integer ?? -1) }.lazy.compactMap { row -> Compaction? in
+                guard row["kind"].string == "timelineMarker", row["marker"]["type"].string == "compact", let rowID = row["rowId"].integer,
+                      let status = row["marker"]["status"].string, ["running", "success", "failed", "noop", "cancelled"].contains(status),
+                      let origin = row["marker"]["origin"].string, ["manual", "auto"].contains(origin) else { return nil }
+                return .init(id: "compact:\(projection.sessionID):\(projection.logEpoch):\(rowID)", status: status, origin: origin,
+                             tokensBefore: Self.count(row["marker"]["tokensBefore"]), tokensAfter: Self.count(row["marker"]["tokensAfter"]))
+            }.first
+        } else {
+            compacting = snapshot?.raw["runtime"]["activeTurnKind"].string == "compact"
+            latestCompaction = nil
+        }
+    }
+
+    private static func count(_ value: RelayJSON) -> Int? { value.integer.flatMap { $0 >= 0 ? $0 : nil } }
+    private static let sources = ["messages", "system_prompt", "meta_user_context", "skills", "tool_prompt", "system_tool_schemas", "mcp_tool_schemas"]
+    private static func shares(_ value: RelayJSON) -> [Breakdown] {
+        guard let items = value.array, items.count <= 1024 else { return [] }
+        var totals: [String: Int] = [:]
+        for item in items {
+            guard let source = item["source"].string, sources.contains(source), let chars = count(item["chars"]) else { return [] }
+            if chars > 0 {
+                let (sum, overflow) = (totals[source] ?? 0).addingReportingOverflow(chars)
+                guard !overflow else { return [] }; totals[source] = sum
+            }
+        }
+        let total = totals.values.reduce(0.0) { $0 + Double($1) }
+        guard total > 0, total.isFinite else { return [] }
+        return totals.map { Breakdown(source: $0.key, chars: $0.value, percent: Double($0.value) / total * 100) }.sorted {
+            if $0.chars != $1.chars { return $0.chars > $1.chars }
+            return sources.firstIndex(of: $0.source)! < sources.firstIndex(of: $1.source)!
+        }
+    }
+
+    public var wire: RelayJSON {
+        var value: [String: RelayJSON] = ["available": .bool(available), "breakdownBasis": .string("characters"),
+            "breakdown": .array(breakdown.map { .object(["source": .string($0.source), "chars": .int($0.chars), "percent": .number($0.percent)]) })]
+        if let usedTokens { value["usedTokens"] = .int(usedTokens) }
+        if let maxTokens { value["maxTokens"] = .int(maxTokens) }
+        if let usedPercent { value["usedPercent"] = .number(usedPercent) }
+        if let autoCompactThresholdTokens { value["autoCompactThresholdTokens"] = .int(autoCompactThresholdTokens) }
+        var compact: [String: RelayJSON] = ["active": .bool(compacting)]
+        if let latest = latestCompaction {
+            var marker: [String: RelayJSON] = ["id": .string(latest.id), "status": .string(latest.status), "origin": .string(latest.origin)]
+            if let before = latest.tokensBefore { marker["tokensBefore"] = .int(before) }
+            if let after = latest.tokensAfter { marker["tokensAfter"] = .int(after) }
+            compact["latest"] = .object(marker)
+        }
+        value["compaction"] = .object(compact)
+        return .object(value)
+    }
+}

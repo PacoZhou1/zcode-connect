@@ -52,6 +52,9 @@ final class AppStore {
     var selectedProjectID: String?
     var appearance = "跟随系统"
     var hapticsEnabled = true
+    var contextUsage: [String: ContextUsage] = [:]
+    private var contextRevisions: [String: Int] = [:]
+    var showContextUsage = true
     var showTimestamps = true
     var bridgeVersion: String?
     var streamConnected = false
@@ -123,6 +126,7 @@ final class AppStore {
         archivedIDs = Set(defaults.stringArray(forKey: scopedKey("archives")) ?? [])
         appearance = defaults.string(forKey: "appearance") ?? "跟随系统"
         hapticsEnabled = defaults.object(forKey: "haptics") as? Bool ?? true
+        showContextUsage = defaults.object(forKey: "showContextUsage") as? Bool ?? true
         showTimestamps = defaults.object(forKey: "timestamps") as? Bool ?? true
 
         do { try loadScopedState() }
@@ -147,6 +151,17 @@ final class AppStore {
                     catch { errorMessage = "无法读取审查体验数据：\(error.localizedDescription)" }
                 case "files": path = [.session(ReferenceData.conversationID)]; sheet = .files(ReferenceData.conversationID, false)
                 case "advanced": path = [.session(ReferenceData.conversationID)]; sheet = .advanced
+                case "context-review", "compact-review", "agents-review":
+                    path = [.session(ReferenceData.conversationID)]
+                    setDraft("上下文与智能体验收", for: ReferenceData.conversationID)
+                    contextUsage[ReferenceData.conversationID] = ContextUsage(available: true, usedTokens: 44_000, maxTokens: 1_050_000, usedPercent: 4.2, autoCompactThresholdTokens: 900_000, breakdown: [
+                        .init(source: "system_tool_schemas", chars: 3590, percent: 35.9), .init(source: "mcp_tool_schemas", chars: 2960, percent: 29.6), .init(source: "messages", chars: 2690, percent: 26.9), .init(source: "system_prompt", chars: 380, percent: 3.8), .init(source: "skills", chars: 270, percent: 2.7), .init(source: "meta_user_context", chars: 110, percent: 1.1)
+                    ], breakdownBasis: "characters", compaction: .init(active: args[index + 1] == "compact-review", latest: nil))
+                    agentTasks[ReferenceData.conversationID] = [
+                        .init(id: "qa-running", title: "检查后端连接", status: .running, detail: "合成验收数据", colorIndex: 0, statusText: "正在处理"),
+                        .init(id: "qa-complete", title: "审查项目质量", status: .completed, detail: "合成验收数据", colorIndex: 1, statusText: "完成"),
+                        .init(id: "qa-waiting", title: "等待操作批准", status: .waiting, detail: "合成验收数据", colorIndex: 2, statusText: "等待批准")
+                    ]
                 case "send-review":
                     path = [.session(ReferenceData.conversationID)]
                     setDraft("主题和发送体验验收", for: ReferenceData.conversationID)
@@ -716,6 +731,7 @@ final class AppStore {
         connection = .disconnected
         sessionListTruncated = false
         sendingSessions = []
+        contextUsage = [:]; contextRevisions = [:]
         changingSettings = []
         settingsRevisions = [:]
         outgoingMessages = [:]
@@ -876,6 +892,7 @@ final class AppStore {
             })
             transcripts[id] = merged
             histories[id] = detail.history
+            if (contextRevisions[id] ?? 0) <= revision { contextUsage[id] = detail.contextUsage }
             if (interactionRevisions[id] ?? 0) <= revision { pendingInteractions[id] = detail.pendingInteractions }
             if (activityRevisions[id] ?? 0) <= revision { applyHostActivity(detail.hostActivity, sessionID: id) }
             if (sessionRevisions[id] ?? 0) <= revision {
@@ -1452,7 +1469,7 @@ final class AppStore {
             pending = PendingGoal(text: text, sessionID: originalID)
             if originalID == nil {
                 guard let project = projects.first(where: { $0.id == selectedProjectID }) ?? projects.first else { throw BridgeFailure(message: "请先选择项目。", code: "project_required") }
-                guard !options.isPlanMode else { throw BridgeFailure(message: "请先关闭方案模式，再开始追求目标。", code: "goal_plan_mode") }
+                guard !options.isPlanMode else { throw BridgeFailure(message: "请先关闭计划模式，再开始追求目标。", code: "goal_plan_mode") }
                 var creation: [String: JSONValue] = ["projectId": .string(project.id), "title": .string(String(text.prefix(36))),
                     "mode": .string(options.permission.wireValue), "clientDraftId": .string("goal-session-" + pending.id)]
                 if options.permission == .full { creation["confirmFullAccess"] = .bool(true) }
@@ -1479,7 +1496,7 @@ final class AppStore {
             let code = (error as? BridgeFailure)?.code ?? (error as? RelayFailure)?.code
             if let code, ["goal_start_invalid", "goal_plan_mode", "goal_start_unavailable", "goal_start_rejected"].contains(code) {
                 pending.rejected = true; try journal.set(pending, key: key, scope: scope)
-                let message = code == "goal_plan_mode" ? "请先关闭方案模式，再开始追求目标。" : "电脑未接受这个目标，请检查任务状态后重试。"
+                let message = code == "goal_plan_mode" ? "请先关闭计划模式，再开始追求目标。" : "电脑未接受这个目标，请检查任务状态后重试。"
                 throw BridgeFailure(message: message, code: code)
             }
             throw error
@@ -1845,6 +1862,7 @@ final class AppStore {
     func savePreferences() {
         defaults.set(appearance, forKey: "appearance")
         defaults.set(hapticsEnabled, forKey: "haptics")
+        defaults.set(showContextUsage, forKey: "showContextUsage")
         defaults.set(showTimestamps, forKey: "timestamps")
     }
     private func setStatus(_ id: String, _ status: SessionStatus) {
@@ -1922,6 +1940,10 @@ final class AppStore {
             return
         }
         if let id = event.sessionId {
+            if let context = event.data?.contextUsage {
+                contextRevisions[id] = eventRevision
+                contextUsage[id] = context
+            }
             if let activity = event.data?.hostActivity {
                 activityRevisions[id] = eventRevision
                 applyHostActivity(activity, sessionID: id)

@@ -46,13 +46,13 @@ private struct TranscriptCheckError: Error { let message: String }
         for kind in ["toolCall", "subagent", "reasoning"] {
             let rows = basic() + [row(8, kind, ["state": .string("complete"), "status": .string("success"), "assistantResponseId": .string("last-work"), "text": .string("Work after progress")])]
             let t = TranscriptPresentation.group(try messages(rows))[0]
-            try require(t.resultMessages.isEmpty && t.actionMessageID == nil && !t.canCollapseProcess, "Last progress before \(kind) became final")
+            try require(t.resultMessages.isEmpty && t.actionMessageID == nil && t.canCollapseProcess, "Completed work lost collapse support or last progress became final")
         }
     }
     static func interruptedOrFailed() throws {
         for state in ["completedInterrupted", "failed"] {
             let t = TranscriptPresentation.group(try messages(basic(state)))[0]
-            try require(t.isComplete && !t.hasConfirmedResult && !t.canCollapseProcess && t.actionMessageID == nil, "Non-success turn promoted partial text")
+            try require(t.isComplete && !t.hasConfirmedResult && t.canCollapseProcess && t.actionMessageID == nil, "Terminal work lost collapse support or promoted partial text")
             try require(t.processMessages.count == 3, "Interrupted content disappeared")
         }
     }
@@ -94,7 +94,7 @@ private struct TranscriptCheckError: Error { let message: String }
     static func emptyResult() throws {
         let message = ChatMessage(id: "tool-only", role: .assistant, text: "", steps: [.init(id: "tool", title: "Tool", detail: "Original output")], reasoning: "Thinking", transcript: .init(turnID: "tool-turn", state: .completed, role: .finalAnswer))
         let t = TranscriptPresentation.group([message])[0]
-        try require(t.resultMessages.isEmpty && t.processMessages == [message] && !t.canCollapseProcess && t.actionMessageID == nil, "Tool-only or reasoning-only final metadata collapsed into a blank result")
+        try require(t.resultMessages.isEmpty && t.processMessages == [message] && t.canCollapseProcess && t.actionMessageID == nil, "Tool-only work lost collapse support or fabricated a blank result")
     }
     static func codingCompatibility() throws {
         let raw: RelayJSON = .object(["id": .string("old"), "role": .string("assistant"), "text": .string("Old payload"), "createdAt": .string("2026-09-13T00:00:00Z"), "isStreaming": .bool(false)])

@@ -9,7 +9,7 @@ struct TranscriptTurn: Identifiable, Hashable {
     let state: TranscriptMessageSemantics.State
     var isComplete: Bool { [.completed, .interrupted, .failed].contains(state) }
     var hasConfirmedResult: Bool { state == .completed && !resultMessages.isEmpty }
-    var canCollapseProcess: Bool { hasConfirmedResult && !processMessages.isEmpty }
+    var canCollapseProcess: Bool { isComplete && !processMessages.isEmpty }
     var defaultCollapsed: Bool { canCollapseProcess }
     var actionMessageID: String? { resultMessages.last { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }?.id }
 }

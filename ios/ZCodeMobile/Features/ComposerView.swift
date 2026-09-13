@@ -58,6 +58,9 @@ struct ComposerView: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if let id = sessionID, let usage = store.contextUsage[id] {
+                CompactionStatusView(compaction: usage.compaction)
+            }
             if let pending = store.pendingSubmissions[draftKey], !submitting {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
@@ -199,7 +202,7 @@ struct ComposerView: View {
         .sheet(isPresented: $showGoalEditor) {
             GoalEditorView(sessionID: sessionID)
         }
-        .confirmationDialog("关闭方案模式并恢复完全访问？", isPresented: $confirmPlanExit, titleVisibility: .visible) {
+        .confirmationDialog("关闭计划模式并恢复完全访问？", isPresented: $confirmPlanExit, titleVisibility: .visible) {
             Button("恢复完全访问", role: .destructive) { setPlanMode(false, confirmed: true) }
             Button("取消", role: .cancel) {}
         } message: {
@@ -238,11 +241,14 @@ struct ComposerView: View {
                         attachmentMenu
                         permissionButton
                         if isPlanMode {
-                            Text("方案").font(.caption).foregroundStyle(ZTheme.accent)
+                            Text("计划").font(.caption).foregroundStyle(ZTheme.accent)
                         }
                     }
                     Spacer(minLength: 4)
                     HStack(spacing: 8) {
+                        if store.showContextUsage, let id = sessionID, let usage = store.contextUsage[id] {
+                            ContextUsageButton(usage: usage)
+                        }
                         reasoningButton
                         microphoneButton
                         primaryButton.padding(.leading, 5)
@@ -391,7 +397,7 @@ struct ComposerView: View {
     private var attachmentPanel: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    attachmentAction(isPlanMode ? "关闭方案模式" : "方案模式", symbol: "list.bullet", enabled: store.canEditSettings(sessionID)) {
+                    attachmentAction(isPlanMode ? "关闭计划模式" : "计划模式", symbol: "list.bullet", enabled: store.canEditSettings(sessionID)) {
                         if isPlanMode && permission == .full && !store.isReferenceMode { confirmPlanExit = true }
                         else { setPlanMode(!isPlanMode) }
                     }
@@ -656,5 +662,106 @@ struct CameraPicker: UIViewControllerRepresentable {
             parent.dismiss()
             parent.onFinish(data)
         }
+    }
+}
+
+private struct ContextUsageButton: View {
+    let usage: ContextUsage
+    @State private var presented = false
+    private var percent: Double { min(100, max(0, usage.usedPercent ?? 0)) }
+    private func tokens(_ value: Double) -> String {
+        value >= 10_000 ? String(format: "%.1f万", value / 10_000) : value.formatted(.number.precision(.fractionLength(0)))
+    }
+    private var categories: [(String, Double)] {
+        let labels = [("系统工具", ["system_tool_schemas"]), ("MCP 工具", ["mcp_tool_schemas"]), ("消息", ["messages"]), ("系统提示词", ["system_prompt"]), ("技能", ["skills"]), ("其他", ["meta_user_context", "tool_prompt"])]
+        return labels.compactMap { label, sources in
+            let rows = usage.breakdown.filter { sources.contains($0.source) }
+            return rows.isEmpty ? nil : (label, rows.reduce(0) { $0 + $1.percent })
+        }
+    }
+    var body: some View {
+        Button { presented.toggle() } label: {
+            ZStack {
+                Circle().stroke(Color.secondary.opacity(0.25), lineWidth: 2)
+                if usage.available {
+                    Circle().trim(from: 0, to: percent / 100)
+                        .stroke(Color.primary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                } else { Text("—").font(.system(size: 10)) }
+            }.frame(width: 19, height: 19).frame(width: 28, height: 34)
+        }.buttonStyle(.plain)
+            .accessibilityLabel(usage.available ? "上下文已用 \(percent.formatted(.number.precision(.fractionLength(1))))%" : "上下文用量暂不可用")
+            .accessibilityIdentifier("composer.contextUsage")
+            .popover(isPresented: $presented, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("上下文容量").font(.headline)
+                    if usage.available, let used = usage.usedTokens, let max = usage.maxTokens {
+                        Text("\(tokens(used)) / \(tokens(max))（\(percent.formatted(.number.precision(.fractionLength(1))))%）")
+                            .font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+                        ProgressView(value: percent, total: 100).tint(ZTheme.accent)
+                        ForEach(categories, id: \.0) { label, value in
+                            HStack {
+                                Circle().fill(ZTheme.accent).frame(width: 5, height: 5)
+                                Text(label)
+                                Spacer()
+                                Text("\(value.formatted(.number.precision(.fractionLength(1))))%").monospacedDigit()
+                            }.font(.subheadline)
+                        }
+                        if !categories.isEmpty {
+                            Text("分类占比按主机的字符统计，与桌面一致。").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        if let threshold = usage.autoCompactThresholdTokens {
+                            Text("达到 \(tokens(threshold)) tokens 时由电脑自动压缩。").font(.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("电脑尚未提供当前上下文统计。").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }.padding(18).frame(width: 290)
+                    .presentationCompactAdaptation(.popover)
+            }
+    }
+}
+
+private struct CompactionStatusView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let compaction: ContextUsage.Compaction
+    @State private var visibleCompletion = false
+    @State private var completionRevision = 0
+    var body: some View {
+        Group {
+            if compaction.active {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在压缩上下文…")
+                }.accessibilityIdentifier("context.compacting")
+            } else if visibleCompletion, let latest = compaction.latest {
+                Label(latest.status == "success" ? "上下文已压缩" : latest.status == "failed" ? "上下文压缩失败" : "上下文压缩已结束", systemImage: latest.status == "success" ? "checkmark.circle" : "info.circle")
+                    .accessibilityIdentifier("context.compacted")
+            }
+        }.font(.caption).foregroundStyle(.secondary)
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: compaction.active)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: visibleCompletion)
+            .onChange(of: compaction.latest) { _, latest in
+                if let latest, latest.status != "running", !compaction.active {
+                    visibleCompletion = true
+                    completionRevision += 1
+                }
+            }
+            .onChange(of: compaction.active) { old, new in
+                if old && !new, let latest = compaction.latest, latest.status != "running" {
+                    visibleCompletion = true
+                    completionRevision += 1
+                }
+            }
+            .task(id: completionRevision) {
+                guard visibleCompletion else { return }
+                let revision = completionRevision
+                do {
+                    try await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled, revision == completionRevision else { return }
+                    visibleCompletion = false
+                } catch { }
+            }
     }
 }

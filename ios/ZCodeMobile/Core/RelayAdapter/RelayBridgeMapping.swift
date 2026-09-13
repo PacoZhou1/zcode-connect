@@ -90,6 +90,9 @@ enum RelayBridgeMapping {
         if let permissionMode { value["permissionMode"] = .string(permissionMode) }
         return .object(value)
     }
+    static func contextUsage(_ projection: RelayConversationProjection?, snapshot: RelaySessionSnapshot? = nil) -> RelayJSON {
+        RelayContextUsage(projection: projection, snapshot: snapshot).wire
+    }
     static func activity(_ projection: RelayConversationProjection, directory: RelaySubagentDirectory? = nil, directoryError: String? = nil) -> RelayJSON {
         var agents = projection.raw["subagents"].object ?? ["revision": .int(0), "childSessionIds": .array([]), "running": .array([]), "endedTotal": .int(0)]
         if let directory {

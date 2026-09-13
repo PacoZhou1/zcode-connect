@@ -6,6 +6,7 @@ struct TranscriptTurnView: View {
     let turn: TranscriptTurn
     let sessionID: String
     @State private var processExpanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -18,7 +19,7 @@ struct TranscriptTurnView: View {
                     DisclosureGroup(isExpanded: $processExpanded) {
                         processContent.padding(.top, 14)
                     } label: {
-                        Text("查看执行过程")
+                        Text(processTitle)
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     .tint(.secondary)
@@ -35,6 +36,21 @@ struct TranscriptTurnView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onChange(of: turn.isComplete) { _, complete in
+            if complete { processExpanded = false }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: turn.canCollapseProcess)
+    }
+
+    private var processTitle: String {
+        let count = turn.processMessages.reduce(0) { $0 + $1.steps.count }
+        let status: String = switch turn.state {
+        case .completed: "已完成"
+        case .interrupted: "已中断"
+        case .failed: "执行失败"
+        default: "执行过程"
+        }
+        return count > 0 ? "\(status) · \(count) 个步骤" : "\(status) · 查看过程"
     }
 
     private var processContent: some View {
