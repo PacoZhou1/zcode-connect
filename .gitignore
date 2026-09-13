@@ -9,3 +9,6 @@ evidence/private/
 *.xcresult/
 *.zip
 delivery/
+
+# Private before-images of unrelated server handoff documents.
+docs/backend/evidence/macpro-handoff-update-20260913/*-before.md
