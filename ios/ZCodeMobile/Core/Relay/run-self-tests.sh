@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 relay_source_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
-relay_project_dir="$(cd -- "$relay_source_dir/../../../../.." && pwd)"
+relay_project_dir="$(cd -- "$relay_source_dir/../../../.." && pwd)"
 relay_evidence_dir="${1:-$relay_project_dir/docs/backend/evidence}"
 relay_build_dir="$(mktemp -d "${TMPDIR:-/tmp}/zcode-relay.XXXXXX")"
 trap 'rm -rf -- "$relay_build_dir"' EXIT

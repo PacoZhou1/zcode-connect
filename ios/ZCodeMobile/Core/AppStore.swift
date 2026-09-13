@@ -248,7 +248,7 @@ final class AppStore {
         let code = (error as? RelayFailure)?.code ?? (error as? BridgeFailure)?.code
         if let code {
             return ["relay_transport_failed", "relay_disconnected", "relay_pairing_timeout", "relay_desktop_unpaired",
-                    "relay_heartbeat_timeout", "relay_request_timeout", "relay_rpc_timeout"].contains(code)
+                    "relay_heartbeat_timeout", "relay_request_timeout", "relay_rpc_timeout", "relay_read_timeout"].contains(code)
         }
         let failure = error as NSError
         guard failure.domain == NSURLErrorDomain else { return false }
@@ -838,7 +838,7 @@ final class AppStore {
         return detail.messages.map(\.local)
     }
 
-    func loadTranscript(_ id: String, onFailure: ((String) -> Void)? = nil) async {
+    func loadTranscript(_ id: String, onFailure: ((String) -> Void)? = nil, retryReadTimeout: Bool = true) async {
         guard !isReferenceMode, let client else { return }
         let epoch = connectionEpoch
         let request = UUID()
@@ -877,6 +877,12 @@ final class AppStore {
             }
         } catch {
             guard epoch == connectionEpoch, transcriptRequests[id] == request else { return }
+            let code = (error as? RelayFailure)?.code ?? (error as? BridgeFailure)?.code
+            if code == "relay_read_timeout", retryReadTimeout, connection.isOnline, !Task.isCancelled {
+                // Only re-read history. Never replay a send/fork/archive command from this path.
+                await loadTranscript(id, onFailure: onFailure, retryReadTimeout: false)
+                return
+            }
             if let onFailure { onFailure(error.localizedDescription) }
             else { errorMessage = error.localizedDescription }
         }

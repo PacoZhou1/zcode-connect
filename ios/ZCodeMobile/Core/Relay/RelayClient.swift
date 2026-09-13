@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import CryptoKit
 
 private enum RelayChildHistoryOperation {
@@ -244,7 +245,9 @@ public actor RelayClient {
         guard type == "data", paired else { return }
         let payload = value["payload"], subtype = try payload.requiringString("zcode_type")
         if ["rpc-frame", "rpc-frame-ack"].contains(subtype) {
-            guard var current = frames else { throw RelayFailure.invalid("RPC arrived before workspace attachment.") }
+            // The official v4 receiver ignores residual RPC traffic until a bridge is attached.
+            // Never acknowledge or decode a previous bridge's traffic in the new connection.
+            guard var current = frames else { return }
             let result = try current.accept(payload); frames = current
             if let ack = result.acknowledgement { try await sendPayload(ack) }
             guard frames?.identity == current.identity else { return }
@@ -392,7 +395,18 @@ public actor RelayClient {
         let bytes = try RelayIPCCodec.encode(.init(header: [.int32(100), .int32(id), .string(channel), .string(method)], body: .array([try .object(.object(scope))])))
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let timer = timeoutTask(timeout ?? requestTimeout) { [weak self] in await self?.completeRPC(id, result: .failure(RelayFailure("relay_rpc_timeout", "The desktop response is uncertain. Reconcile the original command ID before retrying.", outcomeUncertain: true))) }
+                let readOnly = ["zcode-task/listTasks", "zcode-task/listPinnedTasks", "zcode-task/listArchivedTasks",
+                                "zcode-session/readSession", "zcode-agent/readSession", "zcode-agent/listSessionSubagents",
+                                "zcode-agent/helloConversationV4", "zcode-agent/conversationRowsRangeV4",
+                                "zcode-agent/queryConversationCommandsV4"].contains(channel + "/" + method)
+                let timer = timeoutTask(timeout ?? requestTimeout) { [weak self] in
+                    // Operation names only: never log task IDs, messages, credentials or RPC parameters.
+                    Logger(subsystem: "dev.paco.zcode.mobile", category: "Relay").error("Desktop RPC timeout: \(channel, privacy: .public)/\(method, privacy: .public)")
+                    let failure = readOnly
+                        ? RelayFailure("relay_read_timeout", "读取电脑上的内容超时，请稍后重试。")
+                        : RelayFailure("relay_rpc_timeout", "电脑尚未确认操作结果。请先恢复连接并核对原操作，避免重复提交。", outcomeUncertain: true)
+                    await self?.completeRPC(id, result: .failure(failure))
+                }
                 rpcRequests[id] = .init(continuation: continuation, timeout: timer)
                 Task { do { if self.rpcRequests[id] != nil { try await self.sendIPC(bytes) } } catch { self.completeRPC(id, result: .failure(error)) } }
             }

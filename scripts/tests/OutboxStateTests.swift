@@ -484,6 +484,35 @@ struct TestResult: Codable { let name: String; let passed: Bool; let detail: Str
             try await TestTransport.emit(["session": TestTransport.session(status: "completed")], type: "session.index.updated")
             try check(f.store.session("S")?.status == .completed, "completion index push was dropped")
         }
+        await run("history read timeout retries once without replaying a mutation") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            var attempts = 0
+            let mutations = TestTransport.requests.filter { $0.method != "GET" }.count
+            TestTransport.handler = { r in
+                if r.path == "v1/sessions/S", r.method == "GET" {
+                    attempts += 1
+                    if attempts == 1 { throw BridgeFailure(message: "read deadline", code: "relay_read_timeout") }
+                }
+                return nil
+            }
+            await f.store.loadTranscript("S")
+            try check(attempts == 2 && f.store.errorMessage == nil, "read timeout did not recover once")
+            try check(TestTransport.requests.filter { $0.method != "GET" }.count == mutations, "history retry replayed a mutation")
+        }
+        await run("persistent history timeout is bounded and uncertain operations are not retried") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            var attempts = 0
+            var code = "relay_read_timeout"
+            TestTransport.handler = { r in
+                if r.path == "v1/sessions/S", r.method == "GET" { attempts += 1; throw BridgeFailure(message: "deadline", code: code) }
+                return nil
+            }
+            await f.store.loadTranscript("S")
+            try check(attempts == 2 && f.store.errorMessage != nil, "persistent timeout was hidden or unbounded")
+            attempts = 0; code = "relay_rpc_timeout"
+            await f.store.loadTranscript("S")
+            try check(attempts == 1, "uncertain operation was blindly retried")
+        }
         let report: [String: JSONValue] = ["cases": .number(Double(results.count)), "passed": .number(Double(results.filter(\.passed).count)), "failed": .number(Double(results.filter { !$0.passed }.count)), "assertions": .number(Double(assertions))]
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(JSONValue.object(report))) as! [String: Any]
         object["results"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(results))
