@@ -9,11 +9,6 @@ struct ConnectionsView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Label("远程", systemImage: "laptopcomputer").font(.headline)
-                    Text("随时查看电脑上的任务，继续你的工作。")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }
                 Section("我的电脑") {
                     ForEach(store.profiles) { profile in
                         Button {
@@ -37,22 +32,7 @@ struct ConnectionsView: View {
                         Label("添加连接", systemImage: "plus")
                     }
                 }
-                Section {
-                    Button { store.showArchived = false; store.path = []; dismiss() } label: {
-                        Label("全部任务", systemImage: "bubble.left.and.bubble.right")
-                    }
-                    Button { store.showArchived = true; store.path = []; dismiss() } label: {
-                        Label("已归档任务", systemImage: "archivebox")
-                    }
-                    NavigationLink { SettingsView(embedded: true) } label: {
-                        Label("设置", systemImage: "gearshape")
-                    }
-                }
-                if store.isReferenceMode {
-                    Section {
-                        Button("退出界面体验") { store.leaveReferenceMode(); dismiss() }
-                    } footer: { Text("界面体验使用本机内置的参考内容。") }
-                }
+
             }
             .navigationTitle("连接").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
@@ -385,14 +365,14 @@ struct ConnectionGuideView: View {
         List {
             Section("先选择连接方式") {
                 Text("ZCode 官方中转：开启电脑上的远程控制，手机扫码即可。")
-                Text("专属中转：手机 ↔ 常驻 Mac Pro ↔ 工作 MacBook。任务和文件仍在 MacBook；Mac Pro 只转发远控消息，不运行第二份任务。")
-                Text("HTTP 桥接是另一种高级服务，不能用它替代专属中转，也不会接管原桌面会话。")
+                Text("专属中转：手机 ↔ 中转服务器 ↔ 工作电脑。任务和文件仍在 工作电脑；中转服务器 只转发远控消息，不运行第二份任务。")
+                Text("HTTP 桥接：连接单独部署的兼容任务服务，使用服务地址和访问令牌。用于管理员提供了 HTTP 桥接配置的情况；读取原电脑上的 ZCode 会话请选择前两种方式。")
             }
             Section("共同前提") {
                 Label("工作电脑保持开机、联网，ZCode 正在运行。", systemImage: "laptopcomputer")
                 Label("先在电脑 ZCode 打开需要控制的项目；SSH 项目也先在电脑端连好。", systemImage: "folder")
                 Label("手机允许联网。首次配对需在电脑旁完成，之后可用 Wi-Fi 或蜂窝网络。", systemImage: "iphone")
-                Text("MacBook 合盖休眠、关机或断网时，Mac Pro 不能代替它继续运行任务。模型请求仍走电脑原来的模型服务。")
+                Text("工作电脑 合盖休眠、关机或断网时，中转服务器 不能代替它继续运行任务。模型请求仍走电脑原来的模型服务。")
             }
             Section("官方连接：电脑端") {
                 Text("1. 打开 ZCode 左下角手机图标 → 移动端远程控制。")
@@ -402,12 +382,12 @@ struct ConnectionGuideView: View {
                 Text("1. 主菜单 → 添加连接 → 扫描二维码或粘贴连接信息。")
                 Text("2. 确认目标电脑，选择原有项目。进入任务，核对最新回复。")
             }
-            Section("专属中转：Mac Pro 先准备") {
+            Section("专属中转：中转服务器 先准备") {
                 Text("1. 部署与本 App 兼容的 Relay，配置公网入口和有效 HTTPS/WSS 证书。只开放 SSH 并不足以让本 App 使用中转。")
                 Text("2. 保持服务器在线，配置服务自动恢复。若使用登录启动服务，重启后需要登录对应账号。")
-                Text("3. 为这台 MacBook 签发短期接入许可。许可只用于电脑首次登记，不是手机的连接信息。")
+                Text("3. 为这台工作电脑 签发短期接入许可。许可只用于电脑首次登记，不是手机的连接信息。")
             }
-            Section("专属中转：MacBook 再切换") {
+            Section("专属中转：工作电脑 再切换") {
                 Text("1. 等正在运行的任务结束，再正常退出 ZCode；不要强制退出。")
                 Text("2. 使用已配置的专属中转启动方式打开原 ZCode，保留原用户数据和项目。首次启动需带有效接入许可。")
                 Text("3. 打开“移动端远程控制”，由你点击“刷新二维码”并确认，生成属于新中转的配对信息。旧官方链接会失效。")
@@ -419,11 +399,20 @@ struct ConnectionGuideView: View {
             }
             Section("专属中转：最后连接手机") {
                 Text("1. 主菜单 → 添加连接 → 粘贴连接信息，使用中转页导出的完整内容；不要选择“HTTP 桥接”。")
-                Text("2. 确认显示的是你的中转域名和原 MacBook，再选择项目。手机不需要填写 SSH 私钥或服务器密码。")
+                Text("2. 确认显示的是你的中转域名和原 工作电脑，再选择项目。手机不需要填写 SSH 私钥或服务器密码。")
                 Text("3. 核对原有任务，发一条测试消息；再切到蜂窝网络确认可收发。保存后，App 会尝试自动恢复连接。")
             }
+            Section("HTTP 桥接：管理员与手机分别操作") {
+                Text("1. 管理员在运行任务的电脑上部署兼容本 App 的 HTTP 桥接服务，并提供 HTTPS 服务地址和专用访问令牌。不要填写 ZCode 网页地址或模型 API Key。")
+                Text("2. 手机进入“添加连接”→“HTTP 桥接（高级）”，填写电脑名称、服务地址和访问令牌，点击连接。")
+                Text("3. 选择服务提供的项目，核对任务列表。此服务管理自己的任务；它与 ZCode 官方或自建 Relay 的配对信息不能混用。")
+            }
+            Section("交给 AI 助手配置") {
+                Text("向提供此 App 的人获取 ZCode-Remote-Starter.zip，解压后把 START_HERE.md 交给电脑上的 AI 助手。包内包含中转源码、压缩配置、服务与桌面启动工具、部署检查和验收步骤。无需修改 ZCode 安装文件。")
+                Text("直接使用官方连接无需部署中转。自建中转需要一台可持续在线的服务器、域名和 HTTPS 入口；工作电脑和手机均需能访问它。")
+            }
             Section("遇到问题") {
-                Text("连不上：先确认 MacBook 未休眠且 ZCode 远控开启，再确认 Mac Pro 中转和证书正常。")
+                Text("连不上：先确认 工作电脑 未休眠且 ZCode 远控开启，再确认 中转服务器 中转和证书正常。")
                 Text("另一台手机接管、配对失效或连接被暂停：在设置中的已保存电脑上手动重新连接；不要反复刷新二维码。")
                 Text("找不到项目：先在电脑端打开项目，再刷新手机项目列表。任务需要批准时，点消息中的“允许本次”或“拒绝”；批准模式是另一项设置。")
                 Text("回到官方中转：需要在电脑端恢复官方启动配置并重新完成配对，不能只修改手机地址。")

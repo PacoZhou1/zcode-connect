@@ -18,10 +18,23 @@ enum TranscriptPresentation {
     /// No session status or array position can promote an intermediate message to final.
     static func group(_ messages: [ChatMessage]) -> [TranscriptTurn] {
         var order: [String] = [], buckets: [String: [ChatMessage]] = [:], current: String?
+        // A guided input is appended into an already-running turn. It keeps its
+        // chronological position as its own bubble, and the turn continues after it.
+        var continuations: [String: String] = [:]
         for message in messages {
             let explicit = message.transcript?.turnID.trimmingCharacters(in: .whitespacesAndNewlines)
             let key: String
-            if let explicit, !explicit.isEmpty { key = "turn:" + explicit }
+            if let explicit, !explicit.isEmpty {
+                let base = "turn:" + explicit
+                if message.role == .user, buckets[base] != nil {
+                    key = base + ":guided:" + message.id
+                    let continuation = base + "#after:" + message.id
+                    continuations[base] = continuation
+                    order.append(key); buckets[key] = [message]; current = key
+                    continue
+                }
+                key = continuations[base] ?? base
+            }
             else if message.role == .user { key = "legacy:user:" + message.id }
             else { key = current ?? "legacy:message:" + message.id }
             if buckets[key] == nil { order.append(key) }

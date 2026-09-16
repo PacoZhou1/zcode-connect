@@ -166,8 +166,42 @@ struct BridgeMessage: Decodable, Sendable {
         var id: String
         var name: String
         var status: String
+        var rawStatus: String?
+        var localStatus: SessionStatus {
+            switch status.lowercased() {
+            case "running", "in_progress", "inputstreaming": .running
+            case "waiting", "pending", "blocked", "pendingapproval", "queued": .waiting
+            case "error", "failed", "rejected", "cancelled", "canceled", "interrupted", "stopped": .failed
+            case "success", "completed", "done": .completed
+            default: .idle
+            }
+        }
         var output: String?
         var input: JSONValue?
+        var inputPreviewJSON: String? {
+            let value: JSONValue?
+            if let text = input?.stringValue, let data = text.data(using: .utf8),
+               let parsed = try? JSONDecoder().decode(JSONValue.self, from: data) { value = parsed }
+            else { value = input }
+            guard let object = value?.objectValue else { return nil }
+            let keys = ["command", "cmd", "script", "file_path", "filePath", "path", "paths", "file", "files", "query", "pattern", "search_term", "url", "uri", "description", "title", "name"]
+            var preview: [String: JSONValue] = [:]
+            for key in keys where preview.count < 4 {
+                if let text = object[key]?.stringValue {
+                    preview[key] = .string(String(text.split(whereSeparator: \.isNewline).first?.prefix(512) ?? ""))
+                } else if case .array(let values) = object[key] {
+                    preview[key] = .array(values.prefix(3).compactMap { $0.stringValue }.map { .string(String($0.prefix(160))) })
+                }
+            }
+            return preview.isEmpty ? nil : JSONValue.object(preview).formatted
+        }
+        var websiteURL: String? {
+            let value: JSONValue?
+            if let text = input?.stringValue, let data = text.data(using: .utf8),
+               let parsed = try? JSONDecoder().decode(JSONValue.self, from: data) { value = parsed }
+            else { value = input }
+            return value?.objectValue?["url"]?.stringValue ?? value?.objectValue?["uri"]?.stringValue
+        }
     }
     var id: String
     var role: String
@@ -185,8 +219,8 @@ struct BridgeMessage: Decodable, Sendable {
                     steps: (toolCalls ?? []).map {
                         ToolStep(id: $0.id, title: $0.name,
                                  detail: [$0.input.map { "输入\n\($0.formatted)" }, $0.output.map { "输出\n\($0)" }].compactMap { $0 }.joined(separator: "\n\n"),
-                                 status: ["running", "in_progress"].contains($0.status) ? .running :
-                                    (["error", "failed", "rejected"].contains($0.status) ? .failed : .completed))
+                                 status: $0.localStatus,
+                                 websiteURL: $0.websiteURL, inputJSON: $0.inputPreviewJSON, rawStatus: $0.rawStatus ?? $0.status)
                     },
                     isStreaming: isStreaming, reasoning: reasoning, attachments: attachments ?? [], forkTarget: forkTarget, transcript: transcript)
     }
@@ -238,6 +272,17 @@ struct BridgeHistoryPage: Decodable, Sendable {
     var history: ConversationHistory
 }
 
+struct QueuedInput: Decodable, Sendable, Identifiable, Equatable {
+    var queueItemId: String
+    var sourceCommandId: String?
+    var text: String
+    struct Delivery: Decodable, Sendable, Equatable { var admitted: String }
+    var delivery: Delivery
+    var id: String { queueItemId }
+    var isGuide: Bool { delivery.admitted == "guide" }
+    var transferPending: Bool? = nil
+}
+
 struct BridgeDetail: Decodable, Sendable {
     var session: BridgeSession
     var messages: [BridgeMessage]
@@ -245,6 +290,7 @@ struct BridgeDetail: Decodable, Sendable {
     var hostActivity: JSONValue?
     var contextUsage: ContextUsage? = nil
     var history: ConversationHistory? = nil
+    var queue: [QueuedInput]? = nil
 }
 
 struct BridgeEnvelope: Decodable, Sendable {
@@ -254,6 +300,7 @@ struct BridgeEnvelope: Decodable, Sendable {
         var interaction: PendingInteraction?
         var interactionId: String?
         var connectionStatus: String?
+        var queue: [QueuedInput]?
         var hostActivity: JSONValue?
         var contextUsage: ContextUsage?
     }

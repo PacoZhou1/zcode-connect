@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreHaptics
 import PhotosUI
 import UniformTypeIdentifiers
 
@@ -24,8 +25,14 @@ struct ComposerView: View {
     @State private var showReasoning = false
     @State private var showGoalEditor = false
     @State private var submitting = false
-    @State private var reasoningDraft: ReasoningLevel = .high
+    @State private var reasoningDraft = "high"
+    @State private var reasoningEditing = false
+    @State private var reasoningSaving = false
+    @State private var reasoningEditRevision = 0
     @State private var dialActivation = 0
+    @State private var dialSchedule = 0
+    @State private var displayedReasoning: String?
+    @State private var pendingReasoning: String?
     @State private var confirmPlanExit = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -43,7 +50,7 @@ struct ComposerView: View {
     private var expanded: Bool { showContext || focused || !text.isEmpty || !attachments.isEmpty || sessionID == nil }
     private var canSend: Bool {
         (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) && !submitting
-            && !isRunning && (sessionID.map { !store.sendingSessions.contains($0) } ?? true)
+            && (!isRunning || store.activeProfile?.isRelay == true || store.isReferenceMode) && (sessionID.map { !store.sendingSessions.contains($0) } ?? true)
             && attachmentDraftIdentity == draftIdentity && store.connection.isOnline && (sessionID == nil || store.session(sessionID!)?.canControl == true)
     }
     private var isRunning: Bool { sessionID.flatMap { store.session($0) }.map { [.running, .waiting].contains($0.status) } ?? false }
@@ -70,10 +77,19 @@ struct ComposerView: View {
                             .font(.caption).lineLimit(2).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 4)
+                    Button { store.dismissPendingSubmission(draftKey) } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("移除发送提示").accessibilityIdentifier("composer.dismissPending")
                     Button("重试发送") { submit(retryPending: true) }
                         .font(.caption.weight(.semibold)).disabled(submitting)
                         .accessibilityIdentifier("composer.retryPending")
                 }.padding(12).background(ZTheme.grouped, in: RoundedRectangle(cornerRadius: 16))
+            }
+            if let id = sessionID, store.editingQueuedInput[id] != nil {
+                HStack {
+                    Label("编辑消息", systemImage: "pencil").font(.caption)
+                    Spacer()
+                    Button("取消") { store.editingQueuedInput[id] = nil; text = store.drafts[draftKey] ?? "" }
+                }.padding(.horizontal, 12)
             }
             ZStack(alignment: .bottom) {
                 inputSurface
@@ -87,6 +103,9 @@ struct ComposerView: View {
         .padding(.horizontal, expanded ? 12 : 38)
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: expanded)
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: showReasoning)
+        .onChange(of: sessionID.flatMap { store.editingQueuedInput[$0]?.id }) { _, _ in
+            if let id = sessionID, let item = store.editingQueuedInput[id] { text = item.text; focused = true; showReasoning = false }
+        }
         .task {
             text = store.drafts[draftKey] ?? ""
             #if DEBUG
@@ -118,7 +137,7 @@ struct ComposerView: View {
             #endif
             if initiallyFocused { focused = true }
             if let sessionID { await store.loadSettings(sessionID) }
-            reasoningDraft = currentReasoning
+            reasoningDraft = currentReasoningValue
         }
         .task(id: draftIdentity) {
             let identity = draftIdentity, key = draftKey
@@ -141,11 +160,19 @@ struct ComposerView: View {
         }
         .onChange(of: showReasoning) { _, visible in
             onReasoningVisibilityChange(visible)
-            if !visible { dialActivation += 1 }
+            if visible { displayedReasoning = currentReasoningValue }; dialSchedule += 1
         }
-        .onChange(of: currentReasoning) { _, _ in if !showReasoning { dialActivation += 1 } }
+        .task(id: dialSchedule) {
+            guard dialSchedule > 0, !showReasoning else { return }
+            do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }
+            guard !Task.isCancelled, !showReasoning else { return }
+            displayedReasoning = reasoningSaving ? reasoningDraft : currentReasoningValue
+            dialActivation += 1
+            if store.hapticsEnabled { ReasoningHaptics.shared.play() }
+        }
         .onChange(of: dismissOverlaysSignal) { _, _ in
-            showReasoning = false
+            if showReasoning { showReasoning = false; return }
+            focused = false
             showContext = false
             showAttachmentMenu = false
         }
@@ -157,7 +184,7 @@ struct ComposerView: View {
         .onChange(of: speech.isRecording) { _, recording in
             if !recording, voicePhase == .recording { finishInlineVoice(sendAfter: false) }
         }
-        .onChange(of: text) { _, value in store.setDraft(value, for: draftKey) }
+        .onChange(of: text) { _, value in if sessionID.flatMap({ store.editingQueuedInput[$0] }) == nil { store.setDraft(value, for: draftKey) } }
         .onChange(of: draftKey) { _, key in
             cancelInlineVoice()
             text = store.drafts[key] ?? ""
@@ -182,21 +209,7 @@ struct ComposerView: View {
                 photoSelections = []
             }
         }
-        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            do {
-                for url in try result.get() {
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
-                    guard (values.fileSize ?? 0) <= 8 * 1024 * 1024 else {
-                        store.errorMessage = "请选择小于 8 MB 的文件。"; continue
-                    }
-                    let data = try Data(contentsOf: url)
-                    addAttachment(data: data, name: url.lastPathComponent,
-                                  mime: values.contentType?.preferredMIMEType ?? "application/octet-stream")
-                }
-            } catch { store.errorMessage = error.localizedDescription }
-        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true, onCompletion: importFiles)
         .sheet(isPresented: $showCamera) {
             CameraPicker { data in
                 if let data { addAttachment(data: data, name: "拍摄照片.jpg", mime: "image/jpeg") }
@@ -211,6 +224,22 @@ struct ComposerView: View {
         } message: {
             Text("此任务将可以直接编辑文件和运行命令，不再逐次请求批准。")
         }
+    }
+
+    private func importFiles(_ result: Result<[URL], Error>) {
+            do {
+                for url in try result.get() {
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
+                    guard (values.fileSize ?? 0) <= 8 * 1024 * 1024 else {
+                        store.errorMessage = "请选择小于 8 MB 的文件。"; continue
+                    }
+                    let data = try Data(contentsOf: url)
+                    addAttachment(data: data, name: url.lastPathComponent,
+                                  mime: values.contentType?.preferredMIMEType ?? "application/octet-stream")
+                }
+            } catch { store.errorMessage = error.localizedDescription }
     }
 
     private var inputSurface: some View {
@@ -286,8 +315,8 @@ struct ComposerView: View {
 
     private var inputField: some View {
         let reduced = reduceMotion
-        return TextField("在 \(store.hostName) 上工作", text: $text,
-                         prompt: Text("在 \(store.hostName) 上工作").foregroundStyle(Color(uiColor: .placeholderText)), axis: .vertical)
+        return TextField(isRunning ? "跟进" : "在 \(store.hostName) 上工作", text: $text,
+                         prompt: Text(isRunning ? "跟进" : "在 \(store.hostName) 上工作").foregroundStyle(Color(uiColor: .placeholderText)), axis: .vertical)
             .font(.system(size: 17))
             .lineLimit(expanded ? 1...6 : 1...1)
             .focused($focused)
@@ -369,20 +398,19 @@ struct ComposerView: View {
 
     private var primaryButton: some View {
         Button {
-            if isRunning, let sessionID { Task { await store.stop(sessionID) } }
-            else if canSend { submit() }
+            if canSend { submit() }
+            else if isRunning, let sessionID { Task { await store.stop(sessionID) } }
         } label: {
             Group {
                 if sessionID.map({ store.stoppingSessions.contains($0) }) ?? false { ProgressView().tint(.white) }
-                else if isRunning { Image(systemName: "stop.fill").font(.system(size: 14)) }
+                else if isRunning && !canSend { Image(systemName: "stop.fill").font(.system(size: 14)) }
                 else { Image(systemName: "arrow.up").font(.system(size: 22, weight: .semibold)) }
             }
             .foregroundStyle(.white).frame(width: 34, height: 34)
             .background(!isRunning && !canSend ? Color.gray.opacity(0.28) : ZTheme.accent, in: Circle())
         }
-        .disabled(isRunning ? (sessionID.map { store.stoppingSessions.contains($0) } ?? false)
-                  : !canSend)
-        .accessibilityLabel(isRunning ? "停止任务" : "发送消息")
+        .disabled(submitting || (isRunning ? (sessionID.map { store.stoppingSessions.contains($0) } ?? false) : !canSend))
+        .accessibilityLabel(isRunning && !canSend ? "停止任务" : "发送消息")
         .accessibilityIdentifier("composer.send").accessibilityHidden(voiceActive)
     }
 
@@ -471,10 +499,10 @@ struct ComposerView: View {
 
     private var reasoningButton: some View {
         Button {
-            reasoningDraft = currentReasoning
+            reasoningDraft = currentReasoningValue
             showReasoning = true
         } label: {
-            ReasoningDial(level: currentReasoning, activation: dialActivation)
+            ReasoningDial(value: displayedReasoning ?? currentReasoningValue, levels: availableReasoning, activation: dialActivation)
                 .frame(width: 32, height: 34)
         }.accessibilityLabel("模型与思考强度").accessibilityIdentifier("composer.reasoning").accessibilityHidden(voiceActive)
     }
@@ -484,28 +512,49 @@ struct ComposerView: View {
             Button { store.sheet = .advanced; showReasoning = false } label: {
                 HStack(spacing: 7) {
                     Text(currentModelName).font(.system(size: 23, weight: .medium)).lineLimit(1).minimumScaleFactor(0.7)
-                    Text(reasoningDraft.label).foregroundStyle(.secondary)
+                    Text(reasoningLabel(reasoningDraft)).foregroundStyle(.secondary)
                     Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
                 }.font(.system(size: 21))
             }.accessibilityIdentifier("reasoning.advanced")
-            ReasoningSlider(level: $reasoningDraft, levels: availableReasoning) { level in
-                if store.isReferenceMode { store.options.reasoning = level }
+            if !availableReasoning.isEmpty {
+            ReasoningSlider(level: $reasoningDraft, levels: availableReasoning, onEditingChanged: { editing in
+                reasoningEditing = editing
+                if editing { reasoningEditRevision += 1 }
+            }) { level in
+                if store.isReferenceMode { store.options.reasoning = ReasoningLevel(wireValue: level) ?? .high }
                 else {
-                    let identity = draftIdentity
-                    Task {
-                        _ = await store.updateSettings(sessionID, reasoning: level.wireValue)
-                        guard identity == draftIdentity else { return }
-                        reasoningDraft = currentReasoning
+                    pendingReasoning = level
+                    if !reasoningSaving {
+                        let identity = draftIdentity
+                        reasoningSaving = true
+                        Task {
+                            while let next = pendingReasoning, identity == draftIdentity {
+                                pendingReasoning = nil
+                                _ = await store.updateSettings(sessionID, reasoning: next)
+                            }
+                            guard identity == draftIdentity else { return }
+                            reasoningSaving = false
+                            if !reasoningEditing { reasoningDraft = currentReasoningValue }
+                        }
                     }
                 }
             }
                 .frame(height: 72).padding(.horizontal, 37.333333)
-                .disabled(!store.canEditSettings(sessionID, model: true))
-            if !store.canEditSettings(sessionID, model: true) {
-                Text("当前轮次结束后可调整模型与思考强度。").font(.footnote).foregroundStyle(.secondary)
+                .disabled(!store.isReferenceMode && sessionID != nil && !store.canEditSettings(sessionID, model: true) && !reasoningSaving)
             }
+
         }
         .padding(.top, 8)
+        .task {
+            while !Task.isCancelled {
+                let editRevision = reasoningEditRevision
+                await store.refreshModels()
+                if let sessionID { await store.loadSettings(sessionID) }
+                guard !Task.isCancelled else { return }
+                if !reasoningEditing && !reasoningSaving && editRevision == reasoningEditRevision { reasoningDraft = currentReasoningValue }
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            }
+        }
         .onTapGesture(count: 2) { showReasoning = false }
         .accessibilityAction(named: "返回输入") { showReasoning = false }
     }
@@ -544,16 +593,34 @@ struct ComposerView: View {
     private var currentReasoning: ReasoningLevel {
         store.isReferenceMode ? store.options.reasoning : selection?.thoughtLevel.flatMap(ReasoningLevel.init(wireValue:)) ?? .high
     }
-    private var availableReasoning: [ReasoningLevel] {
-        guard !store.isReferenceMode else { return ReasoningLevel.allCases.filter { $0 != .minimal } }
-        guard let selection,
-              let model = store.models.first(where: { $0.providerId == selection.providerId && $0.modelId == selection.modelId }) else { return [currentReasoning] }
-        let values = model.thoughtLevels.compactMap(ReasoningLevel.init(wireValue:))
-        return values.isEmpty ? [currentReasoning] : values
+    private var currentReasoningValue: String { store.isReferenceMode ? store.options.reasoning.wireValue : selection?.thoughtLevel ?? "high" }
+    private func reasoningLabel(_ value: String) -> String { ReasoningLevel(wireValue: value)?.label ?? ["none": "关闭" ][value] ?? value }
+    private var availableReasoning: [String] {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--reasoning-eight-review") { return ["none", "minimal", "low", "medium", "high", "xhigh", "max", "future"] }
+        if ProcessInfo.processInfo.arguments.contains("--reasoning-empty-review") { return [] }
+        #endif
+        if store.isReferenceMode { return ["low", "medium", "high"] }
+        let levels: [String]
+        if let id = sessionID, let settings = store.remoteSettings[id] { levels = settings.thoughtLevels }
+        else { levels = store.models.first { $0.providerId == selection?.providerId && $0.modelId == selection?.modelId }?.thoughtLevels ?? [] }
+        var seen = Set<String>()
+        return levels.filter { seen.insert($0).inserted }
     }
 
     private func submit(retryPending: Bool = false) {
         guard !submitting, canSend || retryPending else { return }
+        if !retryPending, let id = sessionID, let item = store.editingQueuedInput[id] {
+            submitting = true
+            let replacement = text
+            Task {
+                if await store.changeQueuedInput(item, sessionID: id, action: "edit", text: replacement) {
+                    store.editingQueuedInput[id] = nil; text = store.drafts[draftKey] ?? ""; focused = false
+                }
+                submitting = false
+            }
+            return
+        }
         submitting = true
         let pending = retryPending ? store.pendingSubmissions[draftKey] : nil
         let originalText = pending?.text ?? text
@@ -566,7 +633,6 @@ struct ComposerView: View {
                                                 draftKey: submittedKey, sessionID: submittedSession, retryPending: retryPending,
                                                 onPrepared: { id in
                 guard store.activeProfileID == submittedProfile, draftKey == submittedKey else { return }
-                if store.hapticsEnabled { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
                 text = ""
                 attachments = []
                 focused = false
@@ -604,40 +670,45 @@ struct ComposerView: View {
 
 struct ReasoningSlider: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Binding var level: ReasoningLevel
-    var levels: [ReasoningLevel] = ReasoningLevel.allCases
-    var onCommit: (ReasoningLevel) -> Void = { _ in }
+    @Binding var level: String
+    var levels: [String] = ["low", "medium", "high"]
+    var onEditingChanged: (Bool) -> Void = { _ in }
+    var onCommit: (String) -> Void = { _ in }
     var body: some View {
         GeometryReader { geometry in
-            let step = (geometry.size.width - 73.333333) / CGFloat(max(1, levels.count - 1))
+            let step = max(0, geometry.size.width - 73.333333) / CGFloat(max(1, levels.count - 1))
             let selected = levels.firstIndex(of: level) ?? 0
             ZStack(alignment: .leading) {
                 Capsule().fill(ZTheme.accent).frame(width: 48 + CGFloat(selected) * step, height: 48).padding(.leading, 12)
-                HStack {
-                    ForEach(levels) { item in
-                        Circle().fill(item.rawValue <= level.rawValue ? .white.opacity(0.3) : .gray.opacity(0.4))
-                            .frame(width: 12, height: 12)
-                            .frame(width: 40)
-                        if item != levels.last { Spacer(minLength: 0) }
-                    }
-                }.padding(.horizontal, 16.666667)
+                ForEach(Array(levels.enumerated()), id: \.offset) { index, _ in
+                    Circle().fill(index <= selected ? .white.opacity(0.3) : .gray.opacity(0.4))
+                        .frame(width: 12, height: 12)
+                        .offset(x: 30.666667 + CGFloat(index) * step)
+                }
                 Circle().fill(.white).frame(width: 40, height: 40)
                     .offset(x: 16.666667 + CGFloat(selected) * step)
             }
             .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: level)
-            .sensoryFeedback(.selection, trigger: level)
-            .frame(height: 72).glassEffect(ZTheme.controlGlass, in: Capsule())
+            .frame(width: geometry.size.width, height: 72, alignment: .leading).glassEffect(ZTheme.controlGlass, in: Capsule())
                 .contentShape(Capsule())
                 .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                    let index = min(levels.count - 1, max(0, Int(((value.location.x - 36.666667) / max(1, step)).rounded())))
-                    if levels.indices.contains(index), levels[index] != level { level = levels[index] }
-                }.onEnded { _ in onCommit(level) })
+                    onEditingChanged(true)
+                    guard let index = ReasoningScale.index(location: Double(value.location.x), width: Double(geometry.size.width), count: levels.count) else { return }
+                    if levels.indices.contains(index), levels[index] != level {
+                        level = levels[index]
+                    }
+                }.onEnded { _ in
+                    onEditingChanged(false)
+                    if levels.contains(level) { onCommit(level) }
+                })
         }
-        .accessibilityElement().accessibilityLabel("思考强度").accessibilityValue(level.label)
+        .accessibilityElement().accessibilityLabel("思考强度").accessibilityValue(ReasoningLevel(wireValue: level)?.label ?? level)
         .accessibilityAdjustableAction { direction in
+            guard !levels.isEmpty else { return }
             let delta = direction == .increment ? 1 : -1
             let index = levels.firstIndex(of: level) ?? 0
-            level = levels[min(levels.count - 1, max(0, index + delta))]
+            let next = levels[min(levels.count - 1, max(0, index + delta))]
+            level = next
             onCommit(level)
         }
         .accessibilityIdentifier("reasoning.slider")
@@ -766,5 +837,28 @@ private struct CompactionStatusView: View {
                     visibleCompletion = false
                 } catch { }
             }
+    }
+}
+
+@MainActor private final class ReasoningHaptics {
+    static let shared = ReasoningHaptics()
+    private var engine: CHHapticEngine?
+    private var lastPulse = Date.distantPast
+    func play() {
+        guard Date().timeIntervalSince(lastPulse) >= 0.08 else { return }
+        lastPulse = .now
+        guard CHHapticEngine.capabilitiesForHardware().supportsHaptics else {
+            UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 1); return
+        }
+        do {
+            if engine == nil { engine = try CHHapticEngine(); engine?.isAutoShutdownEnabled = true }
+            try engine?.start()
+            let event = CHHapticEvent(eventType: .hapticContinuous, parameters: [
+                CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.85),
+                CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.45)
+            ], relativeTime: 0, duration: 0.14)
+            let pattern = try CHHapticPattern(events: [event], parameters: [])
+            try engine?.makePlayer(with: pattern).start(atTime: CHHapticTimeImmediate)
+        } catch { engine = nil; UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 1) }
     }
 }

@@ -109,7 +109,7 @@ struct HomeView: View {
             ToolbarItem(placement: .principal) {
                 Button { store.sheet = .connections } label: {
                     VStack(spacing: 2) {
-                        Text(store.showArchived ? "已归档任务" : "远程")
+                        Text(store.showArchived ? "已归档任务" : "Zcode connect")
                             .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                         HStack(spacing: 6) {
                             Circle().fill(store.connection.isOnline ?
@@ -235,6 +235,7 @@ struct HomeView: View {
                 HStack(spacing: 8) {
                     if session.status == .running { StatusDot(status: session.status) }
                     else if store.isUnread(session.id) { Circle().fill(ZTheme.accent).frame(width: 7, height: 7).accessibilityLabel("未读") }
+                    if session.isPinned { Image(systemName: "flag.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(ZTheme.accent).accessibilityLabel("已置顶") }
                     Text(session.title).font(.system(size: 17))
                         .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                 }.foregroundStyle(.primary)
@@ -326,7 +327,7 @@ struct HomeView: View {
             }.pickerStyle(.inline)
             Section("管理") {
                 Button("云端任务", systemImage: "cloud") {
-                    store.errorMessage = "当前连接使用电脑上的 ZCode。云端任务需要对应的服务支持。"
+                    store.errorMessage = "云端任务暂未接入。当前任务在所连接的电脑上运行；中转服务器只负责传输，不会在电脑离线后继续执行任务。"
                 }
                 Button(store.showArchived ? "全部任务" : "已归档任务", systemImage: "archivebox") { store.showArchived.toggle() }
                 Button("设置", systemImage: "gearshape") { store.sheet = .settings }

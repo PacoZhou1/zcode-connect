@@ -9,7 +9,10 @@ import sys
 import tempfile
 
 root = Path(__file__).resolve().parents[2]
+# ChatMessage.transcript references TranscriptMessageSemantics (Core/Relay);
+# include its dependency closure so Models.swift compiles standalone.
 paths = [root / "ios/ZCodeMobile/Core" / name for name in ("Models.swift", "DraftAttachmentJournal.swift")]
+paths += [root / "ios/ZCodeMobile/Core/Relay" / name for name in ("RelayTypes.swift", "RelayFrames.swift", "RelayCodec.swift", "RelayProjection.swift", "RelayTranscriptSemantics.swift")]
 paths.append(root / "scripts/tests/DraftAttachmentJournalTests.swift")
 snapshots = {p: p.read_bytes() for p in paths}
 started = datetime.now(timezone.utc).isoformat()

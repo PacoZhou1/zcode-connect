@@ -192,3 +192,24 @@ test('health and pairing helper expose no registry, secrets, model endpoint or t
   assert.equal((await fetch(`${base}/v1/sessions`)).status, 404);
   await assert.rejects(f.server.listen({ host: '0.0.0.0' }), /LOOPBACK_BIND_REQUIRED/);
 });
+
+
+test('compressed large frames preserve bytes and interoperate with uncompressed peers', async (t) => {
+  const f = await fixture(t); const i = await matchedPair(f);
+  assert.ok(i.device.socket.extensions.includes('permessage-deflate'));
+  assert.ok(i.terminal.socket.extensions.includes('permessage-deflate'));
+  const raw = JSON.stringify({type: 'data', client_ts: Date.now(), payload: {zcode_type: 'rpc-frame', dataBase64: 'abcdefgh'.repeat(90_000)}});
+  const before = i.terminal.socket._socket.bytesRead;
+  i.device.send(raw);
+  assert.equal((await i.terminal.next(5000)).raw, raw);
+  const receivedBytes = i.terminal.socket._socket.bytesRead - before;
+  assert.ok(receivedBytes < raw.length / 10, `Compression ineffective: ${receivedBytes}`);
+  const plain = await peer(f.baseURL, {perMessageDeflate: false});
+  assert.equal((await authenticate(plain, i, 'terminal')).pair_status, 'matched');
+  await i.device.next();
+  assert.equal(plain.socket.extensions, '');
+  i.device.send(raw);
+  assert.equal((await plain.next(5000)).raw, raw);
+  plain.send(raw);
+  assert.equal((await i.device.next(5000)).raw, raw);
+});

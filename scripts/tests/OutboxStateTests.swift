@@ -3,7 +3,16 @@ import CryptoKit
 
 // These inert adapters replace only platform side effects. No credential is read/written.
 @MainActor final class UIPasteboard { static let general = UIPasteboard(); var string: String? }
-@MainActor final class UISelectionFeedbackGenerator { func selectionChanged() {} }
+@MainActor final class UISelectionFeedbackGenerator { static var count = 0; func selectionChanged() { Self.count += 1 } }
+@MainActor final class UINotificationFeedbackGenerator {
+    enum FeedbackType { case success }
+    func notificationOccurred(_ type: FeedbackType) { UISelectionFeedbackGenerator.count += 1 }
+}
+@MainActor final class UIImpactFeedbackGenerator {
+    enum FeedbackStyle { case light }
+    init(style: FeedbackStyle) {}
+    func impactOccurred() { UISelectionFeedbackGenerator.count += 1 }
+}
 @MainActor enum CredentialStore {
     static var values: [String: String] = [:]
     static func read(_ id: String) -> String? { values[id] ?? "synthetic-test-token" }
@@ -131,6 +140,84 @@ struct TestResult: Codable { let name: String; let passed: Bool; let detail: Str
         catch { let detail = (error as? TestFailure)?.message ?? String(describing: error); results.append(TestResult(name: name, passed: false, detail: detail)); print("FAIL \(name): \(detail)") }
     }
     @MainActor static func main() async throws {
+        await run("first fast answer and transient idle snapshot still notify") {
+            var tracker = AnswerCompletionFeedback()
+            tracker.begin([])
+            try check(tracker.observe([], status: .idle).isEmpty, "idle snapshot vibrated")
+            let answer = ChatMessage(id: "fast", role: .assistant, text: "done")
+            try check(tracker.observe([answer], status: .completed) == ["message:fast"], "fast first answer missed")
+        }
+        await run("answer completion tolerates mixed history and terminal event before final text") {
+            var tracker = AnswerCompletionFeedback()
+            let old = ChatMessage(id: "old", role: .assistant, text: "history", transcript: .init(turnID: "old-turn", state: .completed, role: .finalAnswer))
+            var live = ChatMessage(id: "live", role: .assistant, text: "partial", isStreaming: true)
+            try check(tracker.observe([old], status: .completed).isEmpty, "history vibrated")
+            try check(tracker.observe([old], status: .running).isEmpty, "start vibrated")
+            try check(tracker.observe([old, live], status: .completed).isEmpty, "completion preceded final text")
+            live.isStreaming = false; live.text = "final answer"
+            try check(tracker.observe([old, live], status: .completed).count == 1, "mixed history suppressed final feedback")
+            try check(tracker.observe([old, live], status: .completed).isEmpty, "duplicate snapshot vibrated")
+        }
+        await run("queued and guided turns notify independently while next turn runs") {
+            var tracker = AnswerCompletionFeedback()
+            _ = tracker.observe([], status: .running)
+            let first = ChatMessage(id: "queue-answer", role: .assistant, text: "queued answer", transcript: .init(turnID: "queue-turn", state: .completed, role: .finalAnswer))
+            try check(tracker.observe([first], status: .running) == ["turn:queue-turn"], "queue completion missed")
+            let second = ChatMessage(id: "guide-answer", role: .assistant, text: "guided answer", transcript: .init(turnID: "guide-turn", state: .completed, role: .finalAnswer))
+            try check(tracker.observe([first, second], status: .completed) == ["turn:guide-turn"], "guide completion missed or duplicated")
+        }
+        await run("tool vocabulary covers native symbols and keeps unknown state truthful") {
+            let cases: [(String, ToolActivityKind)] = [("mcp__filesystem__read_file", .read), ("functions.exec_command", .command), ("ApplyPatch", .write), ("WebSearch", .webSearch), ("mcp__cua_repl__js", .computer), ("RunTests", .test), ("FutureMagic", .generic)]
+            for (name, expected) in cases { try check(ToolActivityKind.classify(name) == expected, "wrong category for " + name) }
+            let unknown = ToolStep(id: "unknown", title: "FutureMagic", detail: "", status: .idle)
+            try check(unknown.activityStatus == "状态未确认" && unknown.activitySummary == "FutureMagic", "unknown tool pretended to complete")
+            let cancelled = ToolStep(id: "cancel", title: "Bash", detail: "", status: .failed, rawStatus: "cancelled")
+            try check(cancelled.activityStatus == "已中断", "cancelled tool presented as success")
+            let input = Data(#"{"id":"tool","name":"Read","status":"unknown","input":{"file_path":"/private/project/ChatView.swift"}}"#.utf8)
+            let tool = try JSONDecoder().decode(BridgeMessage.Tool.self, from: input)
+            let mapped = ToolStep(id: tool.id, title: tool.name, detail: "", status: tool.localStatus, inputJSON: tool.inputPreviewJSON)
+            try check(mapped.activitySummary == "ChatView.swift" && mapped.status == .idle, "file summary or unknown status wrong")
+            let huge = BridgeMessage.Tool(id: "huge", name: "Bash", status: "running", output: nil, input: .object(["command": .string(String(repeating: "x", count: 10000)), "patch": .string(String(repeating: "y", count: 10000))]))
+            try check((huge.inputPreviewJSON?.count ?? 0) < 600, "preview duplicated large input")
+        }
+        await run("confirmed haptics deduplicate receipts and respect preference") {
+            let f = Fixture(); defer { f.close() }
+            UISelectionFeedbackGenerator.count = 0
+            f.store.confirmedHaptic("send:one")
+            f.store.confirmedHaptic("send:one")
+            f.store.confirmedHaptic("answer:one")
+            try check(UISelectionFeedbackGenerator.count == 2, "replayed receipt vibrated again")
+            f.store.hapticsEnabled = false
+            f.store.confirmedHaptic("send:muted")
+            try check(UISelectionFeedbackGenerator.count == 2, "muted feedback fired")
+        }
+        await run("send feedback waits for acceptance and ignores uncertain transport") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            UISelectionFeedbackGenerator.count = 0
+            TestTransport.handler = { request in
+                if request.path.hasSuffix("/messages"), request.method == "POST" {
+                    throw BridgeFailure(message: "synthetic lost ACK", code: "offline")
+                }
+                return nil
+            }
+            _ = await f.store.send("test", to: "S", inputID: "feedback-stable")
+            try check(UISelectionFeedbackGenerator.count == 0, "uncertain send vibrated")
+            let firstFocus = f.store.sentBubbleFocus["S"]
+            TestTransport.handler = nil
+            let accepted = await f.store.send("test", to: "S", inputID: "feedback-stable")
+            try check(accepted && UISelectionFeedbackGenerator.count == 1, "accepted send did not vibrate once")
+            try check(f.store.sentBubbleFocus["S"] != firstFocus, "retry did not request a fresh bubble focus")
+        }
+        await run("web tool labels and favicon strip URL credentials and query") {
+            let tool = ToolStep(id: "web", title: "WebFetch", detail: "", status: .running,
+                                websiteURL: "https://user:password@example.com:8443/article?private=secret#part")
+            try check(tool.displayTitle == "获取中", "raw tool name leaked into row")
+            try check(tool.faviconURL?.absoluteString == "https://example.com:8443/favicon.ico", "favicon leaked URL credentials or query")
+            let search = ToolStep(id: "search", title: "WebSearch", detail: "", status: .completed)
+            try check(search.displayTitle == "已搜索" && search.faviconURL == nil, "search fallback incorrect")
+            let legacy = Data(#"{"id":"old","title":"WebFetch","detail":"","status":"completed"}"#.utf8)
+            try check(try JSONDecoder().decode(ToolStep.self, from: legacy).websiteURL == nil, "old cached tools cannot decode")
+        }
         await run("journal round-trip preserves immutable text, bytes, creation and upload IDs") {
             let journal = SubmissionJournal(directory: OutboxTestSandbox.directory)
             let attachment = Attachment(name: "test.txt", data: Data("test".utf8), mimeType: "text/plain")
@@ -388,6 +475,19 @@ struct TestResult: Codable { let name: String; let passed: Bool; let detail: Str
             let accepted = await f.store.submitDraft("short corrected text", attachments: [], draftKey: "S", sessionID: "S")
             try check(accepted == "S", "corrected draft could not be sent after local rejection")
         }
+        await run("manual pending dismissal is durable and does not send or erase drafts") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            f.store.setDraft("keep my next draft", for: "S")
+            TestTransport.handler = { r in if r.path.hasSuffix("/messages") { throw BridgeFailure(message: "lost ACK", code: "offline") }; return nil }
+            _ = await f.store.submitDraft("old pending", attachments: [], draftKey: "S", sessionID: "S")
+            let count = TestTransport.requests.count
+            f.store.dismissPendingSubmission("S")
+            try check(f.store.pendingSubmissions["S"] == nil && f.store.drafts["S"] == "keep my next draft", "dismiss changed draft or retained pending")
+            try check(TestTransport.requests.count == count, "dismiss sent a network request")
+            f.store.disconnect()
+            let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }; await reopened.connect(f.profile)
+            try check(reopened.pendingSubmissions["S"] == nil, "dismissed banner returned after restart")
+        }
         await run("definitive invalid request releases pending for corrected input") {
             let f = Fixture(); defer { f.close() }; await f.connect()
             f.store.setDraft("correctable", for: "S")
@@ -534,6 +634,25 @@ struct TestResult: Codable { let name: String; let passed: Bool; let detail: Str
             gate.release(); await stale.value
             try check(changed && f.store.permission(for: "S") == .full, "stale read reverted the approved mode")
             try check(f.store.changingSettings.isEmpty, "settings remained busy")
+        }
+        await run("task summaries cannot overwrite confirmed reasoning settings") {
+            let f = Fixture(); defer { f.close() }; await f.connect()
+            TestTransport.handler = { r in
+                if r.path.hasSuffix("/settings") {
+                    return .object(["sessionId": .string("S"), "model": .object(["providerId": .string("p"), "modelId": .string("m"), "thoughtLevel": .string("high")]), "mode": .string("build"), "thoughtLevels": .array([.string("low"), .string("high")]), "modes": .array([]), "mutable": .bool(true)])
+                }
+                guard case .object(var old) = TestTransport.session() else { return nil }
+                old["providerId"] = .string("p"); old["model"] = .string("m"); old["thoughtLevel"] = .string("low")
+                if r.path.hasPrefix("v1/sessions?") { return .object(["sessions": .array([.object(old)])]) }
+                if r.path == "v1/sessions/S" { return .object(["session": .object(old), "messages": .array([]), "pendingInteractions": .array([])]) }
+                return nil
+            }
+            await f.store.loadSettings("S")
+            try check(f.store.modelSelections["S"]?.thoughtLevel == "high", "settings fixture failed to load")
+            await f.store.refresh()
+            try check(f.store.modelSelections["S"]?.thoughtLevel == "high", "list replaced confirmed strength")
+            await f.store.loadTranscript("S")
+            try check(f.store.modelSelections["S"]?.thoughtLevel == "high", "detail replaced confirmed strength")
         }
         for stage in ["v1/status", "v1/projects"] {
             await run("cancelled HTTP pairing at \(stage) cannot save or activate a late profile") {

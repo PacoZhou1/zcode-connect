@@ -70,6 +70,7 @@ struct JournalTestConnection { var isOnline = true }
 
     init(directory: URL) { submissionJournal = RecordingJournal(directory: directory, trace: trace) }
     func messageLengthError(_ text: String) -> String? { nil }
+    func reconcilePendingSubmissions(_ id: String) async {}
     func seed(_ entry: PendingSubmission) throws {
         pendingSubmissions[entry.draftKey] = entry
         try submissionJournal.real.write(pendingSubmissions, scope: persistenceScope)

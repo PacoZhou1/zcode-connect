@@ -49,7 +49,8 @@ with tempfile.TemporaryDirectory(prefix="zcode-message-block-row-") as raw:
     for p in (source, models):
         (temp / p.name).write_bytes(contents[p])
     (temp / "Adapters.swift").write_text(adapters)
-    checked = subprocess.run(common + ["-typecheck", "-sdk", ios_sdk, "-target", "arm64-apple-ios26.0-simulator", str(temp / source.name), str(temp / models.name), str(temp / "Adapters.swift")], capture_output=True, text=True)
+    (temp / "RelayJSON.swift").write_text((root / "ios/ZCodeMobile/Core/Relay/RelayTypes.swift").read_text().split("public struct RelayPairing:")[0])
+    checked = subprocess.run(common + ["-typecheck", "-sdk", ios_sdk, "-target", "arm64-apple-ios26.0-simulator", str(temp / source.name), str(temp / models.name), str(temp / "Adapters.swift"), str(root / "ios/ZCodeMobile/Core/Relay/RelayTranscriptSemantics.swift"), str(temp / "RelayJSON.swift")], capture_output=True, text=True)
     output += checked.stdout + checked.stderr
     report["iOSStrictConcurrencyTypecheckExit"] = checked.returncode
     if checked.returncode == 0:

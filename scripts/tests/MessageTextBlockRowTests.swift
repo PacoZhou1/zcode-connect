@@ -81,8 +81,8 @@ import Foundation
             let text = "固定正文\n\n| 项目 | 值 |\n|---|---|\n| A | 1 |\n\n```swift\nlet x = 1\n```\n\n"
             let before = MessageTextBlock.layoutBlocks(MessageTextCache.parse(text: text, user: false))
             let after = MessageTextBlock.layoutBlocks(MessageTextCache.parse(text: text + "新尾部", user: false))
-            try check(before.map(\.id) == [0, 1, 3], "Empty prose before or after code became a layout row")
-            try check(after.map(\.id) == [0, 1, 3, 4], "Appended tail changed stable prefix identities")
+            try check(before.map(\.id) == [0, 1, 2], "Empty prose before or after code became a layout row")
+            try check(after.map(\.id) == [0, 1, 2, 3], "Appended tail changed stable prefix identities")
             try check(Array(after.dropLast()) == before, "Stable prefix content changed")
             for (a, b) in zip(before, after) {
                 try check(MessageTextBlockRow(block: a, user: false) == MessageTextBlockRow(block: b, user: false), "Layout filtering invalidated an unchanged prefix")

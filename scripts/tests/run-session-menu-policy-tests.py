@@ -25,7 +25,8 @@ assert "let actions = sessionActions(for: session)" in home_text
 assert "actions: actions, open:" in home_text
 assert ".accessibilityActions {\n            ForEach(actions, id: \\.accessibilityIdentity)" in home_text
 assert ".accessibilityAction(named:" not in home_text
-assert ".id(actions.map(\\.accessibilityIdentity))" in home_text
+assert ".id(SessionRowIdentity(scope: connectionScope, sessionID: session.id," in home_text
+assert "actions: actions.map(\\.accessibilityIdentity)" in home_text
 assert 'Text("菜单动作："' not in home_text
 assert "ForEach(group.sessions) { session in\n                            sessionRow(session)" in home_text
 adapters = r'''
@@ -61,10 +62,18 @@ import Observation
     func enterReferenceMode() {}
     func messages(_ id: String) -> [ChatMessage] { [] }
     func previewMessages(_ id: String) async throws -> [ChatMessage] { [] }
+    var showTimestamps = true
+    var localFeedback: [String: Int] = [:]
+    func toggleLocalFeedback(_ value: Int, messageID: String, sessionID: String) {}
+    func forkSession(_ id: String, target: MessageForkTarget? = nil) {}
+    func isForking(_ id: String) -> Bool { false }
 }
 enum ZTheme {
     static let background = Color.white
     static let accent = Color.purple
+    static let userText = Color.primary
+    static let userBubble = Color.purple.opacity(0.2)
+    static let separator = Color.gray.opacity(0.4)
     static let listSecondary = Color.gray
 }
 struct EmptyGlyph: Shape { func path(in rect: CGRect) -> Path { Path(rect) } }
@@ -72,11 +81,11 @@ typealias MenuLinesGlyph = EmptyGlyph
 typealias VoiceBarsGlyph = EmptyGlyph
 typealias ComposeGlyph = EmptyGlyph
 typealias ChatGlyph = EmptyGlyph
+typealias BranchShareGlyph = EmptyGlyph
 typealias FolderGlyph = EmptyGlyph
 struct InlineNotice: View { var symbol: String; var text: String; var body: some View { Text(text) } }
 struct StatusDot: View { var status: SessionStatus; var body: some View { Circle() } }
 struct ChangeCount: View { var additions: Int; var deletions: Int; var body: some View { Text("changes") } }
-struct MessageView: View { var message: ChatMessage; var sessionID: String; var body: some View { Text(message.text) } }
 struct GlassSearchField: View { @Binding var text: String; var placeholder: String; var body: some View { TextField(placeholder, text: $text) } }
 struct NativeGlassButtonStyle: ButtonStyle { func makeBody(configuration: Configuration) -> some View { configuration.label } }
 extension View { func measureLayout(_ name: String) -> some View { self } }
@@ -95,11 +104,15 @@ with tempfile.TemporaryDirectory(prefix="zcode-session-menu-") as raw:
     temp = Path(raw)
     for p in (models, home, context, tests):
         (temp / p.name).write_bytes(contents[p])
+    relay_sources = [root / "ios/ZCodeMobile/Core/Relay" / name for name in
+                     ("RelayTypes.swift", "RelayFrames.swift", "RelayCodec.swift", "RelayProjection.swift", "RelayTranscriptSemantics.swift")]
+    for source in relay_sources:
+        (temp / source.name).write_bytes(source.read_bytes())
     (temp / "SessionDTO.swift").write_text("import Foundation\n" + dto + "\n" + dates)
     (temp / "ActionDescription.swift").write_text("import Foundation\n" + action)
     common = [compiler, "-swift-version", "6", "-strict-concurrency=complete", "-warnings-as-errors", "-module-cache-path", str(temp / "cache")]
     binary = temp / "tests"
-    built = subprocess.run(common + ["-sdk", sdk, "-parse-as-library", "-O", str(temp / models.name), str(temp / "SessionDTO.swift"), str(temp / "ActionDescription.swift"), str(temp / tests.name), "-o", str(binary)], capture_output=True, text=True)
+    built = subprocess.run(common + ["-sdk", sdk, "-parse-as-library", "-O", *[str(temp / source.name) for source in relay_sources], str(temp / models.name), str(temp / "SessionDTO.swift"), str(temp / "ActionDescription.swift"), str(temp / tests.name), "-o", str(binary)], capture_output=True, text=True)
     output += built.stdout + built.stderr
     status = built.returncode
     if status == 0:
@@ -108,7 +121,18 @@ with tempfile.TemporaryDirectory(prefix="zcode-session-menu-") as raw:
         status = result.returncode
         if (temp / "report.json").exists(): report = json.loads((temp / "report.json").read_text())
     (temp / "Adapters.swift").write_text(adapters)
-    checked = subprocess.run(common + ["-D", "DEBUG", "-typecheck", "-sdk", ios_sdk, "-target", "arm64-apple-ios26.0-simulator", str(temp / models.name), str(temp / home.name), str(temp / context.name), str(temp / "Adapters.swift")], capture_output=True, text=True)
+    # ChatMessage.transcript references TranscriptMessageSemantics; include its
+    # Foundation-only dependency closure from Core/Relay in both compile steps.
+    # ChatMessage.transcript references TranscriptMessageSemantics; include its
+    # Foundation-only dependency closure from Core/Relay.
+    feature_sources = [root / "ios/ZCodeMobile/Core/TranscriptPresentation.swift"] + \
+                      [root / "ios/ZCodeMobile/Features" / name for name in
+                       ("MessageView.swift", "MessageAttachmentView.swift", "TranscriptTurnView.swift")]
+    for source in relay_sources + feature_sources:
+        (temp / source.name).write_bytes(source.read_bytes())
+    checked = subprocess.run(common + ["-D", "DEBUG", "-typecheck", "-sdk", ios_sdk, "-target", "arm64-apple-ios26.0-simulator",
+                                       *[str(temp / source.name) for source in relay_sources + feature_sources],
+                                       str(temp / models.name), str(temp / home.name), str(temp / context.name), str(temp / "Adapters.swift")], capture_output=True, text=True)
     output += checked.stdout + checked.stderr
     report["iOSStrictConcurrencyTypecheckExit"] = checked.returncode
     if checked.returncode == 0:

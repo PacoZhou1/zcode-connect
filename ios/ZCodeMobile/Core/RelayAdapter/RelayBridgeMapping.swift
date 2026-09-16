@@ -43,9 +43,10 @@ enum RelayBridgeMapping {
         return .object(model)
     }
     static func subagentSession(_ snapshot: RelaySessionSnapshot, parentID: String, bridge: RelayBridge, projectID: String) -> RelayJSON {
-        var value = session(id: snapshot.sessionID, meta: nil, snapshot: snapshot, projection: nil, bridge: bridge, projectID: projectID).object!
+        let projection = try? RelayConversationProjection(raw: snapshot.raw["conversationProjection"])
+        var value = session(id: snapshot.sessionID, meta: nil, snapshot: snapshot, projection: projection, bridge: bridge, projectID: projectID).object!
         value["source"] = .string("official-relay-subagent"); value["parentSessionId"] = .string(parentID); value["rootSessionId"] = .string(parentID)
-        value["statusSource"] = .string("host-existing-runtime")
+        value["statusSource"] = .string(projection == nil ? "host-existing-runtime" : "host-conversation")
         value["capabilities"] = .object(["read": .bool(true), "send": .bool(false), "stop": .bool(false), "approve": .bool(false), "changes": .bool(false), "settings": .bool(false), "attachments": .bool(false), "markUnread": .bool(false), "rename": .bool(false), "pin": .bool(false), "archive": .bool(false), "fork": .bool(false), "hookReview": .bool(false)])
         return .object(value)
     }
@@ -81,7 +82,7 @@ enum RelayBridgeMapping {
     static func models(_ options: [RelayJSON]) -> RelayJSON {
         .object(["models": .array(options.compactMap { option in
             guard let provider = option["ref"]["providerId"].string, let model = option["ref"]["modelId"].string else { return nil }
-            return .object(["providerId": .string(provider), "providerName": option["providerLabel"].string.map(RelayJSON.string) ?? .string(provider), "modelId": .string(model), "name": option["label"].string.map(RelayJSON.string) ?? .string(model), "available": .bool(option["disabledReason"].string == nil), "unavailableReason": option["disabledReason"], "supportsImages": .bool(option["supportsImages"].bool == true), "supportsPDF": .bool(option["supportsPdf"].bool == true), "thoughtLevels": .array((option["reasoning"]["levels"].array ?? []).compactMap { $0["value"].string.map(RelayJSON.string) }), "defaultThoughtLevel": option["reasoning"]["defaultLevel"]])
+            return .object(["providerId": .string(provider), "providerName": option["providerLabel"].string.map(RelayJSON.string) ?? .string(provider), "modelId": .string(model), "name": option["label"].string.map(RelayJSON.string) ?? .string(model), "available": .bool(option["disabledReason"].string == nil), "unavailableReason": option["disabledReason"], "supportsImages": .bool(option["supportsImages"].bool == true), "supportsPDF": .bool(option["supportsPdf"].bool == true), "thoughtLevels": .array((option["reasoning"]["levels"].array ?? []).compactMap { ($0["value"].string ?? $0.string).map(RelayJSON.string) }), "defaultThoughtLevel": option["reasoning"]["defaultLevel"]])
         }), "modes": .array(["build", "edit", "plan", "yolo"].map(RelayJSON.string))])
     }
     static func settings(_ snapshot: RelaySessionSnapshot, permissionMode: String?) throws -> RelayJSON {
@@ -152,8 +153,8 @@ enum RelayBridgeMapping {
             if kind == "reasoning" { messages[index]["reasoning"] = .string((messages[index]["reasoning"]?.string ?? "") + (row["text"].string ?? "")) }
             if kind == "toolCall" || kind == "subagent" {
                 let toolStatus = row["status"].string ?? "unknown"
-                let normalized = ["inputStreaming", "running", "pendingApproval"].contains(toolStatus) ? "running" : ["error", "failed", "cancelled"].contains(toolStatus) ? "failed" : toolStatus
-                let tool: RelayJSON = .object(["id": row["toolCallId"].string.map(RelayJSON.string) ?? .string("row-\(rowID)"), "name": row["toolName"].string.map(RelayJSON.string) ?? row["subagentType"].string.map(RelayJSON.string) ?? .string("Agent"), "status": .string(normalized), "input": row["input"] == .null ? row["inputText"] : row["input"], "output": kind == "subagent" ? row["summaryText"] : row["output"]["text"]])
+                let normalized = ["inputStreaming", "running"].contains(toolStatus) ? "running" : toolStatus == "pendingApproval" ? "waiting" : ["error", "failed", "cancelled"].contains(toolStatus) ? "failed" : toolStatus
+                let tool: RelayJSON = .object(["id": row["toolCallId"].string.map(RelayJSON.string) ?? .string("row-\(rowID)"), "name": row["toolName"].string.map(RelayJSON.string) ?? row["subagentType"].string.map(RelayJSON.string) ?? .string("Agent"), "status": .string(normalized), "rawStatus": .string(toolStatus), "input": row["input"] == .null ? row["inputText"] : row["input"], "output": kind == "subagent" ? row["summaryText"] : row["output"]["text"]])
                 messages[index]["toolCalls"] = .array((messages[index]["toolCalls"]?.array ?? []) + [tool])
             }
             let streaming = row["state"].string == "streaming" || ["inputStreaming", "running", "pendingApproval"].contains(row["status"].string ?? "")

@@ -50,6 +50,23 @@ private actor ParseProbe {
         catch { let message = (error as? Failure)?.message ?? String(describing: error); results.append(.init(name: name, passed: false, detail: message)); print("FAIL \(name): \(message)") }
     }
     @MainActor static func main() async throws {
+        await run("CommonMark headings lists quotes escapes and inline attributes") {
+            let blocks = MessageTextCache.parse(text: "### 标题\n\n- 第一项\n- **第二项**\n\n> 引用\n\n\\# 字面标记", user: false)
+            let texts = blocks.compactMap { block -> AttributedString? in if case .prose(_, let value) = block { return value }; return nil }
+            try check(texts.map { String($0.characters) } == ["标题", "第一项", "第二项", "引用", "# 字面标记"], "Block markers leaked or escaped text lost")
+            try check(texts[0].runs.first?.presentationIntent?.components.first?.kind == .header(level: 3), "Heading level absent")
+            try check(texts[2].runs.first?.inlinePresentationIntent?.contains(.stronglyEmphasized) == true, "Bold list item lost")
+        }
+        await run("long answer has independent stable paragraph blocks and bounded cache reuse") {
+            let text = (0..<1000).map { "### 标题 \($0)\n\n这是段落 **正文** 与链接 [Apple](https://apple.com)。" }.joined(separator: "\n\n")
+            let clock = ContinuousClock(); let start = clock.now
+            let parsed = MessageTextCache.shared.blocks(text: text, user: false)
+            let cold = start.duration(to: clock.now)
+            let warmStart = clock.now
+            for _ in 0..<20 { _ = MessageTextCache.shared.blocks(text: text, user: false) }
+            print("BENCHMARK 1000 headings/paragraphs cold=\(cold) warm20=\(warmStart.duration(to: clock.now)) bytes=\(text.utf8.count)")
+            try check(parsed.count == 2000, "Long answer flattened into an eager giant block")
+        }
         await run("actor output exactly matches completed-message parsing and attributes") {
             let fixtures = ["", "中文 **加粗** 与 [链接](https://example.com)\n下一行", "开始\n```swift\nlet x = 1\n```\n结束",
                             "| 名称 | 值 |\n|---|---|\n| A | 1 |", "```swift\nlet value", "前文\n\n\n后文", "👨‍👩‍👧‍👦 e\u{301} 与 🧑🏽‍💻", "文本\n| 未闭合 | 表"]
@@ -163,6 +180,16 @@ private actor ParseProbe {
             let count = await probe.count()
             try check(count == 1, "Identical body invalidations reparsed completed input")
             state.cancel()
+        }
+        await run("final reparent reuses exact streaming parse without a blank placeholder") {
+            let text = "### Handoff " + UUID().uuidString + "\n\n" + String(repeating: "正文 **加粗**。", count: 200)
+            let state = StreamingMessageTextState(interval: .zero)
+            state.update(text: text, user: false)
+            try await wait { state.renderedRequest?.text == text }
+            let expected = state.blocks
+            state.cancel()
+            try check(MessageTextCache.shared.cached(text: text, user: false) == expected, "Final row lost exact stream parse on reparent")
+            try check(MessageTextCache.shared.cached(text: text + "changed", user: false) == nil, "Handoff reused a stale prefix")
         }
         await run("production actor observes a cancelled task") {
             let task = Task {

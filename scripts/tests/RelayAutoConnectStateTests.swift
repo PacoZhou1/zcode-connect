@@ -114,6 +114,20 @@ import Foundation
             f.store.applicationDidEnterBackground(); await f.store.applicationDidBecomeActive()
             try check(RelayWorkspaceProbe.count("pair") == 8, "A later foreground visit cannot start a new bounded recovery cycle")
         }
+        for code in ["desktop_bridge_degraded", "relay_ack_timeout", "relay_assembly_timeout"] {
+            await run("\(code) restores the connection without replaying writes") {
+                let f = try AutoConnectFixture(); defer { f.close() }
+                RelayWorkspaceProbe.handler = { call in
+                    if call.operation == "pair", RelayWorkspaceProbe.count("pair") == 1 {
+                        throw RelayFailure(code, "Synthetic transient frame failure")
+                    }
+                    return nil
+                }
+                await f.store.start(); try await ready()
+                try check(RelayWorkspaceProbe.count("pair") == 2 && f.store.connection.isOnline, "Transient frame error permanently blocked restoration")
+                try check(TestTransport.requests.allSatisfy { $0.method == "GET" } && TestTransport.created == 0 && TestTransport.uploaded == 0, "Restoration sent a write or attachment")
+            }
+        }
         for code in ["relay_rejected", "controller_replaced", "relay_invalid_frame"] {
             await run("\(code) blocks background takeover and remains blocked after recreation") {
                 let f = try AutoConnectFixture(); defer { f.close() }
@@ -133,6 +147,36 @@ import Foundation
             f.store.applicationDidEnterBackground(); await f.store.applicationDidBecomeActive()
             try check(RelayWorkspaceProbe.count("pair") == 1 && RetryClock.delays.isEmpty, "KICKED started an automatic controller replacement")
             try check(f.store.drafts["S"] == "unsent original" && !f.store.connection.isOnline, "KICKED lost the draft or claimed an online connection")
+        }
+        await run("background snapshot restores immediately before any network request") {
+            let f = try AutoConnectFixture(); defer { f.close() }
+            await f.store.start(); try await ready()
+            f.store.sessions = ReferenceData.sessions
+            let id = ReferenceData.conversationID
+            f.store.transcripts[id] = ReferenceData.messages
+            f.store.path = [.session(id)]
+            f.store.applicationDidEnterBackground()
+            let reopened = f.reopen(); defer { reopened.disconnect() }
+            try check(reopened.currentSessionID == id && reopened.sessions == f.store.sessions, "Cached route or list absent at initialization")
+            try check(reopened.transcripts[id]?.isEmpty == false && !reopened.connection.isOnline, "Cached body should be visible without claiming connection")
+        }
+        await run("same workspace reconnect never clears body or route while index is delayed") {
+            let f = try AutoConnectFixture(); defer { f.close() }
+            await f.store.start(); try await ready()
+            let id = ReferenceData.conversationID
+            f.store.sessions = ReferenceData.sessions; f.store.transcripts[id] = ReferenceData.messages
+            f.store.path = [.session(id)]
+            let before = f.store.transcripts[id]!.map(\.id)
+            let gate = Gate(); var held = false
+            TestTransport.handler = { request in
+                if request.path == "v1/projects" { held = true; await gate.hold() }
+                return nil
+            }
+            let reconnect = Task { await f.store.connect(f.profile, confirmedControllerReplacement: true) }
+            try await until { held }
+            try check(f.store.currentSessionID == id && f.store.transcripts[id]?.map(\.id) == before, "Handshake cleared live reader")
+            try check(!f.store.sessions.isEmpty, "Handshake cleared list before index arrived")
+            gate.release(); await reconnect.value
         }
         await run("temporary stream loss restores the same workspace and reading location") {
             let f = try AutoConnectFixture(); defer { f.close() }

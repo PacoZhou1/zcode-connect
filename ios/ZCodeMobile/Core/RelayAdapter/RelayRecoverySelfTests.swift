@@ -87,6 +87,17 @@ private struct RecoveryFixture {
         let answer = result("controller_replaced_reaches_facade_without_reconnect", passed: replaced && code == "controller_replaced" && connects == 1, ["clientReplaced": .bool(replaced), "facadeError": code.map(RelayJSON.string) ?? .null, "socketConnects": .int(connects)])
         await f.close(); return answer
     }
+    static func trafficWithoutHeartbeatAck() async throws -> RelayJSON {
+        let f = try await fixture(); await f.socket.setDropHeartbeats(true)
+        for index in 0..<5 {
+            try await Task.sleep(for: .seconds(8))
+            try await f.socket.sendOnlineText(from: 10 + index, to: 11 + index, ordinal: 2 + index, text: " synthetic live progress")
+        }
+        let online = await f.client.state != .disconnected
+        let code = await f.events.failureCode
+        let answer = result("incoming_data_prevents_false_heartbeat_timeout", passed: online && code == nil, ["stillConnectedAfter40Seconds": .bool(online), "heartbeatAcksSuppressed": .bool(true)])
+        await f.close(); return answer
+    }
     static func transportLoss(heartbeat: Bool) async throws -> RelayJSON {
         let f = try await fixture(), start = ContinuousClock.now
         if heartbeat { await f.socket.setDropHeartbeats(true) } else { await f.socket.failReceive() }
@@ -164,6 +175,7 @@ private struct RecoveryFixture {
         checks.append(try await obsoleteRecovery(true))
         checks.append(try await newerRecoveryAttempt())
         checks.append(try await uncertainCommandSurvivesRecoveryFailure())
+        checks.append(try await trafficWithoutHeartbeatAck())
         checks.append(try await transportLoss(heartbeat: false))
         checks.append(try await transportLoss(heartbeat: true))
         let passed = checks.allSatisfy { $0["passed"].bool == true }

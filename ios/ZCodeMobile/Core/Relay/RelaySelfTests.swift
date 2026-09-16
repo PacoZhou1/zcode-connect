@@ -46,7 +46,12 @@ actor MockRelaySocket: RelaySocketTransport {
     var uploadChunks = 0
     var sawCredentialEndpoint = false
     var configurationMode = "build"
+    var staleQueueRejections = 0
+    var staleQueueDecisions = 0
+    func rejectQueueRevisionOnce() { staleQueueRejections = 1 }
     var configurationThought = "max"
+    var staleConfigurationReads = 0
+    func delayConfigurationReadback() { staleConfigurationReads = 2 }
     var setterCalls = 0
     var commandEnvelopes: [String: RelayJSON] = [:]
     var alternateProjection: RelayJSON?
@@ -75,6 +80,15 @@ actor MockRelaySocket: RelaySocketTransport {
     var dropHeartbeats = false
     var coldSessions = Set<String>()
     var sessionReadFailures = Set<String>()
+    private var holdSessionReads = false
+    private var heldSessionReads: [(Int32, RelayJSON)] = []
+    func gateSessionReads(_ hold: Bool) throws {
+        holdSessionReads = hold
+        if !hold {
+            let pending = heldSessionReads; heldSessionReads.removeAll()
+            for (id, value) in pending { try success(id, value) }
+        }
+    }
     var coldOpenDelay: Duration = .milliseconds(120)
     var sessionReadReadiness: [RelayJSON] = []
     var coldOpenOrder: [String] = []
@@ -95,6 +109,12 @@ actor MockRelaySocket: RelaySocketTransport {
     func makeSessionCold(_ sessionID: String, delay: Duration = .milliseconds(120)) { coldSessions.insert(sessionID); coldOpenDelay = delay }
     func useSubagentDirectory(_ value: RelayJSON) { subagentDirectoryOverride = value }
     func failSubagentDirectory() { directoryFailure = true }
+    func useQueueFixture() {
+        var value = try! baseProjection().requiringObject()
+        value["control"] = .object(["canStop": .bool(true), "phase": .string("running")])
+        value["queue"] = .object(["items": .array([.object(["queueItemId": .string("queued-one"), "sourceCommandId": .string("original-input"), "text": .string("Queued text"), "delivery": .object(["admitted": .string("queue")])])])])
+        alternateProjection = .object(value)
+    }
     func useProjection(_ value: RelayJSON) { alternateProjection = value }
     func setNextCommandStatus(_ value: String) { nextCommandStatus = value }
     func useGoalFixture(mode: String = "build", active: Bool = false) {
@@ -159,8 +179,10 @@ actor MockRelaySocket: RelaySocketTransport {
     }
     func setHostUnread(_ stamp: Double, sessionID: String) { unreadAt[sessionID] = stamp }
     func snapshot(_ sessionID: String) -> RelayJSON {
+        let visibleThought = staleConfigurationReads > 0 ? "max" : configurationThought
+        if configurationThought != "max", staleConfigurationReads > 0 { staleConfigurationReads -= 1 }
         let model: RelayJSON = .object(["providerId": .string("host-provider"), "modelId": .string("host-model")])
-        return .object(["session": .object(["sessionId": .string(sessionID), "title": .string(titles[sessionID] ?? "Original desktop task"), "status": .string("completed")]), "settings": .object(["model": .object(["current": model, "available": .array([.object(["ref": model, "label": .string("Host model"), "reasoning": .object(["levels": .array([.object(["value": .string("max")]), .object(["value": .string("high")])])]), "supportsImages": .bool(imagesSupported), "supportsPdf": .bool(false)])])]), "thoughtLevel": .object(["current": .string(configurationThought), "available": .array([.object(["value": .string("max")]), .object(["value": .string("high")])])]), "mode": .object(["current": .string(configurationMode)])]), "messages": .array([]), "runtime": .object([:])])
+        return .object(["session": .object(["sessionId": .string(sessionID), "title": .string(titles[sessionID] ?? "Original desktop task"), "status": .string("completed")]), "settings": .object(["model": .object(["current": model, "available": .array([.object(["ref": model, "label": .string("Host model"), "reasoning": .object(["levels": .array([.object(["value": .string("max")]), .object(["value": .string("high")])])]), "supportsImages": .bool(imagesSupported), "supportsPdf": .bool(false)])])]), "thoughtLevel": .object(["current": .string(visibleThought), "available": .array([.object(["value": .string("max")]), .object(["value": .string("high")])])]), "mode": .object(["current": .string(configurationMode)])]), "messages": .array([]), "runtime": .object([:])])
     }
     private func completeConversationSubscription(_ id: Int32, params: RelayJSON) throws {
         var projection = try (alternateProjection ?? baseProjection()).requiringObject()
@@ -247,11 +269,15 @@ actor MockRelaySocket: RelaySocketTransport {
                 if method == "resumeSession" { registeredSessions.insert(params["sessionId"].string!) }
                 let sessionID = params["sessionId"].string!
                 let ready = !coldSessions.contains(sessionID)
-                sessionReadReadiness.append(.object(["sessionId": .string(sessionID), "method": .string(method), "runtimeReady": .bool(ready)]))
+                sessionReadReadiness.append(.object(["sessionId": .string(sessionID), "method": .string(method), "runtimeReady": .bool(ready), "messageLimit": params["messageLimit"]]))
                 coldOpenOrder.append("read:" + sessionID + (ready ? ":ready" : ":cold"))
                 if unavailableSubagents.contains(sessionID) || sessionReadFailures.contains(sessionID) || (method == "readSession" && !ready) {
                     try sendRPC(.init(header: [.int32(202), .int32(id)], body: try .object(.object(["message": .string("Session is not active"), "code": .string("sessionUnavailable")]))))
-                } else { try success(id, subagentSnapshots[sessionID] ?? snapshot(sessionID)) }
+                } else {
+                    let value = subagentSnapshots[sessionID] ?? snapshot(sessionID)
+                    if holdSessionReads { heldSessionReads.append((id, value)) }
+                    else { try success(id, value) }
+                }
             case "readWorkspaceState": try success(id, .object(["settings": snapshot("session-test")["settings"]]))
             case "conversationRowsRangeV4":
                 let before = params["beforeRowId"].integer ?? Int.max, limit = params["limit"].integer!
@@ -278,10 +304,17 @@ actor MockRelaySocket: RelaySocketTransport {
                 } else { try completeConversationSubscription(id, params: params) }
             case "sendConversationCommandV4":
                 let envelope = params["envelope"], commandID = envelope["commandId"].string!, prior = commands[commandID]
+                if staleQueueRejections > 0, envelope["type"].string == "deleteQueueItem" {
+                    staleQueueRejections -= 1; staleQueueDecisions += 1
+                    let ack = RelayCommandAck(commandId: commandID, status: "stale", revisionAtDecision: 1, reasonCode: "proto.staleRevision", message: nil, result: nil)
+                    try success(id, RelayJSON(data: JSONEncoder().encode(ack)))
+                    return
+                }
                 if prior == nil { sentCommandCount += 1 }
                 if let original = commandEnvelopes[commandID] { try require(original == envelope, "Retry changed the original command envelope") }
                 commandEnvelopes[commandID] = envelope
                 let kind = envelope["type"].string
+                if kind == "switchModelConfig", let thought = envelope["payload"]["thought"].string { configurationThought = thought }
                 let result: RelayJSON? = kind == "createSession" ? .object(["type": .string("createSession"), "sessionId": .string("session-created")]) : kind == "forkAssistant" ? .object(["type": .string("forkAssistant"), "sessionId": .string("fork-child-" + commandID)]) : nil
                 let rejection = nextRejectedCommand, status = nextCommandStatus; nextRejectedCommand = nil; nextCommandStatus = nil
                 let ack = prior.map { old in old.admitted ? RelayCommandAck(commandId: old.commandId, status: "duplicate", revisionAtDecision: old.revisionAtDecision, reasonCode: old.reasonCode, message: old.message, result: old.result) : old } ?? RelayCommandAck(commandId: commandID, status: status ?? (rejection == nil ? "accepted" : "stale"), revisionAtDecision: 2, reasonCode: rejection, message: rejection == nil ? nil : "Host target changed", result: rejection == nil ? result : nil)

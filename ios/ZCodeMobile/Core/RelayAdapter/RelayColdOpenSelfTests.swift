@@ -18,6 +18,7 @@ private struct ColdFixture {
 }
 
 @main private struct RelayColdOpenSelfTests {
+    static func require(_ condition: Bool, _ message: String) throws { if !condition { throw NSError(domain: message, code: 1) } }
     static let session = "session-test"
     static func fixture(cold: Bool = true) async throws -> ColdFixture {
         let socket = MockRelaySocket(), client = try RelayClient(clientID: "cold-open-fixture", transport: socket, requestTimeout: 2)
@@ -69,7 +70,7 @@ private struct ColdFixture {
         let (d, s) = await (detail, settings)
         var evidence = await facts(f); evidence["detail"] = d.json; evidence["settings"] = s.json
         let attempts = evidence["readAttempts"]?.array ?? []
-        let passed = d.error == nil && s.error == nil && d.value["messages"].array?.first?["text"].string == "Hello" && s.value["model"]["thoughtLevel"].string == "max" && attempts.count == 2 && attempts.allSatisfy { $0["runtimeReady"].bool == true } && evidence["subscribeCalls"]?.integer == 1 && evidence["commandCalls"]?.integer == 0 && evidence["setterCalls"]?.integer == 0
+        let passed = d.error == nil && s.error == nil && d.value["messages"].array?.first?["text"].string == "Hello" && s.value["model"]["thoughtLevel"].string == "max" && attempts.count == 1 && attempts.allSatisfy { $0["runtimeReady"].bool == true && $0["messageLimit"].integer == 1 } && evidence["subscribeCalls"]?.integer == 1 && evidence["commandCalls"]?.integer == 0 && evidence["setterCalls"]?.integer == 0
         let answer = result("concurrent_detail_and_settings_share_one_cold_subscription", passed: passed, facts: evidence)
         await f.close(); return answer
     }
@@ -79,7 +80,7 @@ private struct ColdFixture {
         async let settings = read(f, suffix: "/settings")
         let (d, s) = await (detail, settings)
         var evidence = await facts(f); evidence["errors"] = .array([first, d, s].map { $0.error.map(RelayJSON.string) ?? .null })
-        let answer = result("warm_repeated_reads_keep_one_subscription", passed: [first, d, s].allSatisfy { $0.error == nil } && evidence["subscribeCalls"]?.integer == 1 && evidence["readAttempts"]?.array?.count == 3 && evidence["setterCalls"]?.integer == 0, facts: evidence)
+        let answer = result("warm_repeated_reads_keep_one_subscription", passed: [first, d, s].allSatisfy { $0.error == nil } && evidence["subscribeCalls"]?.integer == 1 && evidence["readAttempts"]?.array?.count == 2 && evidence["setterCalls"]?.integer == 0, facts: evidence)
         await f.close(); return answer
     }
     static func realReadFailureStillPropagates() async throws -> RelayJSON {
@@ -105,8 +106,76 @@ private struct ColdFixture {
         let answer = result("warm_child_read_and_default_core_read_remain_existing_only", passed: parent.error == nil && value["messages"].array?.first?["text"].string == "Existing child history" && value["session"]["capabilities"]["send"].bool == false && coldError == "relay_subagent_history_unavailable" && onlyRead && evidence["subscribeCalls"]?.integer == 1 && evidence["commandCalls"]?.integer == 0, facts: evidence)
         await f.close(); return answer
     }
+    static func sharedReadCancellation() async throws -> RelayJSON {
+        let f = try await fixture(cold: false)
+        try await f.socket.gateSessionReads(true)
+        let detail = Task { await read(f) }, settings = Task { await read(f, suffix: "/settings") }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while await f.socket.sessionReadReadiness.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        try await Task.sleep(for: .milliseconds(20))
+        detail.cancel(); try await f.socket.gateSessionReads(false)
+        let (d, s) = await (detail.value, settings.value)
+        let count = await f.socket.sessionReadReadiness.count
+        let fresh = await read(f, suffix: "/settings")
+        let after = await f.socket.sessionReadReadiness.count
+        let answer = result("cancelled_detail_keeps_shared_settings_alive_and_next_refresh_is_fresh", passed: d.error != nil && s.error == nil && count == 1 && fresh.error == nil && after == 2, facts: ["readsBeforeRefresh": .int(count), "readsAfterRefresh": .int(after)])
+        await f.close(); return answer
+    }
+    static func mutate(_ f: ColdFixture, method: String = "POST", _ path: String, body: RelayJSON) async throws -> RelayJSON {
+        try await f.adapter.mutate(path, method: method, body: JSONDecoder().decode([String: JSONValue].self, from: body.data()))
+    }
+    static func queueAndLiveSettings() async throws -> RelayJSON {
+        let f = try await fixture(cold: false)
+        await f.socket.useQueueFixture()
+        let detail = await read(f)
+        try require(detail.value["queue"].array?.first?["queueItemId"].string == "queued-one", "Queue missing from detail")
+        let _: RelayJSON = try await mutate(f, "v1/sessions/" + session + "/messages", body: .object(["inputId": .string("queue-new"), "text": .string("Follow up")]))
+        let send = await f.socket.commandEnvelopes["queue-new"]
+        try require(send?["payload"]["requestedDelivery"].string == "queue", "Running follow-up was not queued")
+        for (action, type) in [("edit", "editQueueItem"), ("cancel", "deleteQueueItem")] {
+            let _: RelayJSON = try await mutate(f, "v1/sessions/" + session + "/queue", body: .object(["action": .string(action), "queueItemId": .string("queued-one"), "newText": .string("Edited text"), "clientCommandId": .string("queue-" + action)]))
+            let command = await f.socket.commandEnvelopes["queue-" + action]
+            try require(command?["type"].string == type, "Wrong queue command")
+        }
+        await f.socket.rejectQueueRevisionOnce()
+        let _: RelayJSON = try await mutate(f, "v1/sessions/" + session + "/queue", body: .object(["action": .string("guide"), "queueItemId": .string("queued-one"), "clientCommandId": .string("queue-guide")]))
+        let staleDecisions = await f.socket.staleQueueDecisions
+        try require(staleDecisions == 1, "Stale revision was not exercised")
+        let commands = await f.socket.commandEnvelopes.values
+        try require(commands.contains { $0["type"].string == "sendText" && $0["payload"]["requestedDelivery"].string == "guide" }, "Guide not submitted")
+        try require(!commands.contains { ["stop", "sendQueuedNow"].contains($0["type"].string ?? "") }, "Guide interrupted the current turn")
+        let guideCount = await f.socket.sentCommandCount
+        let _: RelayJSON = try await mutate(f, "v1/sessions/" + session + "/queue", body: .object(["action": .string("guide"), "queueItemId": .string("queued-one"), "clientCommandId": .string("retry-guide")]))
+        let retriedCount = await f.socket.sentCommandCount
+        try require(guideCount == retriedCount, "Guide retry created duplicate commands")
+        let before = await f.socket.sentCommandCount
+        let receipt: RelayJSON = try await f.adapter.get("v1/sessions/" + session + "/receipt?inputId=queue-new")
+        let after = await f.socket.sentCommandCount
+        try require(receipt["resolved"].bool == true && before == after, "Receipt replayed a write")
+        let unknown: RelayJSON = try await f.adapter.get("v1/sessions/" + session + "/receipt?inputId=unknown")
+        try require(unknown["resolved"].bool == false, "Unknown input falsely resolved")
+        await f.socket.delayConfigurationReadback()
+        let settings: RelayJSON = try await mutate(f, method: "PATCH", "v1/sessions/" + session + "/settings", body: .object(["thoughtLevel": .string("high"), "clientCommandId": .string("live-settings")]))
+        let settingCommand = await f.socket.commandEnvelopes["live-settings"]
+        try require(settingCommand?["type"].string == "switchModelConfig" && settings["model"]["thoughtLevel"].string == "high", "Live settings were not applied")
+        let calls = await f.socket.sessionReadReadiness
+        try require(calls.allSatisfy { $0["messageLimit"].integer == 1 }, "Configuration fetched full history")
+        await f.close()
+        return result("queue_actions_receipts_and_live_configuration", passed: true, facts: ["readOnlyReceipt": .bool(true), "queueActions": .int(3), "fullHistoryReads": .int(0)])
+    }
+    static func rejectedGuideCannotSend() async throws -> RelayJSON {
+        let f = try await fixture(cold: false)
+        await f.socket.useQueueFixture(); _ = await read(f)
+        await f.socket.rejectNextCommand(reason: "queue.itemMissing")
+        var rejected = false
+        do { let _: RelayJSON = try await mutate(f, "v1/sessions/" + session + "/queue", body: .object(["action": .string("guide"), "queueItemId": .string("queued-one"), "clientCommandId": .string("rejected-guide")])) } catch { rejected = true }
+        let values = await f.socket.commandEnvelopes.values
+        try require(rejected && !values.contains { $0["type"].string == "sendText" }, "Consumed source was sent twice")
+        await f.close()
+        return result("guide_rejection_never_sends_replacement", passed: true, facts: [:])
+    }
     static func main() async throws {
-        let results = try await [rawColdReadContract(), single(false), single(true), concurrent(), warmReads(), realReadFailureStillPropagates(), subagentReadRemainsExistingOnly()]
+        let results = try await [rejectedGuideCannotSend(), queueAndLiveSettings(), sharedReadCancellation(), rawColdReadContract(), single(false), single(true), concurrent(), warmReads(), realReadFailureStillPropagates(), subagentReadRemainsExistingOnly()]
         let passed = results.filter { $0["passed"].bool == true }.count
         let output: RelayJSON = .object(["verifiedAt": .string(ISO8601DateFormatter().string(from: Date())), "passed": .bool(passed == results.count), "passedCount": .int(passed), "totalCount": .int(results.count), "checks": .array(results), "boundary": .string("Production Swift client/facade over an in-memory IPC socket. No network, live controller, CLI process, model, or original task accessed.")])
         if let path = CommandLine.arguments.dropFirst().first { try output.data().write(to: URL(fileURLWithPath: path), options: .atomic) }

@@ -31,6 +31,8 @@ struct SettingsView: View {
                 Toggle("显示时间", isOn: $store.showTimestamps)
                 Toggle("显示上下文用量", isOn: $store.showContextUsage)
                     .accessibilityIdentifier("settings.contextUsage")
+                Toggle("任务完成通知", isOn: $store.completionNotifications)
+                    .accessibilityIdentifier("settings.completionNotifications")
             }
             Section("连接") {
                 LabeledContent("电脑", value: store.hostName)
@@ -61,6 +63,10 @@ struct SettingsView: View {
         .onChange(of: store.hapticsEnabled) { store.savePreferences() }
         .onChange(of: store.showContextUsage) { store.savePreferences() }
         .onChange(of: store.showTimestamps) { store.savePreferences() }
+        .onChange(of: store.completionNotifications) {
+            store.savePreferences()
+            if store.completionNotifications { Task { await TaskNotifications.shared.requestAuthorizationIfNeeded() } }
+        }
     }
 }
 
@@ -105,6 +111,11 @@ struct AdvancedSettingsView: View {
     }
     private var currentModel: RemoteModel? {
         store.models.first { $0.providerId == selection?.providerId && $0.modelId == selection?.modelId }
+    }
+    private var thoughtChoices: [String] {
+        let values = sessionID.flatMap { store.remoteSettings[$0]?.thoughtLevels } ?? currentModel?.thoughtLevels ?? []
+        var seen = Set<String>()
+        return values.filter { seen.insert($0).inserted }
     }
     private var canEdit: Bool {
         !busy && store.canEditSettings(sessionID, model: true)
@@ -153,7 +164,7 @@ struct AdvancedSettingsView: View {
                     } label: { settingRow("智能", value: store.options.reasoning.label) }
                 } else {
                     Menu {
-                        ForEach(currentModel?.thoughtLevels ?? [], id: \.self) { level in
+                        ForEach(thoughtChoices, id: \.self) { level in
                             Button { apply(reasoning: level) } label: {
                                 let label = ReasoningLevel(wireValue: level)?.label ?? level
                                 if level == selection?.thoughtLevel { Label(label, systemImage: "checkmark") }
@@ -163,7 +174,7 @@ struct AdvancedSettingsView: View {
                     } label: {
                         settingRow("智能", value: selection?.thoughtLevel.map { ReasoningLevel(wireValue: $0)?.label ?? $0 } ?? "沿用电脑配置")
                     }
-                    .disabled(!canEdit || (currentModel?.thoughtLevels.isEmpty ?? true))
+                    .disabled(!canEdit || thoughtChoices.isEmpty)
                     .accessibilityIdentifier("advanced.reasoning")
                 }
             }.padding(.horizontal, 20)
@@ -183,7 +194,7 @@ struct AdvancedSettingsView: View {
             }.padding(.horizontal, 20).background(.quaternary.opacity(0.7), in: Capsule()).measureLayout("advanced.speedCard")
             if busy { ProgressView("正在更新任务设置…").font(.footnote) }
             else if !store.isReferenceMode {
-                Text(sessionID != nil && !canEdit ? "任务运行期间无法修改模型；停止或完成后可以调整。" : "选择只应用于当前任务，不会改动电脑的默认设置。")
+                Text("选择只应用于当前任务，不会改动电脑的默认设置。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Spacer()
@@ -193,7 +204,13 @@ struct AdvancedSettingsView: View {
         .presentationDetents([.fraction(0.561), .large])
         .presentationDragIndicator(.visible)
         .measureLayout("advanced.sheet")
-        .task { if let sessionID { await store.loadSettings(sessionID) } }
+        .task {
+            while !Task.isCancelled {
+                await store.refreshModels()
+                if let sessionID { await store.loadSettings(sessionID) }
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            }
+        }
     }
     private func settingRow(_ title: String, value: String) -> some View {
         HStack {
@@ -272,7 +289,13 @@ struct PermissionsView: View {
             } message: {
                 Text("请求批准：主机遇到需要许可的操作时，由你决定。替我批准：允许主机按自动编辑策略处理操作。完全访问：主机可直接执行操作。实际规则和可用项以当前主机为准。")
             }
-            .task { if let sessionID { await store.loadSettings(sessionID) } }
+            .task {
+            while !Task.isCancelled {
+                await store.refreshModels()
+                if let sessionID { await store.loadSettings(sessionID) }
+                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            }
+        }
             .confirmationDialog("允许此任务完全访问电脑？", isPresented: $confirmFullAccess, titleVisibility: .visible) {
                 Button("允许完全访问", role: .destructive) { apply(.full, confirmed: true) }
                 Button("取消", role: .cancel) {}

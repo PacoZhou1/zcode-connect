@@ -71,7 +71,7 @@ public extension RelayClient {
             guard ["build", "edit", "plan", "yolo"].contains(mode) else { throw RelayFailure("mode_unsupported", "This collaboration mode is not supported.") }
             if mode == "yolo", !confirmFullAccess { throw RelayFailure("full_access_confirmation_required", "Confirm full access for this request.") }
         }
-        var snapshot = try await readSession(sessionID)
+        var snapshot = try await readSession(sessionID, messageLimit: 1)
         let changesModel = model.map { $0 != snapshot.model } ?? false
         let changesThought = thoughtLevel.map { $0 != snapshot.thoughtLevel } ?? false
         if changesModel || changesThought || registerCreatedTask {
@@ -84,7 +84,7 @@ public extension RelayClient {
         // A raw v4 create/read alone does not run the task service's index registration path.
         if let model, model != snapshot.model || registerCreatedTask {
             guard model.object.map({ Set($0.keys).isSubset(of: ["providerId", "modelId", "variant"]) }) == true,
-                  snapshot.raw["settings"]["model"]["available"].array?.contains(where: { $0["ref"] == model && $0["disabledReason"].string == nil }) == true else { throw RelayFailure("model_unavailable", "Choose an available model returned by this desktop.") }
+                  try await listModels().contains(where: { $0["ref"] == model && $0["disabledReason"].string == nil }) else { throw RelayFailure("model_unavailable", "Choose an available model returned by this desktop.") }
             snapshot = try await RelaySessionSnapshot(raw: rpc("zcode-session", "setModel", ["sessionId": .string(sessionID), "model": model, "persistAsWorkspaceLastUsed": .bool(false)]))
         }
         if let thoughtLevel, thoughtLevel != snapshot.thoughtLevel {
@@ -93,7 +93,7 @@ public extension RelayClient {
             snapshot = try await RelaySessionSnapshot(raw: rpc("zcode-session", "setThoughtLevel", ["sessionId": .string(sessionID), "thoughtLevel": .string(thoughtLevel), "persistAsWorkspaceLastUsed": .bool(false)]))
         }
         if let mode, mode != snapshot.mode { snapshot = try await RelaySessionSnapshot(raw: rpc("zcode-session", "setMode", ["sessionId": .string(sessionID), "mode": .string(mode)])) }
-        let verified = try await readSession(sessionID)
+        let verified = try await readSession(sessionID, messageLimit: 1)
         guard model.map({ $0 == verified.model }) ?? true, thoughtLevel.map({ $0 == verified.thoughtLevel }) ?? true, mode.map({ $0 == verified.mode }) ?? true else { throw RelayFailure("relay_configuration_not_applied", "The desktop did not apply the requested task settings. The task ID is preserved; do not recreate it.") }
         return verified
     }

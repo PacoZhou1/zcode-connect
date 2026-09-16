@@ -3,15 +3,14 @@ import SwiftUI
 /// A selection indicator. Increment `activation` when the reasoning panel closes.
 /// The reference shows one damped return, followed by a stationary needle.
 struct ReasoningDial: View {
-    let level: ReasoningLevel
+    let value: String
+    let levels: [String]
     let activation: Int
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var angle: Double {
-        // The recording establishes High at 30° and Max at 90° from vertical.
-        // The remaining levels use the same 30° spacing within the open dial.
-        Double(level.rawValue) * 30 - 60
+        ReasoningScale.angle(value: value, levels: levels)
     }
 
     private var displacement: Double { angle <= 60 ? 60 : -60 }

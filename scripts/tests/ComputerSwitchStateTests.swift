@@ -300,6 +300,7 @@ import Foundation
             f.store.setDraftAttachments([attachmentA], for: "S")
             await f.store.switchComputer(profileB)
             try check(f.store.drafts["S"] == nil && f.store.draftAttachments["S"] == nil, "A draft appeared on B")
+            let cachedBSessions = f.store.sessions
             f.store.setDraft("B saved draft", for: "S")
             f.store.setDraftAttachments([attachmentB], for: "S")
             await f.store.switchComputer(f.profile)
@@ -312,7 +313,7 @@ import Foundation
             await f.store.switchComputer(profileB)
             await f.store.loadDraftAttachments(for: "S")
             try check(f.store.activeProfileID == "B" && f.store.drafts["S"] == "B saved draft" && f.store.draftAttachments["S"] == [attachmentB], "Failed reconnect did not restore only B's local draft")
-            try check(f.store.sessions.isEmpty && f.store.transcripts.isEmpty, "B's restored draft caused A content to return")
+            try check(f.store.sessions == cachedBSessions && f.store.transcripts.isEmpty, "Failed B reconnect must restore only B cached sessions, never A")
             let reopened = AppStore(defaults: f.defaults); defer { reopened.disconnect() }
             await reopened.loadDraftAttachments(for: "S")
             try check(reopened.activeProfileID == "B" && reopened.drafts["S"] == "B saved draft" && reopened.draftAttachments["S"] == [attachmentB], "Reopen after failed switch lost the selected scope's draft")

@@ -30,6 +30,7 @@ struct AppShell: View {
             case .files(let id, let modified): FilesView(sessionID: id, initiallyModified: modified)
             case .agent(let agent): AgentDetailView(agent: agent)
             case .voice: VoiceCaptureView()
+            case .mirror: MirrorSheet()
             }
         }
         .alert("暂时无法完成", isPresented: Binding(
@@ -46,7 +47,15 @@ struct AppShell: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: store.toast)
-        .task { await store.start() }
+        .task {
+            store.completionEventSink = { sessionID, title in
+                Task { await TaskNotifications.shared.postCompletion(sessionID: sessionID, title: title) }
+            }
+            await store.start()
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--mirror-auto") { store.sheet = .mirror }
+            #endif
+        }
         .task {
             #if DEBUG
             guard ProcessInfo.processInfo.arguments.contains("--performance-probe") else { return }
@@ -58,8 +67,16 @@ struct AppShell: View {
             #endif
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await store.applicationDidBecomeActive() } }
-            else if phase == .background { store.applicationDidEnterBackground() }
+            if phase == .active {
+                TaskNotifications.shared.endBackgroundWindow()
+                if store.completionNotifications, store.hasConnectedBefore {
+                    Task { await TaskNotifications.shared.requestAuthorizationIfNeeded() }
+                }
+                Task { await store.applicationDidBecomeActive() }
+            } else if phase == .background {
+                store.applicationDidEnterBackground()
+                TaskNotifications.shared.beginBackgroundWindowIfRunning()
+            }
         }
     }
 }

@@ -56,7 +56,9 @@ export function createRelayServer({ registry, publicOrigin = 'https://relay.inva
   server.requestTimeout = 10_000; server.headersTimeout = 10_000; server.keepAliveTimeout = 5_000;
   server.maxHeadersCount = 40;
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES,
-    perMessageDeflate: false, clientTracking: false });
+    // Independent compressed messages; maxPayload still bounds inflated bytes.
+    perMessageDeflate: { serverNoContextTakeover: true, clientNoContextTakeover: true,
+      threshold: 1024, concurrencyLimit: 4, zlibDeflateOptions: { level: 9 } }, clientTracking: false });
 
   const status = (pair) => pair?.device && pair?.terminal ? 'matched' : 'waiting';
   const owned = (peer) => peer.state === 'authenticated' && pairs.get(peer.sid)?.[peer.role] === peer;

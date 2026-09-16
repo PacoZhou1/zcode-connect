@@ -54,7 +54,12 @@ struct ConversationControls: View {
                     .blur(radius: reasoningPresented ? 4 : 0)
                     .allowsHitTesting(!reasoningPresented)
             }
-            ComposerView(sessionID: sessionID, dismissOverlaysSignal: dismissOverlaysSignal, onReasoningVisibilityChange: { reasoningPresented = $0 })
+            if store.session(sessionID)?.source == "official-relay-subagent" {
+                Label("智能体记录 · 由主任务管理", systemImage: "text.bubble")
+                    .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 10)
+            } else {
+                ComposerView(sessionID: sessionID, dismissOverlaysSignal: dismissOverlaysSignal, onReasoningVisibilityChange: { reasoningPresented = $0 })
+            }
         }
         .padding(.top, 8).padding(.bottom, reasoningPresented ? 0 : 12)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: selectedPanel)

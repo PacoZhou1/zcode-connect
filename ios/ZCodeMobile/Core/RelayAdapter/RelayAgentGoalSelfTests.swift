@@ -126,6 +126,33 @@ private struct AGFailure: Error { let text: String }
         let evidence = check("parent_verified_cold_child_shares_one_restore_and_pages_all_705_original_messages", passed, ["firstError": result.code.map(RelayJSON.string) ?? .null, "secondError": second.code.map(RelayJSON.string) ?? .null, "childCalls": .array(childCalls), "unsubscribeCount": .int(calls.filter { $0["method"].string == "unsubscribeConversationV4" }.count), "history": page["history"], "firstText": text.first?["text"] ?? .null, "lastText": text.last?["text"] ?? .null, "forbiddenCalls": .array(forbidden), "mutationGuards": .object(denied), "session": result.value["session"]])
         await f.close(); return evidence
     }
+    static func taskMembership() async throws -> RelayJSON {
+        let f = try await fixture()
+        let normal = try await f.client.listTasks()
+        let pinned = try await f.client.listTasks(pinned: true)
+        let archived = try await f.client.listTasks(archived: true)
+        let result = check("task_list_membership_survives_missing_dto_flags", !normal.isEmpty && !pinned.isEmpty && normal.allSatisfy { $0.pinned == false && $0.archived == false } && pinned.allSatisfy { $0.pinned == true && $0.archived == false } && archived.allSatisfy { $0.pinned == false && $0.archived == true }, [:])
+        await f.close(); return result
+    }
+    static func persistedV4Child() async throws -> RelayJSON {
+        let f = try await fixture(); _ = await get(f, "v1/sessions/" + parent)
+        await f.socket.useHistoricalRows()
+        await f.socket.setSubagentUnavailable(child, value: true)
+        let first = await get(f, "v1/sessions/" + child)
+        let page = await get(f, "v1/sessions/\(child)/messages?beforeRowId=3&logEpoch=epoch-one&limit=200")
+        let denied = await capture { try await f.adapter.mutate("v1/sessions/\(child)/messages", body: ["text": .string("must not send")]) }
+        let calls = await f.socket.serviceCalls
+        let passed = first.code == nil && page.code == nil
+            && first.value["session"]["capabilities"]["send"].bool == false
+            && first.value["session"]["source"].string == "official-relay-subagent"
+            && first.value["history"]["hasMore"].bool == true
+            && page.value["history"]["loadedRowCount"].integer == 3
+            && page.value["messages"].array?.contains(where: { $0["text"].string == "Head tail" }) == true
+            && denied.code == "session_read_only"
+            && !calls.contains(where: { ["resumeSession", "setModel", "sendConversationCommandV4"].contains($0["method"].string ?? "") })
+        let result = check("persisted_v4_child_without_legacy_runtime_reads_and_pages_original_rows", passed, ["first": first.json, "page": page.json, "write": denied.json])
+        await f.close(); return result
+    }
     static func coldScope(_ mismatch: String) async throws -> RelayJSON {
         let f = try await fixture(); _ = await get(f, "v1/sessions/" + parent)
         await f.socket.useSubagentSnapshot(childSnapshot(count: 1, mismatch: mismatch), sessionID: child); await f.socket.makeSessionCold(child)
@@ -193,7 +220,7 @@ private struct AGFailure: Error { let text: String }
         await f.close(); return evidence
     }
     static func main() async throws {
-        let results = try await [names(), directoryFailure(), directoryPagination(), coldChild(), coldScope("parent"), coldScope("kind"), coldScope("workspace"), coldParentRevalidation(), offline(), goalPrecondition("plan", active: false, text: "Objective", expected: "goal_plan_mode"), goalPrecondition("build", active: true, text: "Objective", expected: "goal_start_unavailable"), goalPrecondition("build", active: false, text: "  ", expected: "goal_start_invalid"), goalSuccess(), lostGoalAck(), goalAck("rejected"), goalAck("stale"), goalAck("failed")]
+        let results = try await [names(), directoryFailure(), directoryPagination(), coldChild(), taskMembership(), persistedV4Child(), coldScope("parent"), coldScope("kind"), coldScope("workspace"), coldParentRevalidation(), offline(), goalPrecondition("plan", active: false, text: "Objective", expected: "goal_plan_mode"), goalPrecondition("build", active: true, text: "Objective", expected: "goal_start_unavailable"), goalPrecondition("build", active: false, text: "  ", expected: "goal_start_invalid"), goalSuccess(), lostGoalAck(), goalAck("rejected"), goalAck("stale"), goalAck("failed")]
         let passed = results.filter { $0["passed"].bool == true }.count
         let output: RelayJSON = .object(["verifiedAt": .string(ISO8601DateFormatter().string(from: Date())), "passed": .bool(passed == results.count), "passedCount": .int(passed), "totalCount": .int(results.count), "checks": .array(results), "boundary": .string("Production Swift client/facade over synthetic IPC only. No actual pairing, host runtime restore, hook, model input, or user task accessed. Cold restoration side effects are verified from installed source, not performed by this suite.")])
         try output.data().write(to: URL(fileURLWithPath: CommandLine.arguments[1]), options: .atomic)

@@ -28,6 +28,7 @@ final class AppStore {
     var sendingSessions: Set<String> = []
     // Presentation-only messages; the durable outbox remains the authority for retries.
     var outgoingMessages: [String: ChatMessage] = [:]
+    var sentBubbleFocus: [String: String] = [:]
     var outgoingBaselineIDs: [String: Set<String>] = [:]
     var drafts: [String: String] = [:]
     var localFeedback: [String: Int] = [:]
@@ -52,6 +53,13 @@ final class AppStore {
     var selectedProjectID: String?
     var appearance = "跟随系统"
     var hapticsEnabled = true
+    private struct CachedReadingState: Codable {
+        var savedAt: Date
+        var sessions: [RemoteSession]
+        var projects: [RemoteProject]
+        var sessionID: String?
+        var hostName: String
+    }
     private struct CachedTranscript: Codable {
         var savedAt: Date
         var messages: [ChatMessage]
@@ -69,6 +77,67 @@ final class AppStore {
     var bridgeVersion: String?
     var streamConnected = false
     var models: [RemoteModel] = []
+    var queuedInputs: [String: [QueuedInput]] = [:]
+    var editingQueuedInput: [String: QueuedInput] = [:]
+    var queueActions: Set<String> = []
+    private var queueRevisions: [String: Int] = [:]
+    private var reconcilingSubmissions: Set<String> = []
+
+    func refreshModels() async {
+        guard !isReferenceMode, let client, connection.isOnline else { return }
+        let epoch = connectionEpoch
+        struct Catalog: Decodable, Sendable { var models: [RemoteModel] }
+        do {
+            let result: Catalog = try await client.get("v1/models")
+            guard epoch == connectionEpoch else { return }
+            var ids = Set<String>()
+            models = result.models.filter { ids.insert($0.id).inserted }
+        } catch { /* Keep last known catalog during a transient refresh failure. */ }
+    }
+
+    func dismissPendingSubmission(_ key: String) {
+        guard let pending = pendingSubmissions[key], !sendingSessions.contains(pending.sessionID ?? "") else { return }
+        var next = pendingSubmissions; next[key] = nil
+        do { try submissionJournal.write(next, scope: persistenceScope); pendingSubmissions = next }
+        catch { errorMessage = "无法移除发送提示，请重试。" }
+    }
+
+    func reconcilePendingSubmissions(_ id: String) async {
+        guard activeProfile?.isRelay == true, let client, connection.isOnline,
+              reconcilingSubmissions.insert(id).inserted else { return }
+        defer { reconcilingSubmissions.remove(id) }
+        let epoch = connectionEpoch
+        struct Receipt: Decodable, Sendable { var resolved: Bool }
+        for (key, pending) in pendingSubmissions where pending.sessionID == id {
+            do {
+                let receipt: Receipt = try await client.get("v1/sessions/\(id)/receipt?inputId=\(pending.id)")
+                guard epoch == connectionEpoch else { return }
+                if receipt.resolved, pendingSubmissions[key]?.id == pending.id { dismissPendingSubmission(key) }
+            } catch { /* An unknown result stays visible; a read never retries a write. */ }
+        }
+    }
+
+    func changeQueuedInput(_ item: QueuedInput, sessionID id: String, action: String, text: String? = nil) async -> Bool {
+        guard let client, connection.isOnline, session(id)?.canControl == true,
+              queueActions.insert(item.id).inserted else { return false }
+        let epoch = connectionEpoch
+        defer { if epoch == connectionEpoch { queueActions.remove(item.id) } }
+        do {
+            var body: [String: JSONValue] = ["queueItemId": .string(item.id), "action": .string(action), "clientCommandId": .string(UUID().uuidString)]
+            if let text { body["newText"] = .string(text) }
+            struct Result: Decodable, Sendable { var accepted: Bool }
+            let result: Result = try await client.mutate("v1/sessions/\(id)/queue", body: body)
+            guard epoch == connectionEpoch else { return false }
+            if result.accepted && action == "guide" {
+                confirmedHaptic("guide:" + id + ":" + item.id)
+                // The guided text leaves the queue when the running turn consumes it;
+                // arm the sent-bubble scroll so the transcript bubble stays visible.
+                sentBubbleFocus[id] = UUID().uuidString
+            }
+            await loadTranscript(id)
+            return result.accepted
+        } catch { if epoch == connectionEpoch { errorMessage = error.localizedDescription }; return false }
+    }
     var modelSelections: [String: ModelSelection] = [:]
     var remoteSettings: [String: RemoteSettings] = [:]
     var newModelSelection: ModelSelection?
@@ -138,6 +207,7 @@ final class AppStore {
         hapticsEnabled = defaults.object(forKey: "haptics") as? Bool ?? true
         showContextUsage = defaults.object(forKey: "showContextUsage") as? Bool ?? true
         showTimestamps = defaults.object(forKey: "timestamps") as? Bool ?? true
+        completionNotifications = defaults.object(forKey: "completionNotifications") as? Bool ?? true
 
         do { try loadScopedState() }
         catch { errorMessage = "无法恢复待发送消息：\(error.localizedDescription)" }
@@ -150,6 +220,61 @@ final class AppStore {
             if let index = args.firstIndex(of: "--screen"), args.count > index + 1 {
                 switch args[index + 1] {
                 case "chat", "goal", "agents", "keyboard", "reasoning", "permissions", "attachments", "thread-menu", "rename":
+                    path = [.session(ReferenceData.conversationID)]
+                case "activity-transition-review":
+                    transcripts[ReferenceData.conversationID] = [
+                        ChatMessage(id: "transition-user", role: .user, text: "检查工具结束到正文出现的过渡", transcript: .init(turnID: "transition", state: .running, role: .input)),
+                        ChatMessage(id: "transition-tools", role: .assistant, text: "", steps: [
+                            ToolStep(id: "transition-read", title: "Read", detail: "文件读取详情", status: .completed, inputJSON: #"{"path":"/project/ChatView.swift"}"#),
+                            ToolStep(id: "transition-test", title: "RunTests", detail: "测试执行详情", status: .running, inputJSON: #"{"name":"阅读体验测试"}"#)
+                        ], transcript: .init(turnID: "transition", state: .running, role: .process))
+                    ]
+                    setStatus(ReferenceData.conversationID, .running)
+                    path = [.session(ReferenceData.conversationID)]
+                case "scroll-layout-review":
+                    let text = (0..<35).map { "第 \($0) 段：这是一段用于检查长消息气泡高度的文本。滚动时应当保持位置稳定，不应突然回到底部。" }.joined(separator: "\n\n")
+                    transcripts[ReferenceData.conversationID] = [ChatMessage(id: "long-answer", role: .assistant, text: text), ChatMessage(id: "long-bubble", role: .user, text: "这个问题气泡经过屏幕中部时，请保持阅读位置。"), ChatMessage(id: "short-answer", role: .assistant, text: "这是回复末尾，滚动检查。")]
+                    path = [.session(ReferenceData.conversationID)]
+                case "markdown-review":
+                    let sample = "### 标题应呈现为标题\n\n正文 **加粗**、*强调* 与 [Apple](https://developer.apple.com)。\n\n- 第一项\n- 第二项\n\n1. 有序项目\n2. 下一项\n\n> 引用应有独立视觉层级。\n\n```swift\nlet text = \"### 保留代码里的标记\"\n```\n\n| 项目 | 结果 |\n|---|---|\n| 标题 | 正常 |"
+                    transcripts[ReferenceData.conversationID] = [ChatMessage(id: "markdown-review", role: .assistant, text: sample)]
+                    path = [.session(ReferenceData.conversationID)]
+                case "activity-review":
+                    for kind in ToolActivityKind.allCases { precondition(UIImage(systemName: kind.symbol) != nil, "Missing SF Symbol: " + kind.symbol) }
+                    let command = #"{"command":"python3 scripts/tests/run-outbox-tests.py --suite metadata-actions --verbose"}"#
+                    transcripts[ReferenceData.conversationID] = [
+                        ChatMessage(id: "activity-user", role: .user, text: "检查工具图标、状态和对齐"),
+                        ChatMessage(id: "activity-commands", role: .tool, text: "命令、文件和网页使用统一的图标列。完整内容可以展开查看。", steps: [
+                            ToolStep(id: "cmd-done", title: "Bash", detail: "输入\npython3 scripts/tests/run-outbox-tests.py\n\n输出\n57/57 passed", inputJSON: command),
+                            ToolStep(id: "read-done", title: "Read", detail: "已读取文件；这里是完整输入输出。", inputJSON: #"{"file_path":"/project/ios/ZCodeMobile/Features/ChatView.swift"}"#),
+                            ToolStep(id: "write-done", title: "ApplyPatch", detail: "文件修改的原始补丁。", inputJSON: #"{"path":"/project/ios/ZCodeMobile/Features/MessageView.swift"}"#)
+                        ]),
+                        ChatMessage(id: "activity-live", role: .tool, text: "没有真实耗时的数据时，不显示计时。", steps: [
+                            ToolStep(id: "fetch-live", title: "WebFetch", detail: "网页获取中", status: .running, websiteURL: "https://www.apple.com/"),
+                            ToolStep(id: "search-live", title: "WebSearch", detail: "搜索输入", status: .running, inputJSON: #"{"query":"Apple SF Symbols 图标设计"}"#),
+                            ToolStep(id: "permission", title: "Bash", detail: "等待用户允许运行", status: .waiting, inputJSON: #"{"command":"xcodebuild -scheme ZCodeMobile build"}"#, rawStatus: "pendingApproval"),
+                            ToolStep(id: "test-fail", title: "RunTests", detail: "测试失败的真实错误在此显示。", status: .failed, inputJSON: #"{"name":"UI 布局测试"}"#),
+                            ToolStep(id: "cancelled", title: "Bash", detail: "用户中断", status: .failed, inputJSON: command, rawStatus: "cancelled"),
+                            ToolStep(id: "future", title: "FutureWorkspaceTool", detail: "未来未知工具仍可以查看详情。", status: .idle)
+                        ]),
+                        ChatMessage(id: "activity-symbols", role: .tool, text: "", steps: ToolActivityKind.allCases.map {
+                            ToolStep(id: "symbol-" + $0.rawValue, title: ["command":"Bash", "read":"Read", "write":"Edit", "search":"Grep", "files":"ListFiles", "webFetch":"WebFetch", "webSearch":"WebSearch", "build":"Build", "test":"RunTests", "versionControl":"Git", "package":"InstallPackage", "network":"HTTPRequest", "computer":"Computer", "agent":"Agent", "plan":"UpdatePlan", "question":"AskUserQuestion", "wait":"Sleep", "image":"ViewImage", "generic":"CustomTool"][$0.rawValue]!, detail: "图标与状态覆盖测试")
+                        })
+                    ]
+                    setStatus(ReferenceData.conversationID, .completed)
+                    path = [.session(ReferenceData.conversationID)]
+                case "web-review":
+                    transcripts[ReferenceData.conversationID] = [
+                        ChatMessage(id: "web-review-user", role: .user, text: "查看网页工具的显示状态"),
+                        ChatMessage(id: "web-review-tools", role: .tool, text: "", steps: [
+                            ToolStep(id: "fetch-running", title: "WebFetch", detail: "网页获取中的界面测试", status: .running, websiteURL: "https://www.apple.com/"),
+                            ToolStep(id: "search-running", title: "WebSearch", detail: "搜索没有单一目标网站时显示搜索图标", status: .running),
+                            ToolStep(id: "fetch-failed", title: "WebFetch", detail: "图标不可用时保留默认图标", status: .failed),
+                            ToolStep(id: "fetch-done", title: "WebFetch", detail: "网页读取完成", websiteURL: "https://www.apple.com/")
+                        ])
+                    ]
+                    setStatus(ReferenceData.conversationID, .completed)
+                    setDraft("发送后定位在顶部菜单栏下方", for: ReferenceData.conversationID)
                     path = [.session(ReferenceData.conversationID)]
                 case "turn-review":
                     transcripts[ReferenceData.conversationID] = ReferenceData.transcriptReviewMessages
@@ -195,6 +320,11 @@ final class AppStore {
     private func loadScopedState() throws {
         transcriptLastLoaded = [:]; transcriptLoading = []; transcriptLoadingOwners = [:]; transcriptLoadErrors = [:]
         let cache = decode([String: CachedTranscript].self, key: scopedKey("transcriptCache.v1")) ?? [:]
+        if sessions.isEmpty, let state = decode(CachedReadingState.self, key: scopedKey("readingState.v1")),
+           Date().timeIntervalSince(state.savedAt) < 7 * 86400 {
+            sessions = state.sessions; projects = state.projects; hostName = state.hostName
+            if path.isEmpty, let id = state.sessionID, sessions.contains(where: { $0.id == id }) { path = [.session(id)] }
+        }
         cachedTranscriptIDs = []
         for (id, entry) in cache where Date().timeIntervalSince(entry.savedAt) < 7 * 86400 {
             if transcripts[id]?.isEmpty != false { transcripts[id] = entry.messages; cachedTranscriptIDs.insert(id) }
@@ -216,6 +346,25 @@ final class AppStore {
         pendingSubmissions = [:]
         pendingSubmissions = try submissionJournal.read(scope: persistenceScope)
     }
+    /// Same-scope reconnections keep live host projections in memory; these
+    /// saved-on-write preferences stay disk-authoritative and are re-read.
+    private func reloadScopedPreferences() {
+        localUnreadIDs = Set(defaults.stringArray(forKey: scopedKey("unread")) ?? [])
+        locallyReadTimestamps = decode([String: Double].self, key: scopedKey("readTimestamps")) ?? [:]
+        localFeedback = decode([String: Int].self, key: scopedKey("feedback")) ?? [:]
+        drafts = decode([String: String].self, key: scopedKey("drafts")) ?? [:]
+        localTitles = decode([String: String].self, key: scopedKey("titles")) ?? [:]
+        pinnedIDs = Set(defaults.stringArray(forKey: scopedKey("pins")) ?? [])
+        archivedIDs = Set(defaults.stringArray(forKey: scopedKey("archives")) ?? [])
+    }
+    private func cacheReadingState() {
+        guard !isReferenceMode, activeProfileID != nil else { return }
+        let state = CachedReadingState(savedAt: .now, sessions: Array(sessions.prefix(500)),
+            projects: projects, sessionID: currentSessionID, hostName: hostName)
+        save(state, key: scopedKey("readingState.v1"))
+        if let id = currentSessionID { cacheTranscript(id) }
+    }
+
     private func cacheTranscript(_ id: String) {
         guard !isReferenceMode, activeProfileID != nil, let messages = transcripts[id] else { return }
         var cache = decode([String: CachedTranscript].self, key: scopedKey("transcriptCache.v1")) ?? [:]
@@ -258,6 +407,52 @@ final class AppStore {
     }
     var canManageGoals: Bool { isReferenceMode }
 
+    // MARK: Index watch & completion notifications
+
+    var completionNotifications = true
+    @ObservationIgnored var completionEventSink: ((String, String) -> Void)?
+    @ObservationIgnored private var indexWatchTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingNotificationSessionID: String?
+
+    /// While tasks are running the home index self-heals: the desktop's push can be
+    /// lost on a weak link, and a task stopped on the desktop must not spin forever.
+    private func startIndexWatch() {
+        guard indexWatchTask == nil, client != nil else { return }
+        let epoch = connectionEpoch
+        indexWatchTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if epoch == self.connectionEpoch { self.indexWatchTask = nil } }
+            while !Task.isCancelled, epoch == self.connectionEpoch,
+                  self.isApplicationActive, self.connection.isOnline, self.client != nil {
+                try? await Task.sleep(for: .seconds(6))
+                guard !Task.isCancelled, epoch == self.connectionEpoch,
+                      self.isApplicationActive, self.connection.isOnline else { return }
+                guard self.sessions.contains(where: { [.running, .waiting].contains($0.status) }) else { continue }
+                try? await self.loadRemoteIndex()
+            }
+        }
+    }
+
+    func openFromNotification(_ sessionID: String) {
+        guard !isReferenceMode else { return }
+        if session(sessionID) != nil { path = [.session(sessionID)] }
+        else { pendingNotificationSessionID = sessionID }
+    }
+
+    private func consumePendingNotification() {
+        guard let id = pendingNotificationSessionID else { return }
+        pendingNotificationSessionID = nil
+        if session(id) != nil { path = [.session(id)] }
+    }
+
+    /// Only a live transition into completed notifies: loading history that was
+    /// already complete, or watching the session itself, must stay silent.
+    private func notifyCompletion(id: String, previous: SessionStatus?, current: SessionStatus) {
+        guard !isReferenceMode, current == .completed, previous != nil, previous != .completed,
+              !isApplicationActive || currentSessionID != id else { return }
+        completionEventSink?(id, sessions.first { $0.id == id }?.title ?? hostName)
+    }
+
     func start() async {
         guard !didStart else { return }
         didStart = true
@@ -288,12 +483,14 @@ final class AppStore {
         guard !isReferenceMode else { return }
         if let task = automaticConnectionTask { await task.value; return }
         if connection.isOnline, client != nil {
+            if indexWatchTask == nil { startIndexWatch() }
             await refresh()
             if connection.isOnline, let id = currentSessionID { await loadTranscript(id) }
         } else { await restoreSavedConnection() }
     }
 
     func applicationDidEnterBackground() {
+        cacheReadingState()
         isApplicationActive = false
         let wasRestoring = automaticConnectionTask != nil
         cancelAutomaticConnection()
@@ -317,7 +514,8 @@ final class AppStore {
         let code = (error as? RelayFailure)?.code ?? (error as? BridgeFailure)?.code
         if let code {
             return ["relay_transport_failed", "relay_disconnected", "relay_pairing_timeout", "relay_desktop_unpaired",
-                    "relay_heartbeat_timeout", "relay_request_timeout", "relay_rpc_timeout", "relay_read_timeout"].contains(code)
+                    "relay_heartbeat_timeout", "relay_request_timeout", "relay_rpc_timeout", "relay_read_timeout",
+                    "desktop_bridge_degraded", "relay_ack_timeout", "relay_assembly_timeout"].contains(code)
         }
         let failure = error as NSError
         guard failure.domain == NSURLErrorDomain else { return false }
@@ -452,6 +650,7 @@ final class AppStore {
         activeProfileID = profile.id
         hostName = profile.name
         sessions = []; transcripts = [:]; projects = []; models = []
+        queuedInputs = [:]; editingQueuedInput = [:]; queueActions = []; queueRevisions = [:]; reconcilingSubmissions = []
         pendingInteractions = [:]; modelSelections = [:]; remoteSettings = [:]
         projectSettings = [:]; uploadedAttachments = [:]; newModelSelection = nil
         options = SessionOptions(); selectedProjectID = nil
@@ -508,6 +707,8 @@ final class AppStore {
             try await loadRemoteIndex(using: newClient, beforeApplying: { [self] in
                 try CredentialStore.save(secret, id: profile.id)
                 client = newClient
+                let keepsReadingState = !isReferenceMode && activeProfileID == profile.id && activeProfile?.baseURL == profile.baseURL
+                if !keepsReadingState {
                 sessions = []
                 transcripts = [:]
                 histories = [:]; loadingHistory = []
@@ -521,13 +722,15 @@ final class AppStore {
                 goals = [:]
                 agentTasks = [:]
                 if isReferenceMode || activeProfileID != profile.id { path = [] }
+                }
                 isReferenceMode = false
                 hostName = status.hostName
                 bridgeVersion = status.zcodeVersion
                 activeProfileID = profile.id
                 if let i = profiles.firstIndex(where: { $0.id == profile.id }) { profiles[i] = profile }
                 else { profiles.append(profile) }
-                try loadScopedState()
+                if !keepsReadingState { try loadScopedState() }
+                else { reloadScopedPreferences(); pendingSubmissions = try submissionJournal.read(scope: persistenceScope) }
                 save(profiles, key: "connections")
                 defaults.set(profile.id, forKey: "activeConnection")
                 connection = .connected
@@ -691,15 +894,20 @@ final class AppStore {
                 name: name.isEmpty ? pairing.deviceName : name, baseURL: pairing.profileURL.absoluteString,
                 relayDeviceID: pairing.deviceID, relayWorkspaceKey: workspaceKey, relayServiceID: pairing.serviceID)
             try CredentialStore.save(raw, id: profile.id)
+            let keepsReadingState = !isReferenceMode && activeProfileID == profile.id && activeProfile?.baseURL == profile.baseURL
             client = adapter
-            sessions = []; transcripts = [:]; histories = [:]; loadingHistory = []; pendingInteractions = [:]
-            modelSelections = [:]; remoteSettings = [:]; uploadedAttachments = [:]
-            projectSettings = [:]; newModelSelection = nil; options = SessionOptions()
-            path = []; isReferenceMode = false; referenceReview = false
+            if !keepsReadingState {
+                sessions = []; transcripts = [:]; histories = [:]; loadingHistory = []; pendingInteractions = [:]
+                modelSelections = [:]; remoteSettings = [:]; uploadedAttachments = [:]
+                projectSettings = [:]; newModelSelection = nil; options = SessionOptions()
+                path = []
+            }
+            isReferenceMode = false; referenceReview = false
             activeProfileID = profile.id
             if let index = profiles.firstIndex(where: { $0.id == profile.id }) { profiles[index] = profile }
             else { profiles.append(profile) }
-            try loadScopedState()
+            if !keepsReadingState { try loadScopedState() }
+            else { reloadScopedPreferences(); pendingSubmissions = try submissionJournal.read(scope: persistenceScope) }
             save(profiles, key: "connections")
             defaults.set(profile.id, forKey: "activeConnection")
             hostName = profile.name; bridgeVersion = pairing.appVersion
@@ -754,6 +962,7 @@ final class AppStore {
         relayConnectionAttempt = UUID()
         streamTask?.cancel()
         refreshTask?.cancel()
+        indexWatchTask?.cancel(); indexWatchTask = nil
         streamTask = nil
         refreshTask = nil
         dirtySessionIDs = []
@@ -806,6 +1015,7 @@ final class AppStore {
             transcripts = [:]
             histories = [:]; loadingHistory = []
         }
+        defaults.removeObject(forKey: "\(profile.id)|\(profile.baseURL)|readingState.v1")
         defaults.removeObject(forKey: "\(profile.id)|\(profile.baseURL)|transcriptCache.v1")
         CredentialStore.remove(profile.id)
         profiles.removeAll { $0.id == profile.id }
@@ -899,12 +1109,14 @@ final class AppStore {
         merged.append(contentsOf: sessions.filter { !incomingIDs.contains($0.id) && (sessionRevisions[$0.id] ?? 0) > revision })
         sessions = merged
         models = modelResponse.models
+        cacheReadingState()
         for session in sessionResponse.sessions {
-            if let provider = session.providerId, let model = session.model {
+            if remoteSettings[session.id] == nil, !changingSettings.contains(session.id), let provider = session.providerId, let model = session.model {
                 modelSelections[session.id] = ModelSelection(providerId: provider, modelId: model, thoughtLevel: session.thoughtLevel)
             }
         }
         if !projects.contains(where: { $0.id == selectedProjectID }) { selectedProjectID = projects.first?.id }
+        consumePendingNotification()
         if !hasConnectedBefore {
             hasConnectedBefore = true
             defaults.set(true, forKey: "hasConnectedBefore")
@@ -926,6 +1138,7 @@ final class AppStore {
         let request = UUID()
         transcriptRequests[id] = request
         let revision = eventRevision
+        let initialSettingsRevision = settingsRevisions[id]
         transcriptLoading.insert(id)
         transcriptLoadingOwners[id] = request
         transcriptLoadErrors[id] = nil
@@ -954,6 +1167,9 @@ final class AppStore {
             cachedTranscriptIDs.remove(id)
             cacheTranscript(id)
             histories[id] = detail.history
+            if (queueRevisions[id] ?? 0) <= revision { queuedInputs[id] = detail.queue ?? [] }
+            await reconcilePendingSubmissions(id)
+            guard epoch == connectionEpoch, transcriptRequests[id] == request else { return }
             if (contextRevisions[id] ?? 0) <= revision { contextUsage[id] = detail.contextUsage }
             if (interactionRevisions[id] ?? 0) <= revision { pendingInteractions[id] = detail.pendingInteractions }
             if (activityRevisions[id] ?? 0) <= revision { applyHostActivity(detail.hostActivity, sessionID: id) }
@@ -962,7 +1178,8 @@ final class AppStore {
                 sessionRevisions[id] = eventRevision
                 upsert(decorate(detail.session.local))
             }
-            if let provider = detail.session.providerId, let model = detail.session.model {
+            observeAnswerCompletion(id)
+            if remoteSettings[id] == nil, settingsRevisions[id] == initialSettingsRevision, !changingSettings.contains(id), let provider = detail.session.providerId, let model = detail.session.model {
                 modelSelections[id] = ModelSelection(providerId: provider, modelId: model, thoughtLevel: detail.session.thoughtLevel)
             }
         } catch {
@@ -977,7 +1194,11 @@ final class AppStore {
                 return
             }
             if let onFailure { onFailure(error.localizedDescription) }
-            else { transcriptLoadErrors[id] = "暂时无法更新，请稍后重试。已缓存的内容仍可查看。" }
+            else {
+                transcriptLoadErrors[id] = messages(id).isEmpty
+                    ? (session(id)?.source == "official-relay-subagent" ? "暂时无法读取智能体记录，请重试。" : "暂时无法读取会话，请重试。")
+                    : "暂时无法更新，请稍后重试。已缓存的内容仍可查看。"
+            }
         }
     }
 
@@ -1123,6 +1344,7 @@ final class AppStore {
         pendingSubmissions[draftKey] = accepted || rejected ? nil : entry
         do { try submissionJournal.write(pendingSubmissions, scope: scope) }
         catch { errorMessage = "发送记录保存失败；下次重试会使用相同编号：\(error.localizedDescription)" }
+        if !accepted && !rejected { await reconcilePendingSubmissions(id) }
         return accepted ? id : nil
     }
 
@@ -1156,11 +1378,14 @@ final class AppStore {
             errorMessage = "这个任务当前只能查看。你可以新建一个手机可控制的任务。"; return false
         }
         let isPendingRetry = pendingSubmissions.values.contains { $0.id == inputID && $0.sessionID == id && $0.matches(text: text, attachments: attachments) }
-        guard !sendingSessions.contains(id), (![SessionStatus.running, .waiting].contains(session(id)?.status ?? .idle)) || isPendingRetry else { return false }
+        guard !sendingSessions.contains(id), (![SessionStatus.running, .waiting].contains(session(id)?.status ?? .idle)) || activeProfile?.isRelay == true || isPendingRetry else { return false }
         sendingSessions.insert(id)
+        answerFeedback[persistenceScope + "|" + id, default: AnswerCompletionFeedback()].begin(transcripts[id] ?? [])
         defer { if epoch == connectionEpoch { sendingSessions.remove(id) } }
         if isReferenceMode {
             transcripts[id, default: []].append(ChatMessage(id: inputID, role: .user, text: trimmed))
+            confirmedHaptic("send:" + id + ":" + inputID)
+            sentBubbleFocus[id] = UUID().uuidString
             setStatus(id, .running)
             if drafts[id] == text { setDraft("", for: id) }
             Task {
@@ -1176,13 +1401,14 @@ final class AppStore {
         outgoingBaselineIDs[id] = Set((transcripts[id] ?? []).map(\.id))
         outgoingMessages[id] = ChatMessage(id: "outgoing-" + inputID, role: .user, text: trimmed,
             attachments: attachments.map { MessageAttachment(id: $0.id, fileName: $0.name, mimeType: $0.mimeType) })
+        sentBubbleFocus[id] = UUID().uuidString
         defer {
             if epoch == connectionEpoch {
                 outgoingMessages[id] = nil
                 outgoingBaselineIDs[id] = nil
             }
         }
-        struct Accepted: Decodable, Sendable { var accepted: Bool }
+        struct Accepted: Decodable, Sendable { var accepted: Bool; var delivery: String? }
         do {
             struct Upload: Decodable, Sendable {
                 struct Value: Decodable, Sendable { var id: String }
@@ -1209,8 +1435,9 @@ final class AppStore {
                 body: ["text": .string(trimmed), "inputId": .string(inputID), "attachmentIds": .array(attachmentIDs.map(JSONValue.string))])
             guard epoch == connectionEpoch else { return false }
             if result.accepted {
+                confirmedHaptic("send:" + id + ":" + inputID)
                 if drafts[id] == text { setDraft("", for: id) }
-                setStatus(id, .running)
+                if result.delivery != "queue" && result.delivery != "guide" { setStatus(id, .running) }
                 await loadTranscript(id)
             }
             if !result.accepted { errorMessage = "电脑没有接受这条消息，请重试。" }
@@ -1307,7 +1534,7 @@ final class AppStore {
     func respond(_ interaction: PendingInteraction, allow: Bool) async {
         guard let client else { return }
         let epoch = connectionEpoch
-        struct Accepted: Decodable, Sendable { var accepted: Bool }
+        struct Accepted: Decodable, Sendable { var accepted: Bool; var delivery: String? }
         do {
             let _: Accepted = try await client.post("v1/interactions/\(interaction.id)/respond",
                 body: interaction.kind == "permission" ? ["decision": allow ? "allow" : "deny"] : ["action": allow ? "accept" : "decline"])
@@ -1319,7 +1546,7 @@ final class AppStore {
     func answer(_ interaction: PendingInteraction, content: JSONValue?, decline: Bool = false) async -> Bool {
         guard let client else { return false }
         let epoch = connectionEpoch
-        struct Accepted: Decodable, Sendable { var accepted: Bool }
+        struct Accepted: Decodable, Sendable { var accepted: Bool; var delivery: String? }
         do {
             var body: [String: JSONValue] = ["action": .string(decline ? "decline" : "accept")]
             if let content { body["content"] = content }
@@ -1376,7 +1603,7 @@ final class AppStore {
         if isReferenceMode || id == nil { return true }
         guard let id, connection.isOnline, session(id)?.canControl == true,
               !changingSettings.contains(id) else { return false }
-        if model { return ![SessionStatus.running, .waiting].contains(session(id)?.status ?? .idle) && remoteSettings[id]?.mutable == true }
+        if model { return activeProfile?.isRelay == true || remoteSettings[id]?.mutable == true }
         if activeProfile?.isRelay == true { return true }
         return ![SessionStatus.running, .waiting].contains(session(id)?.status ?? .idle) && remoteSettings[id]?.mutable == true
     }
@@ -1425,7 +1652,7 @@ final class AppStore {
             return true
         }
         guard let client, canEditSettings(id, model: model != nil || reasoning != nil) else {
-            errorMessage = "当前无法更改此设置。请确认电脑已连接、任务可控制；模型设置需等待当前轮次结束。"
+            errorMessage = "当前无法更改此设置，请确认电脑已连接、任务可控制。"
             return false
         }
         let epoch = connectionEpoch
@@ -1433,6 +1660,7 @@ final class AppStore {
         defer { if epoch == connectionEpoch { changingSettings.remove(id) } }
         do {
             var body: [String: JSONValue] = [:]
+            if activeProfile?.isRelay == true { body["clientCommandId"] = .string(UUID().uuidString) }
             if let model { body["model"] = model.json }
             if let reasoning { body["thoughtLevel"] = .string(reasoning) }
             if let mode { body["mode"] = .string(mode) }
@@ -1472,7 +1700,7 @@ final class AppStore {
         return response.files
     }
 
-    func session(_ id: String) -> RemoteSession? { sessions.first { $0.id == id } ?? childSessions[persistenceScope + "|" + id] }
+    func session(_ id: String) -> RemoteSession? { childSessions[persistenceScope + "|" + id] ?? sessions.first { $0.id == id } }
     func messages(_ id: String) -> [ChatMessage] {
         let saved = transcripts[id] ?? []
         guard let outgoing = outgoingMessages[id] else { return saved }
@@ -1910,6 +2138,26 @@ final class AppStore {
         }
     }
 
+    #if DEBUG
+    func completeActivityTransitionReview(_ id: String) async {
+        guard isReferenceMode else { return }
+        try? await Task.sleep(for: .seconds(8))
+        guard !Task.isCancelled, isReferenceMode else { return }
+        var updated = transcripts[id] ?? []
+        guard let index = updated.firstIndex(where: { $0.id == "transition-tools" }) else { return }
+        updated[index].steps = updated[index].steps.map { step in
+            var value = step; value.status = .completed; return value
+        }
+        updated[index].transcript?.state = .completed
+        updated.append(ChatMessage(id: "transition-answer", role: .assistant,
+            text: "检查已完成。\n\n工具过程平滑收成一行摘要，正文在下方展开。你仍可以点开查看原始输入输出。",
+            transcript: .init(turnID: "transition", state: .completed, role: .finalAnswer)))
+        if let user = updated.firstIndex(where: { $0.id == "transition-user" }) { updated[user].transcript?.state = .completed }
+        transcripts[id] = updated
+        setStatus(id, .completed)
+    }
+    #endif
+
     func copy(_ value: String, message: String = "已复制") {
         UIPasteboard.general.string = value
         notify(message)
@@ -1921,6 +2169,30 @@ final class AppStore {
             if toast == message { toast = nil }
         }
     }
+    @ObservationIgnored private var answerFeedback: [String: AnswerCompletionFeedback] = [:]
+    private func observeAnswerCompletion(_ id: String) {
+        guard let messages = transcripts[id], !messages.isEmpty else { return }
+        let scope = persistenceScope + "|" + id
+        let completed = answerFeedback[scope, default: AnswerCompletionFeedback()].observe(messages, status: session(id)?.status ?? .idle)
+        for reply in completed { confirmedHaptic("answer:" + id + ":" + reply) }
+    }
+    @ObservationIgnored private var confirmedHapticIDs: Set<String> = []
+    func confirmedHaptic(_ id: String) {
+        guard confirmedHapticIDs.insert(persistenceScope + "|" + id).inserted else { return }
+        guard hapticsEnabled else { return }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--feedback-review") {
+            let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("feedback-review.log")
+            let prior = (try? String(contentsOf: path, encoding: .utf8)) ?? ""
+            let kind = id.hasPrefix("answer:") ? "answer-success" : "send-light"
+            try? (prior + "\(Date().timeIntervalSince1970) \(kind)\n").write(to: path, atomically: true, encoding: .utf8)
+        }
+        #endif
+        if id.hasPrefix("answer:") {
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } else { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    }
+
     func haptic() {
         if hapticsEnabled { UISelectionFeedbackGenerator().selectionChanged() }
     }
@@ -1929,22 +2201,29 @@ final class AppStore {
         defaults.set(hapticsEnabled, forKey: "haptics")
         defaults.set(showContextUsage, forKey: "showContextUsage")
         defaults.set(showTimestamps, forKey: "timestamps")
+        defaults.set(completionNotifications, forKey: "completionNotifications")
     }
     private func setStatus(_ id: String, _ status: SessionStatus) {
         eventRevision += 1
         sessionRevisions[id] = eventRevision
+        let previous = sessions.first { $0.id == id }?.status
         if let i = sessions.firstIndex(where: { $0.id == id }) {
             sessions[i].status = status
             sessions[i].updatedAt = .now
         }
+        observeAnswerCompletion(id)
+        notifyCompletion(id: id, previous: previous, current: status)
     }
     private func upsert(_ session: RemoteSession) {
         if session.source == "official-relay-subagent" {
             childSessions[persistenceScope + "|" + session.id] = session
             return
         }
+        let previous = sessions.first { $0.id == session.id }?.status
         if let i = sessions.firstIndex(where: { $0.id == session.id }) { sessions[i] = session }
         else { sessions.insert(session, at: 0) }
+        observeAnswerCompletion(session.id)
+        notifyCompletion(id: session.id, previous: previous, current: session.status)
     }
     private func decorate(_ session: RemoteSession) -> RemoteSession {
         // Metadata always reflects the host. Legacy local preferences remain stored
@@ -1954,6 +2233,7 @@ final class AppStore {
     private func beginStreaming() {
         guard let client else { return }
         streamTask?.cancel()
+        startIndexWatch()
         let epoch = connectionEpoch
         streamTask = Task { [weak self] in
             var attempt = 0
@@ -1995,14 +2275,24 @@ final class AppStore {
             sessionRevisions[remote.id] = eventRevision
             upsert(decorate(remote.local))
         }
+        if event.type == "settings.changed", let id = event.sessionId, id == currentSessionID {
+            Task { await loadSettings(id); await refreshModels() }
+        }
         // Index pushes update rows without opening/subscribing every desktop task.
         if event.type == "session.index.updated" { return }
+        if let id = event.sessionId, let queue = event.data?.queue {
+            queueRevisions[id] = eventRevision
+            queuedInputs[id] = queue
+            Task { await reconcilePendingSubmissions(id) }
+        }
         if let id = event.sessionId, let message = event.data?.message {
             messageRevisions["\(id)|\(message.id)"] = eventRevision
             if let index = transcripts[id]?.firstIndex(where: { $0.id == message.id }) {
                 transcripts[id]?[index] = message.local
             } else { transcripts[id, default: []].append(message.local) }
             scheduleTranscriptCache(id)
+            observeAnswerCompletion(id)
+            if message.role == "user", pendingSubmissions.values.contains(where: { $0.sessionID == id }) { Task { await reconcilePendingSubmissions(id) } }
             return
         }
         if let id = event.sessionId {

@@ -2,6 +2,22 @@ import Foundation
 import OSLog
 import CryptoKit
 
+/// Bounded, credential-free transport evidence for physical-device diagnosis.
+private final class RelayConnectionTrace: @unchecked Sendable {
+    static let shared = RelayConnectionTrace()
+    private let lock = NSLock()
+    func record(_ stage: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+        let file = directory.appendingPathComponent("relay-connection-trace.log")
+        let line = "\(Date().timeIntervalSince1970) \(stage)\n"
+        var data = (try? Data(contentsOf: file)) ?? Data()
+        if data.count > 65_536 { data = Data() }
+        data.append(contentsOf: line.utf8)
+        try? data.write(to: file, options: .atomic)
+    }
+}
+
 private enum RelayChildHistoryOperation {
     @TaskLocal static var sessionID: String?
 }
@@ -33,6 +49,7 @@ final class RelaySocketRedirectDelegate: NSObject, URLSessionTaskDelegate, @unch
 public actor RelayURLSessionSocket: RelaySocketTransport {
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
+    private var tracedSends = 0
     public init() {}
     public func connect(to url: URL) async throws {
         guard url.scheme == "wss", url.host == "zcode.z.ai", url.path == "/ws",
@@ -47,6 +64,8 @@ public actor RelayURLSessionSocket: RelaySocketTransport {
         try open(to: pairing.relayURL)
     }
     private func open(to url: URL) throws {
+        tracedSends = 0
+        RelayConnectionTrace.shared.record("socket_open")
         guard task == nil else { throw RelayFailure("relay_already_connected", "Disconnect before opening another relay endpoint.") }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil; configuration.httpCookieStorage = nil
@@ -58,7 +77,9 @@ public actor RelayURLSessionSocket: RelaySocketTransport {
     }
     public func send(text: String) async throws {
         guard text.utf8.count <= RelayWire.maxFrame, let task else { throw RelayFailure.closed() }
+        let started = Date(); let trace = tracedSends < 2; tracedSends += 1
         try await task.send(.string(text))
+        if trace { RelayConnectionTrace.shared.record("socket_sent_ms=\(Int(Date().timeIntervalSince(started) * 1000))") }
     }
     public func receive() async throws -> String {
         guard let task else { throw RelayFailure.closed() }
@@ -158,6 +179,7 @@ public actor RelayClient {
         if lastDeviceID != pairing.deviceID || lastServiceID != pairing.serviceID { reducers.removeAll(); snapshots.removeAll(); commandHashes.removeAll(); stoppedSessions.removeAll(); workspaceScopeID = nil }
         lastDeviceID = pairing.deviceID; lastServiceID = pairing.serviceID
         let id = UUID(); connectionID = id; self.pairing = pairing; setState(.connecting)
+        RelayConnectionTrace.shared.record("connect_start selfHosted=\(pairing.isSelfHosted) timeout=\(requestTimeout)")
         do {
             try await transport.connect(pairing: pairing)
             receiveTask = Task { [weak self, transport] in
@@ -185,6 +207,8 @@ public actor RelayClient {
     public func disconnect() async { await terminate(error: RelayFailure.closed(), next: .idle) }
     private func transportFailed(_ error: any Error, connectionID id: UUID) async {
         guard connectionID == id else { return }
+        let native = error as NSError
+        RelayConnectionTrace.shared.record("transport_failed domain=\(native.domain) code=\(native.code) relay=\((error as? RelayFailure)?.code ?? "none")")
         let failure = (error as? RelayFailure) ?? RelayFailure("relay_transport_failed", "The encrypted relay connection closed. Reconcile pending commands before reconnecting.", outcomeUncertain: true)
         emit(.failure(failure)); await terminate(error: failure, next: failure.code == "controller_replaced" ? .replaced : .disconnected)
     }
@@ -225,11 +249,13 @@ public actor RelayClient {
         guard text.utf8.count <= RelayWire.maxFrame else { throw RelayFailure.invalid("Oversized relay envelope.") }
         let value = try RelayJSON(data: Data(text.utf8)), type = try value.requiringString("type")
         if type == "auth_challenge" {
+            RelayConnectionTrace.shared.record("auth_challenge")
             guard !paired, let pairing else { throw RelayFailure.invalid("Unexpected authentication challenge.") }
             let proof = try pairing.challengeProof(nonce: value.requiringString("nonce"))
             try await sendEnvelope(.object(["type": .string("auth_response"), "device_sid": .string(pairing.deviceID), "proof": .string(proof), "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))])); return
         }
         if ["auth_ack", "pair_status_ack"].contains(type) {
+            RelayConnectionTrace.shared.record(type + " status=" + (["matched", "waiting"].contains(value["pair_status"].string ?? "") ? value["pair_status"].string! : "invalid"))
             lastHeartbeat = ProcessInfo.processInfo.systemUptime
             switch value["pair_status"].string {
             case "matched":
@@ -244,6 +270,9 @@ public actor RelayClient {
         }
         guard type == "data", paired else { return }
         let payload = value["payload"], subtype = try payload.requiringString("zcode_type")
+        // Valid incoming application traffic also proves transport liveness when
+        // a heartbeat acknowledgement waits behind a large ordered message.
+        lastHeartbeat = ProcessInfo.processInfo.systemUptime
         if ["rpc-frame", "rpc-frame-ack"].contains(subtype) {
             // The official v4 receiver ignores residual RPC traffic until a bridge is attached.
             // Never acknowledge or decode a previous bridge's traffic in the new connection.
@@ -273,7 +302,13 @@ public actor RelayClient {
         if subtype == "workspace-list-updated" {
             let list = try payload["result"].decode(RelayBootstrap.self); knownWorkspaces = list.workspaces; emit(.workspaces(list)); return
         }
-        if ["bridge-degraded", "workspace-bridge-error", "app-error"].contains(subtype) { throw RelayFailure("desktop_bridge_degraded", "The original desktop service is unavailable.", outcomeUncertain: true) }
+        if subtype == "bridge-degraded" {
+            // A new controller can receive the previous bridge's queued fault.
+            // Only a fault scoped to our attached bridge may end this connection.
+            guard let bridge, bridge.identity.matches(payload) else { return }
+            throw RelayFailure("desktop_bridge_degraded", "电脑连接暂时中断，正在尝试恢复。", outcomeUncertain: true)
+        }
+        if ["workspace-bridge-error", "app-error"].contains(subtype) { throw RelayFailure("desktop_bridge_degraded", "The original desktop service is unavailable.", outcomeUncertain: true) }
     }
     private func startHeartbeat(_ id: UUID) {
         heartbeatTask = Task { [weak self] in
@@ -382,8 +417,8 @@ public actor RelayClient {
         guard !workspaceOpening else { throw RelayFailure("relay_busy", "Wait for the selected desktop workspace to finish opening.") }
         let target = params["sessionId"]?.string ?? params["taskId"]?.string ?? params["envelope"]?["sessionId"].string
         let childHistorySubscribe = method == "subscribeConversationV4" && target != nil && RelayChildHistoryOperation.sessionID == target
-        if let target, readOnlySubagents.contains(target), !(channel == "zcode-agent" && (method == "readSession" && params["runtimePolicy"]?.string == "existing-only" || childHistorySubscribe)) {
-            throw RelayFailure("session_read_only", "Subagent records can only be read through their existing host runtime.")
+        if let target, readOnlySubagents.contains(target), !(channel == "zcode-agent" && (method == "readSession" && params["runtimePolicy"]?.string == "existing-only" || childHistorySubscribe || method == "conversationRowsRangeV4" && reducers[target]?.projection != nil)) {
+            throw RelayFailure("session_read_only", "Subagent records permit only verified history reads.")
         }
         try await waitForIPC(); try Task.checkCancellation(); guard let bridge else { throw RelayFailure.closed() }
         if let expected = RelayWorkspaceOperation.expectedBridge, expected != bridge { throw RelayFailure("relay_workspace_changed", "The workspace changed before this operation completed.") }
@@ -425,7 +460,8 @@ public actor RelayClient {
         let body = try message.body.jsonValue()
         switch message.type {
         case 201: completeRPC(id, result: .success(body))
-        case 202, 203: completeRPC(id, result: .failure(RelayFailure("desktop_rpc_error", "The desktop rejected the service request.")))
+        case 202, 203:
+            completeRPC(id, result: .failure(RelayFailure("desktop_rpc_error", "The desktop rejected the service request.")))
         case 204: if id == conversationListener { receiveConversation(body) }
         default: throw RelayFailure.invalid("Unsupported service response type.")
         }
@@ -433,7 +469,13 @@ public actor RelayClient {
 
     public func listTasks(archived: Bool = false, pinned: Bool = false) async throws -> [RelayTaskMetadata] {
         let result = try await rpc("zcode-task", archived ? "listArchivedTasks" : pinned ? "listPinnedTasks" : "listTasks")
-        return try result.decode([RelayTaskMetadata].self)
+        return try result.decode([RelayTaskMetadata].self).map { item in
+            var fields = try RelayJSON(data: JSONEncoder().encode(item)).requiringObject()
+            // List membership is authoritative; the task DTO may omit these flags.
+            fields["pinned"] = .bool(pinned && !archived)
+            fields["archived"] = .bool(archived)
+            return try RelayJSON.object(fields).decode(RelayTaskMetadata.self)
+        }
     }
     public func readSession(_ sessionID: String, messageLimit: Int = 500) async throws -> RelaySessionSnapshot {
         guard !sessionID.isEmpty, (1...1000).contains(messageLimit) else { throw RelayFailure.invalid("Invalid session read parameters.") }
@@ -473,7 +515,25 @@ public actor RelayClient {
             raw = try await RelayChildHistoryOperation.$sessionID.withValue(sessionID) {
                 _ = try await subscribe(sessionID: sessionID, resume: false)
                 do {
-                    let snapshot = try await rpc("zcode-agent", "readSession", readParams)
+                    let snapshot: RelayJSON
+                    do { snapshot = try await rpc("zcode-agent", "readSession", readParams) }
+                    catch let failure as RelayFailure where failure.code == "desktop_rpc_error" {
+                        // V4 can serve persisted child rows without creating a legacy runtime.
+                        // Its scoped directory and validated conversation topic establish identity.
+                        let deadline = ContinuousClock.now + .seconds(12)
+                        while reducers[sessionID]?.projection == nil, ContinuousClock.now < deadline {
+                            try Task.checkCancellation()
+                            guard bridge == selected else { throw RelayFailure.closed() }
+                            try await Task.sleep(for: .milliseconds(40))
+                        }
+                        guard bridge == selected, let projection = reducers[sessionID]?.projection else {
+                            throw RelayFailure("relay_subagent_history_unavailable", "The desktop has not returned this subagent's saved conversation.")
+                        }
+                        snapshot = .object([
+                            "session": .object(["sessionId": .string(sessionID), "title": .string(projection.title), "status": .string(projection.phase)]),
+                            "conversationProjection": projection.raw
+                        ])
+                    }
                     try await unsubscribe(sessionID: sessionID)
                     return snapshot
                 } catch {
@@ -483,6 +543,12 @@ public actor RelayClient {
             }
         }
         let result = try RelaySessionSnapshot(raw: raw)
+        if raw["conversationProjection"] != .null {
+            let projection = try RelayConversationProjection(raw: raw["conversationProjection"])
+            guard bridge == selected, projection.sessionID == sessionID,
+                  try raw.data().count <= 16 * 1024 * 1024 else { throw RelayFailure.invalid("Invalid child conversation scope or size.") }
+            return result
+        }
         try validateSubagentIdentity(raw["session"], sessionID: sessionID, parentSessionID: parentSessionID, selected: selected)
         guard raw["messages"].array != nil, result.messages.allSatisfy({ ($0["info"]["messageId"].string ?? $0["info"]["id"].string)?.isEmpty == false }) else {
             throw RelayFailure.invalid("The host omitted subagent history or original message identities.")
@@ -639,6 +705,10 @@ public actor RelayClient {
             let ack = try result.decode(RelayCommandAck.self)
             guard ack.commandId == command.commandId else { throw RelayFailure.invalid("The desktop acknowledged another command.") }
             if command.type == "stop", !ack.admitted, let sessionID = command.sessionId { stoppedSessions.remove(sessionID) }
+            if ack.status == "stale", ack.reasonCode == "proto.staleRevision",
+               ["deleteQueueItem", "editQueueItem", "switchModelConfig"].contains(command.type) {
+                commandHashes.removeValue(forKey: key)
+            }
             emit(.command(ack)); return ack
         } catch { emit(.commandUncertain(.init(sessionId: command.sessionId, commandId: command.commandId))); throw error }
     }
@@ -653,7 +723,7 @@ public actor RelayClient {
         if ["requestWorkspaceHookReview", "respondWorkspaceHookReview", "toggleWorkspaceHookReviewItem", "revokeWorkspaceHookTrust"].contains(command.type) {
             try validateHookReviewCommand(command, authorization: hookReviewAuthorization); return
         }
-        let keys: [String: Set<String>] = ["sendText": ["text", "attachments", "requestedDelivery"], "sendGoalCommand": ["text", "displayText"], "stop": ["expectedForegroundExecutionId"], "forkAssistant": ["target"], "renameSession": ["title"], "resolveInteraction": ["interactionId", "answer"], "switchModelConfig": ["provider", "model", "thought"], "switchCollaborationMode": ["mode"], "pauseGoal": [], "resumeGoal": []]
+        let keys: [String: Set<String>] = ["editQueueItem": ["queueItemId", "newText"], "deleteQueueItem": ["queueItemId"], "sendQueuedNow": ["queueItemId"], "sendText": ["text", "attachments", "requestedDelivery"], "sendGoalCommand": ["text", "displayText"], "stop": ["expectedForegroundExecutionId"], "forkAssistant": ["target"], "renameSession": ["title"], "resolveInteraction": ["interactionId", "answer"], "switchModelConfig": ["provider", "model", "thought"], "switchCollaborationMode": ["mode"], "pauseGoal": [], "resumeGoal": []]
         guard let allowed = keys[command.type], Set(payload.keys).isSubset(of: allowed) else { throw RelayFailure("relay_command_unsupported", "This command or payload field is not exposed by the native adapter.") }
         switch command.type {
         case "sendGoalCommand":
@@ -667,6 +737,12 @@ public actor RelayClient {
         case "forkAssistant":
             _ = try RelayRowTarget(wire: payload["target"] ?? .null)
             guard command.baseRevision != nil, command.baseLogEpoch?.isEmpty == false else { throw RelayFailure.invalid("Fork requires the source projection revision and epoch.") }
+        case "editQueueItem", "deleteQueueItem", "sendQueuedNow":
+            guard let id = payload["queueItemId"]?.string, !id.isEmpty,
+                  reducers[sessionID]?.projection?.raw["queue"]["items"].array?.contains(where: { $0["queueItemId"].string == id }) == true else { throw RelayFailure("queue_item_missing", "这条消息已被处理，请刷新会话。") }
+            if command.type == "editQueueItem" {
+                guard let text = payload["newText"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 128_000 else { throw RelayFailure.invalid("Invalid queued message text.") }
+            }
         case "renameSession": guard let title = payload["title"]?.string, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 200 else { throw RelayFailure.invalid("Invalid task title.") }
         case "switchCollaborationMode":
             guard let mode = payload["mode"]?.string, ["build", "edit", "plan", "yolo"].contains(mode) else { throw RelayFailure.invalid("Unsupported collaboration mode.") }
