@@ -28,6 +28,15 @@
 
 本次保持仓库 Private。历史清理只针对内部过程材料，保留代码分支；仓库外保留私有备份用于恢复。不公开扫描识别正文、QR 内容、账号审核记录、私有连接信息或原始扫描输出。
 
+## 清理后核验 / Post-cleanup verification
+
+- GitHub 两个分支的 SHA、全部可达提交和完整目录树已通过 API 回读，与过滤后的本地镜像一致：35 个可达提交，当前 237 个文件。
+- 对全部可达历史再次运行 Gitleaks：0 命中；删除规则覆盖的文件为 0，原界面演示数据的历史 blob 为 0。
+- Bridge 完整回归为 128/128 通过；Relay Core、Relay Auth、Relay Adapter 自测及对应 iOS 26 SDK 编译检查通过。最终演示数据与展示文字改动另做 Swift 语法解析，文档本地链接检查通过。
+- 此核验覆盖当前分支可达历史，不代表 GitHub 服务端缓存或既有私有克隆已被物理抹除。旧工作目录与恢复备份仍应保持私有。
+
+The remote branches, complete commit lists and file tree match the cleaned mirror. The final history scan has zero findings. No removed artifact paths or original presentation-data blobs remain reachable from those branches. Bridge regression tests pass (128/128); relay self-tests and Swift syntax checks also pass. Existing private clones and server-side unreachable-object retention are outside this verification.
+
 ## 复查 / Recheck
 
 ```sh
