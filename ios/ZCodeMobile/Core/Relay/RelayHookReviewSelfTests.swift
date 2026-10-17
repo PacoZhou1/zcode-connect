@@ -13,7 +13,7 @@ private func hookReject(_ body: () throws -> Void) throws {
 }
 
 func hookReviewFixture(generation: Int = 1) throws -> RelayHookReviewRequest {
-    let directory = CommandLine.arguments.dropFirst().first ?? "/Users/developer/claude code/zcode-mobile/docs/backend/evidence"
+    let directory = CommandLine.arguments.dropFirst().first ?? FileManager.default.currentDirectoryPath + "/tests/fixtures/relay"
     let evidence = try RelayJSON(data: Data(contentsOf: URL(fileURLWithPath: directory).appending(path: "hook-review-contract.json")))
     var value = try evidence["vectors"]["request"].requiringObject()
     value["sessionId"] = .string("session-test"); value["taskId"] = .string("session-test"); value["workspaceIdentity"] = .string("/workspace")

@@ -1,0 +1,81 @@
+{
+  "vectors": {
+    "request": {
+      "kind": "workspaceHookReview",
+      "reviewFlowId": "fixture-flow",
+      "generation": 1,
+      "interactionId": "fixture-review",
+      "sessionId": "fixture-session",
+      "taskId": "fixture-session",
+      "runId": "fixture-run",
+      "workspaceIdentity": "fixture-workspace",
+      "workspaceLabel": "Offline fixture",
+      "bundleDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "createdAt": 1700000000000,
+      "deadlineAt": 1700000600000,
+      "sourceFiles": [
+        {
+          "path": "/__nonexistent_fixture__/.zcode/config.json",
+          "displayPath": ".zcode/config.json",
+          "editable": true
+        }
+      ],
+      "summary": {
+        "eventCount": 1,
+        "hookCount": 1,
+        "pendingCount": 1
+      },
+      "items": [
+        {
+          "reviewItemId": "fixture-item",
+          "event": "UserPromptSubmit",
+          "type": "command",
+          "displayName": "Schema fixture only",
+          "displayCommand": "NEVER_EXECUTED_OFFLINE_FIXTURE",
+          "sourcePath": ".zcode/config.json",
+          "resolvedTimeoutMs": 1000,
+          "resolvedMaxOutputBytes": 1024,
+          "executionMode": "foreground",
+          "configuredEnabled": true,
+          "editable": true,
+          "trustState": "pending_trust"
+        }
+      ],
+      "warningCode": "workspace_hooks_execute_code"
+    },
+    "responseEnvelope": {
+      "commandId": "fixture-command",
+      "clientId": "fixture-client",
+      "sessionId": "fixture-session",
+      "type": "respondWorkspaceHookReview",
+      "payload": {
+        "sessionId": "fixture-session",
+        "taskId": "fixture-session",
+        "runId": "fixture-run",
+        "workspaceIdentity": "fixture-workspace",
+        "bundleDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "reviewFlowId": "fixture-flow",
+        "generation": 1,
+        "interactionId": "fixture-review",
+        "decision": {
+          "action": "trust_selected",
+          "reviewItemIds": [
+            "fixture-item"
+          ]
+        }
+      },
+      "issuedAt": 1700000000000
+    },
+    "clientHello": {
+      "kind": "clientHello",
+      "protocolVersion": 3,
+      "clientId": "fixture-client",
+      "clientKind": "mobileApp",
+      "appVersion": "unknown",
+      "capabilities": {
+        "workspaceHookReviewUi": true
+      }
+    }
+  },
+  "testDataOnly": true
+}

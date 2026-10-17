@@ -1,0 +1,11 @@
+title = "Zcode Connect secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Reviewed SHA-256 source-integrity entries, not authentication values"
+regexTarget = "line"
+regexes = [
+  '''^\s*["'](?:[^"'\r\n]+/)?(?:RelayAuthSelfTests\.swift|auth\.mjs|probe-private-relay-authenticated\.mjs)["']\s*:\s*["'][a-fA-F0-9]{64}["']\s*,?\s*$'''
+]

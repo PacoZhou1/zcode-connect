@@ -1,0 +1,122 @@
+{
+  "wires": [
+    {
+      "wireVersion": 3,
+      "kind": "complete",
+      "deliveryKind": "initial",
+      "logicalFrameId": "sub-mty5vfrd-vj1o4cex-1-lf-1",
+      "logicalFrameOrdinal": 1,
+      "topic": "conversation/fixture-10",
+      "subscriptionId": "sub-mty5vfrd-vj1o4cex-1",
+      "frame": {
+        "topic": "conversation/fixture-10",
+        "subscriptionId": "sub-mty5vfrd-vj1o4cex-1",
+        "sentAt": 1789204012776,
+        "fromSeq": 0,
+        "toSeq": 0,
+        "payload": {
+          "kind": "snapshot",
+          "snapshot": {
+            "protocolVersion": 1,
+            "sessionId": "fixture-10",
+            "logEpoch": "mty5vfrd-vj1o4cex",
+            "seq": 0,
+            "revision": 0,
+            "control": {
+              "phase": "draft",
+              "sessionEnded": false,
+              "canStop": false,
+              "stopState": "idle",
+              "stopTargetKind": "unknown",
+              "activeWorks": [],
+              "lastError": null,
+              "apiRetry": null
+            },
+            "availability": {
+              "fork": {
+                "allowed": false,
+                "reasonCode": "forkTargetNotStable"
+              },
+              "compact": {
+                "allowed": false,
+                "reasonCode": "idleCannotCompact"
+              },
+              "switchModelConfig": {
+                "allowed": true
+              },
+              "setFollowupMode": {
+                "allowed": true
+              },
+              "queueEdit": {
+                "allowed": true
+              },
+              "sendQueuedNow": {
+                "allowed": false,
+                "reasonCode": "sendQueuedNowRequiresRunning"
+              },
+              "pauseGoal": {
+                "allowed": false,
+                "reasonCode": "noGoalToPause"
+              },
+              "resumeGoal": {
+                "allowed": false,
+                "reasonCode": "noGoalToResume"
+              }
+            },
+            "inputRouting": {
+              "mode": "startNow"
+            },
+            "meta": {
+              "title": "Public demo content 6",
+              "titleSource": "default"
+            },
+            "config": {
+              "provider": "ea668817-72ad-430c-b16d-405b19895c88",
+              "model": "GLM-5.3-Flash-NVFP4",
+              "thought": "max",
+              "thoughtLevels": [
+                "low",
+                "high",
+                "max"
+              ],
+              "followupMode": "queue",
+              "mode": "plan"
+            },
+            "modelTransition": null,
+            "usage": {
+              "contextWindow": null,
+              "cumulative": {
+                "inputTokens": 0,
+                "outputTokens": 0,
+                "cacheReadTokens": 0,
+                "cacheWriteTokens": 0
+              }
+            },
+            "queue": {
+              "items": [],
+              "autoDrain": true
+            },
+            "pendingInteractions": [],
+            "pendingCommands": [],
+            "backgroundWorks": [],
+            "subagents": {
+              "revision": 0,
+              "childSessionIds": [],
+              "running": [],
+              "endedTotal": 0
+            },
+            "goal": null,
+            "plan": null,
+            "workspaceHookAdmission": null,
+            "rows": {
+              "window": [],
+              "totalCount": 0,
+              "firstRowId": null
+            }
+          }
+        }
+      }
+    }
+  ],
+  "testDataOnly": true
+}

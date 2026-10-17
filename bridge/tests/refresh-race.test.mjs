@@ -7,9 +7,9 @@ import { tmpdir } from 'node:os';
 import { BridgeService } from '../src/service.mjs';
 import { normalizeMessages } from '../src/history.mjs';
 
-// Real retained events/rows from the native feedback failure; never contact CLI or the running bridge.
-const retained = JSON.parse(readFileSync(new URL('../../docs/backend/evidence/native-plan-feedback-runtime-first.json', import.meta.url)));
-const saved = JSON.parse(readFileSync(new URL('../../docs/backend/evidence/native-plan-feedback-persisted-readonly.json', import.meta.url)));
+// Synthetic regression sequence; never contacts CLI or the running bridge.
+const retained = JSON.parse(readFileSync(new URL('../../tests/fixtures/bridge/refresh-events.json', import.meta.url)));
+const saved = JSON.parse(readFileSync(new URL('../../tests/fixtures/bridge/refresh-rows.json', import.meta.url)));
 const realEvents = retained.events.filter(event => event.type === 'runtime.event').map(event => event.data.event);
 const terminal = realEvents.find(event => event.type === 'turn.completed');
 const finalText = terminal.payload.response;
@@ -47,11 +47,11 @@ function fixture(t, read) {
   return { service, protocol, id };
 }
 
-test('real feedback terminal events drain a final read and cannot be overwritten by the in-flight running snapshot', async t => {
+test('synthetic feedback terminal events drain a final read and cannot be overwritten by the in-flight running snapshot', async t => {
   const stale = gate();
   const { service, protocol, id } = fixture(t, count => count === 1 ? stale.promise : snapshot('idle', true));
   const active = service.refresh(id); await until(() => protocol.calls.length === 1);
-  // These events actually arrived after the last streaming refresh had started.
+  // Replay terminal events after the last streaming refresh starts.
   for (const event of realEvents.filter(event => event.seq >= terminal.seq - 6 && event.seq <= terminal.seq)) service.onRuntimeEvent(clone(event));
   await pause(240); // The old implementation's scheduled terminal refresh joins the stale promise here.
   stale.resolve(snapshot('running')); await active;

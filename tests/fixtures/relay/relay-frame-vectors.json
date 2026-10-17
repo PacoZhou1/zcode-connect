@@ -1,0 +1,22 @@
+{
+  "rawIPCHex": "040406640600010a7a636f64652d7461736b01096c6973745461736b73040105267b22776f726b737061636550617468223a222f616363657074616e63652fe69687e4bbb6227d",
+  "frames": [
+    {
+      "zcode_type": "rpc-frame",
+      "bridgeSessionId": "bridge-golden",
+      "bridgeGeneration": 1,
+      "recoveryId": "recovery-golden",
+      "seq": 1,
+      "messageSeq": 1,
+      "fragmentIndex": 0,
+      "fragmentCount": 1,
+      "messageBytes": 71,
+      "checksum": {
+        "algorithm": "crc32",
+        "value": "0b2a1646"
+      },
+      "dataBase64": "BAQGZAYAAQp6Y29kZS10YXNrAQlsaXN0VGFza3MEAQUmeyJ3b3Jrc3BhY2VQYXRoIjoiL2FjY2VwdGFuY2Uv5paH5Lu2In0="
+    }
+  ],
+  "testDataOnly": true
+}

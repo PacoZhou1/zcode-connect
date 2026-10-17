@@ -1,0 +1,26 @@
+{
+  "vectors": [
+    {
+      "sid": "synthetic-auth-105",
+      "hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "nonce": "synthetic-nonce-105",
+      "proof": "nstjbJUuF5Uq62LbJeHbY2hbJ4tWYo_IEb7Lzg5k3Zo",
+      "url": "https://zcode.z.ai/remote/v4?sid=synthetic-auth-105&hash=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef&t=1789250000000&mid=synthetic-mid"
+    },
+    {
+      "sid": "synthetic-auth-unicode",
+      "hash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "nonce": "nonce-你好-✓",
+      "proof": "fUmEXzGLCCLJyyL1I3_MvGAIVzo8fXtxHztl1rFMiD8",
+      "url": "https://zcode.z.ai/remote/v4?sid=synthetic-auth-unicode&hash=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789&t=1789250000000&mid=synthetic-mid"
+    },
+    {
+      "sid": "mock-desktop",
+      "hash": "mock-pairing-value-0123456789-abcdef",
+      "nonce": "nonce-test",
+      "proof": "3CtbogEq61eptlsC1or1pFupeOXM3ojaQ42jVoXEab4",
+      "url": "https://zcode.z.ai/remote/v4?sid=mock-desktop&hash=mock-pairing-value-0123456789-abcdef&t=1789250000000&mid=synthetic-mid"
+    }
+  ],
+  "testDataOnly": true
+}

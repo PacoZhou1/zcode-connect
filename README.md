@@ -1,71 +1,59 @@
-# ZCode for iOS
+<p align="center"><img src="docs/marketing/app-icon.png" width="96" alt="Zcode Connect 图标"></p>
+<h1 align="center">Zcode Connect</h1>
+<p align="center">电脑上的 AI 任务，随身继续。</p>
+<p align="center"><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
+<p align="center"><a href="https://apps.apple.com/app/id6820455082">在 App Store 免费下载</a> · <a href="https://github.com/PacoZhou1/zcode-connect/issues">反馈问题</a></p>
 
-原生 SwiftUI / iOS 26 ZCode 远程客户端。以提供的 13 张 iPhone 17 Pro Max 截图与录屏为视觉依据，使用 Apple 原生导航、菜单、弹框、照片/文件选择器和公开 Liquid Glass API。
+![Zcode Connect 功能概览](docs/marketing/02-bento.jpg)
 
-当前仍在验收中：模拟器与本机隔离桥接的真实任务链路已通；逐像素材质校准、真实官方 Relay 和真机语音/联网验收尚未完成。不要将参考模式、构建成功或离线协议测试理解为这些项目已验收。
+## 这是做什么的？
 
-## 在本机运行
+电脑上的 AI 任务还在跑，你却要出门了。
 
-环境：Xcode 26.6、iOS 26.5 Simulator、Swift 6、XcodeGen。最低部署版本 iOS 26.0。
+Zcode Connect 让你在 iPhone 或 iPad 上连接电脑里的 ZCode，看看任务进展、接着聊几句、检查文件改动。任务仍然在电脑上运行，手机是你随身带着的操作入口。
 
-```sh
-cd "/Users/developer/claude code/zcode-native-ios/ios"
-xcodegen generate
-xcodebuild -project ZCodeMobile.xcodeproj -scheme ZCodeMobile \
-  -configuration Debug \
-  -destination 'platform=iOS Simulator,id=68D82EC9-8A3E-40F4-8B49-699F97C29347' \
-  -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build
-```
+这是一个独立开发的原生 iOS 客户端，采用 Liquid Glass 设计，不是 Z.ai 官方产品。
 
-从项目根目录打开截图对照模式：
+## 你可以用它做什么
 
-```sh
-python3 scripts/launch-simulator.py --install --reference --screen home
-```
+- **随时接着做**：打开已有项目和任务，继续对话，查看回复与执行步骤。
+- **切换多台电脑**：保存不同电脑的连接，按需要切换。
+- **看看智能体在忙什么**：查看子智能体的进展和对话，了解任务如何推进。
+- **查看文件和改动**：浏览项目文件，检查任务产生的变更。
+- **沿用你的模型配置**：模型和可用选项来自连接的电脑，不需要在手机上重新搭建一套环境。
+- **选择连接方式**：使用 ZCode 官方中转，或由有部署经验的用户配置自己的中转服务器。
 
-可选页面：`home`、`offline`、`goal`、`agents`、`keyboard`、`reasoning`、`permissions`、`attachments`、`advanced`、`files`、`thread-menu`、`rename`、`new`、`voice`。参考内容只在显式 Debug 启动参数启用；`voice` 的演示音量不证明实际识别。第三方键盘不是 App 内容。
+App 支持简体中文、英语、日语、法语、韩语和德语，默认跟随系统语言，也可以在设置中单独切换。
 
-当前已运行的桥接保留在原目录 `/Users/developer/claude code/zcode-mobile/bridge`，私有 runtime 没有复制到本工作树。检查状态：
+## 开始使用
 
-```sh
-cd "/Users/developer/claude code/zcode-mobile/bridge"
-python3 scripts/background-server.py status
-```
+1. 从 [App Store](https://apps.apple.com/app/id6820455082) 安装 App，需要 **iOS / iPadOS 26 或更新版本**。
+2. 在电脑上准备 [ZCode](https://zcode.z.ai/)。使用支持远程连接的桌面版本，并打开它的远程连接入口。
+3. 在手机上扫码或粘贴完整配对信息，核对电脑和中转地址，确认连接。
+4. 选择项目，打开任务，就可以继续了。
 
-连接这套本机验收服务（项目根目录执行）：
+**电脑需要保持开机、联网，ZCode 也需要运行。** App 本身免费；你选择的模型或第三方服务可能另行计费。请不要把配对二维码或链接发给别人，它们包含连接凭据。
 
-```sh
-python3 scripts/launch-simulator.py --install \
-  --token-file '/Users/developer/claude code/zcode-mobile/bridge/.runtime/pairing-token'
-```
+没有自己的服务器也可以使用官方中转。自建中转是面向有服务器和部署经验的用户的进阶选项，需要单独配置；仅下载本仓库不会自动完成桌面或服务器部署。
 
-不要在运行旧服务时再启动本工作树中的第二个桥接。密钥通过启动环境传递，不进入命令参数或截图。正式 App 从连接页扫描/粘贴官方连接信息，或填写桥接地址和密钥；官方控制器连接可能替换另一台手机，界面会请求确认。
+## 看看实际使用场景
 
-## 已有功能与实际边界
+<table><tr>
+<td><img src="docs/marketing/01-anywhere.jpg" alt="电脑上的任务，随身继续"></td>
+<td><img src="docs/marketing/03-agents.jpg" alt="查看智能体进展"></td>
+<td><img src="docs/marketing/04-conversation.jpg" alt="继续对话与下载入口"></td>
+</tr></table>
 
-- 右上角切换电脑、主机/项目选择、任务列表与搜索、固定/归档/重命名、长按会话预览与未读标记。预览不清除未读，打开会话按主机时间戳条件清除。
-- 新任务、持久正文/附件草稿、稳定输入 ID 重试、流式回复、停止任务、工具步骤与结构化审批/问答。
-- 从主机读取模型、思考强度、权限和方案模式；保留主机选定模型，不替换为参考模型。
-- 目标和智能体入口由主机活动决定；暂停/恢复只在主机提供能力时出现。不伪造移除目标或未支持的主机命令。
-- 照片/文件/相机入口、已发送图片预览、文件树/搜索/预览、工作区变更。PDF 理解取决于主机模型，不声称当前模型支持。
-- 麦克风音量驱动波形、中文语音识别、停止留稿/直接发送、取消与后台清理。真实中文 ASR 尚待实际录音验收。
-- 官方 Relay 适配层、历史加载、任务列表分页、手动重连、Keychain 凭据；实际官方连接尚未配对验收。
-- HTTPS 证书 pin、主机名校验、拒绝重定向、SSE：专用模拟器 TLS fixture 5/5 通过。没有打开 LAN/公网监听，真机远程可达性未验。
+宣传图中的项目名、聊天和任务内容都是公开演示示例。Bento 的对话与首页基于截图进行脱敏编辑；模型列表用于说明配置方式，不表示每个模型都默认可用。
 
-当前桥接对既有桌面任务只读；由本客户端创建的任务使用隔离 CLI store，可完整控制。官方 Relay 的真实桌面控制能力须在正式配对后逐项验收。
+## 想研究源码？
 
-## 验收与交接
+普通用户直接安装 App 即可，不需要编译。想自行构建、部署或参与开发，请看 [开发说明](docs/DEVELOPMENT.md)。
 
-- [持续进展](docs/PROGRESS.md)
-- [13 图验收地图](docs/REFERENCE_MAP.md)
-- [录屏动效依据与对照](docs/MOTION_REFERENCE.md)
-- [首页长按预览](docs/HOME_CONTEXT_REFERENCE.md)
-- [未读并发回归](docs/audit/UNREAD_REVIEW.md)
-- [前端流程审查](docs/audit/FRONTEND_FLOW_REVIEW.md)
-- [分页并发回归](docs/audit/SESSION_PAGINATION_REVIEW.md)
-- [后端交接](docs/backend/HANDOFF.md)
-- [安全远程连接方案](docs/backend/SECURE_CONNECTION.md)
+仓库正在进行开源前整理；现有源码快照与 App Store 版本不保证一一对应。安全与公开准备状态见 [开源前审查](docs/security/OPEN_SOURCE_REVIEW_20261017.md)。正式开源许可证尚待确认，不把“可以看到代码”等同于已获得开源许可。
 
-`evidence/` 保留构建日志、模拟器截图/录屏、独立验收数据。不同编号来自不同构建，最终统一截图仍在更新；不存在“全部像素已一致”的验收结论。源码没有推送 GitHub，也没有上传 TestFlight。真机签名需在 Xcode 中选择自己的开发团队。
+## 联系与反馈
 
-多电脑交互与验证边界见 [COMPUTER_SWITCHING.md](docs/COMPUTER_SWITCHING.md)。
+发现问题可以提交 [Issue](https://github.com/PacoZhou1/zcode-connect/issues)，说明 App 版本、电脑端版本和复现步骤；截图和日志请先去掉配对信息及私人内容。
+
+支持邮箱：**3141791843@qq.com**。安全问题请通过邮箱私下联系，参见 [安全说明](SECURITY.md)。

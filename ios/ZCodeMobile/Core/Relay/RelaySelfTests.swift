@@ -297,7 +297,7 @@ actor MockRelaySocket: RelaySocketTransport {
                     // Host restoration completes independently of accepting later RPC frames.
                     // Sleeping inside send() would serialize reads behind this ACK and hide the race.
                     let delay = coldOpenDelay
-                    Task {
+                    _ = Task {
                         try await Task.sleep(for: delay)
                         if connected { try completeConversationSubscription(id, params: params) }
                     }
@@ -398,7 +398,7 @@ actor MockRelaySocket: RelaySocketTransport {
         checks += try runHookReviewDTOTests()
         checks += try await runConversationCapabilityTests()
         checks += try await runHookReviewClientTests()
-        let evidenceDirectory = CommandLine.arguments.dropFirst().first ?? "/Users/developer/claude code/zcode-mobile/docs/backend/evidence"
+        let evidenceDirectory = CommandLine.arguments.dropFirst().first ?? FileManager.default.currentDirectoryPath + "/tests/fixtures/relay"
         let vectors = try RelayJSON(data: Data(contentsOf: URL(fileURLWithPath: evidenceDirectory + "/relay-ipc-vectors.json")))
         for vector in vectors["vectors"].array! {
             let bytes = try hex(vector["hex"].string!), decoded = try RelayIPCCodec.decode(bytes)

@@ -54,7 +54,7 @@ test('message IDs remain unique and stable across protocol and database shapes',
 });
 
 test('host visibility metadata hides control reminders while preserving real user text and controlOnly inputs', () => {
-  const evidence = JSON.parse(readFileSync(new URL('../../docs/backend/evidence/goal-control-message-metadata.json', import.meta.url), 'utf8'));
+  const evidence = JSON.parse(readFileSync(new URL('../../tests/fixtures/bridge/goal-message-metadata.json', import.meta.url), 'utf8'));
   const rows = evidence.rows.map(row => ({ info: { ...row.info, id: row.id }, parts: row.parts.map(part => ({ ...part.data, id: part.id })) }));
   const messages = normalizeMessages(rows);
   assert.equal(messages.length, 1); assert.equal(messages[0].role, 'user'); assert.match(messages[0].text, /^\/goal /);

@@ -6,7 +6,7 @@ import { ConversationAssembler, reduceConversation, activityFromProjection, empt
 import { EventJournal } from '../src/events.mjs';
 import { crc32 } from '../src/relay/codec.mjs';
 
-const fixture = JSON.parse(readFileSync(new URL('../../docs/backend/evidence/host-activity-probe.json', import.meta.url), 'utf8')).wires[0];
+const fixture = JSON.parse(readFileSync(new URL('../../tests/fixtures/bridge/host-activity.json', import.meta.url), 'utf8')).wires[0];
 const sessionId = fixture.frame.payload.snapshot.sessionId;
 const delta = (from, to, deltas) => ({ topic: fixture.topic, subscriptionId: fixture.subscriptionId, fromSeq: from, toSeq: to, payload: { kind: 'deltas', deltas } });
 

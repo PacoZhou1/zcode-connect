@@ -1,22 +1,20 @@
-# ZCode Mobile Bridge
+# Zcode Connect HTTP bridge
 
-Local Node.js service for the native iOS client. Requires Node.js 22.13+ and the installed ZCode app.
+This optional Node.js service provides a separate HTTP connection mode for the iOS client. It is not the native ZCode relay protocol and is not required when using the official relay.
+
+这个可选的 Node.js 服务提供独立 HTTP 桥接模式，与原生扫码配对协议不同。使用官方中转时无需部署它。
+
+## Development
+
+Requires Node.js 22.13 or later. Run offline tests with:
 
 ```sh
-cd "/Users/developer/claude code/zcode-mobile/bridge"
-npm start
+cd bridge
+npm test
 ```
 
-The listener is `127.0.0.1:18789`. Its pairing token is created at `.runtime/pairing-token` with mode `0600`. Display it locally in an interactive terminal with `npm run pair`; never put it in a URL. iOS Simulator can connect to the loopback listener.
+Configure your own local environment before starting a service. Keep tokens, runtime state and private diagnostics outside Git. Start scripts are provided for development; they must not be pointed at another user's desktop data or live pairing environment without their authorization.
 
-`npm run check` reads availability and counts without printing private transcripts. `npm test` runs deterministic protocol, isolation, authentication, replay, file, and attachment tests. `npm run smoke` performs real model requests in a dedicated acceptance workspace, verifies attachment delivery and stopping, and archives its own task. It writes sanitized evidence to `../docs/backend/evidence/latest-smoke.json`.
+配置服务时使用自己的本地环境和凭据；密钥、运行状态与诊断日志不要提交到 Git。开发脚本不得未经授权指向他人的桌面数据或真实配对环境。
 
-Configuration uses `ZCODE_MOBILE_RUNTIME_DIR`, `ZCODE_MOBILE_DESKTOP_ROOT`, `ZCODE_MOBILE_CLI_PATH`, and `ZCODE_MOBILE_PORT`. The runtime directory contains private session storage and uploads; it must not be committed. Only loopback binding is allowed. Remote and physical-device networking require a separately authorized secure route.
-
-Existing desktop tasks are read-only. Tasks created through the bridge use an isolated session store and the current configured model. The bridge does not modify the running desktop database, transcript files, app bundle, or model defaults.
-
-`npm run smoke:interactions`, `npm run smoke:denials`, and `npm run smoke:restart` cover real approval/question flows, rejection, stopping while waiting, and recovery of persisted tasks. `node scripts/secure-gateway.mjs --plan` prepares the connection review without opening network access. See [encrypted phone routing](../docs/backend/SECURE_CONNECTION.md).
-
-`npm run smoke:drafts` verifies `clientDraftId` creation idempotency without generating a model response. `npm run smoke:https` verifies a real reply and SSE through a pinned ephemeral loopback HTTPS gateway. `npm run verify:relay` and `npm run inspect:relay` compare cached public official-relay wire/schema evidence offline; neither pairs with the desktop. The experimental relay's exact payloads and live acceptance boundary are in [RELAY_PROTOCOL.md](../docs/backend/RELAY_PROTOCOL.md).
-
-See [the HTTP contract](../docs/backend/HTTP_CONTRACT.md) and [protocol evidence](../docs/backend/PROTOCOL_EVIDENCE.md) for capability boundaries and acceptance details.
+See the [project overview](../README.md), [development notes](../docs/DEVELOPMENT.md), and [security policy](../SECURITY.md).

@@ -1,0 +1,1342 @@
+{
+  "events": [
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:458",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:34.563Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "d4f1b1a3-0fb7-48ea-a9f5-b3443900cb6c",
+          "payload": {
+            "previousTitle": "",
+            "source": "first_input",
+            "title": "Public demo content 1"
+          },
+          "seq": 1,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245094558,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "type": "session.titleUpdated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:461",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:35.293Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "da3599ee-6956-47d2-aae8-b55b352e441b",
+          "payload": {
+            "turnNumber": 0,
+            "input": "This is a native plan-feedback acceptance test. There is no implementation task and no file access is needed. Call ExitPlanMode exactly once with this inline plan: Acceptance-only plan: wait for the user review. No commands, file access, code changes, or other actions will be performed. Omit allowedPrompts. Then wait for the native user to submit non-approval modification feedback. After that feedback arrives, reply only with NATIVE_PLAN_FEEDBACK_RECEIVED followed by the exact feedback text, then end. Do not repeat the plan review, request approval again, propose another plan, execute the plan, or call any tool after receiving feedback. At all times do not read or write files, create a plan file, run commands, use other tools, request permissions, or change settings. If the user declines without feedback, end without retrying.",
+            "messageId": "fixture-2",
+            "inputId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "foregroundExecutionId": "runtime_command_5",
+            "queryId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "intent": {
+              "sourceCommandId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+              "queueItemId": "queue_native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+              "clientId": "zcode-mobile-bridge",
+              "kind": "sendText",
+              "text": "Public demo content 2",
+              "admissionSeq": 1,
+              "admittedAt": 1789245094553,
+              "requestedDelivery": "startNow",
+              "admittedDelivery": "startNow"
+            }
+          },
+          "seq": 2,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245095288,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "turn.started"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:462",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:35.307Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "f021d44b-513e-4150-a496-50f3c84a6866",
+          "payload": {
+            "pendingInputId": "queue_native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "sourceCommandId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "messageId": "fixture-2"
+          },
+          "seq": 3,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245095305,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:466",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:37.388Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "43e2ab95-61d4-4493-a6a4-0080c732a577",
+          "payload": {
+            "messageCount": 7,
+            "model": "ea668817-72ad-430c-b16d-405b19895c88/GLM-5.3-Flash-NVFP4",
+            "modelRef": {
+              "providerId": "ea668817-72ad-430c-b16d-405b19895c88",
+              "modelId": "GLM-5.3-Flash-NVFP4"
+            },
+            "toolCount": 66,
+            "iteration": 0
+          },
+          "seq": 4,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245097386,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:467",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:37.393Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "836b03d6-34b3-426b-8a53-68013adbbb13",
+          "payload": {
+            "baseURL": "https://provider.example.invalid",
+            "maxAttempts": 11,
+            "model": {
+              "providerId": "ea668817-72ad-430c-b16d-405b19895c88",
+              "modelId": "GLM-5.3-Flash-NVFP4",
+              "role": "main",
+              "source": "session",
+              "variant": "max"
+            },
+            "modelRequestSessionType": "main",
+            "requestId": "f7002609-702c-49a1-a26b-4a0334fe672d",
+            "sessionId": "fixture-1",
+            "spanId": "19166933-37f1-48",
+            "parentSpanId": "9d4d712a-7ffe-41",
+            "querySource": "main_turn",
+            "queryId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+            "providerKind": "openai-compatible",
+            "transport": "sse",
+            "turnId": "fixture-3",
+            "modelCall": {
+              "operation": "agent_step",
+              "actorKind": "main",
+              "operationId": "19166933-37f1-48",
+              "logicalCallId": "32c275a0-92aa-4349-96c5-f28ea7debdb4",
+              "stepIndex": 0,
+              "reasoning": {
+                "capability": "supported",
+                "requestedControl": "fixed_level",
+                "requestedState": "enabled",
+                "effectiveControl": "fixed_level",
+                "effectiveState": "enabled",
+                "requestedLevel": "max",
+                "effectiveLevel": "max"
+              }
+            },
+            "attempt": 1,
+            "requestHeaderCount": 15,
+            "requestHeaders": {
+              "http-referer": "https://zcode.z.ai",
+              "user-agent": "ZCode/unknown",
+              "x-title": "Z Code@electron",
+              "x-release-channel": "production",
+              "x-client-language": "en-US",
+              "x-client-timezone": "Asia/Shanghai",
+              "x-platform": "darwin-arm64",
+              "x-os-category": "macos",
+              "x-os-version": "27.0.0",
+              "x-zcode-agent": "glm",
+              "x-request-id": "f7002609-702c-49a1-a26b-4a0334fe672d",
+              "x-zcode-session-type": "main",
+              "x-zcode-trace-id": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+              "x-query-id": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+              "x-session-id": "ee554b11-98d6-4e0f-a7f8-eadc1036030c"
+            },
+            "timestamp": "2026-09-12T20:31:37.390Z",
+            "type": "model_request_started",
+            "_meta": {
+              "zcode": {
+                "apiRetry": null
+              }
+            }
+          },
+          "seq": 5,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245097392,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:469",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:39.080Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "90c2f62e-a60c-475d-a039-0177610f0eeb",
+          "payload": {
+            "assistantMessageId": "fixture-4",
+            "delta": "The",
+            "done": false,
+            "kind": "reasoning_delta"
+          },
+          "seq": 6,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245099080,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:470",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:39.458Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "07d99261-fc88-4cc3-acf9-98c601e8551e",
+          "payload": {
+            "assistantMessageId": "fixture-4",
+            "delta": " user is giving me explicit instructions for a native plan-feedback acceptance test. They want me to:\n\n1. Call ExitPlanMode exactly once with the inline plan: \"Acceptance-only plan: wait for the user review. No commands, file access, code changes, or other actions will be performed.\" —",
+            "done": false,
+            "kind": "reasoning_delta"
+          },
+          "seq": 8,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245099457,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:472",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:39.835Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "55d037df-7390-4c43-979f-22b7fb2dffa9",
+          "payload": {
+            "assistantMessageId": "fixture-4",
+            "delta": " omitting allowedPrompts.\n2. Then wait for the native user to submit non-approval modification feedback.\n3. After feedback arrives, reply only with NATIVE_PLAN_FEEDBACK_RECEIVED followed by the exact feedback text, then end.\n4. Don't repeat the plan review, request approval again, propose another plan, execute the plan, or call any tool after receiving feedback.\n5. Don't read/write files, create plan files, run commands, use other tools, request permissions, or change settings.\n6. If declined",
+            "done": false,
+            "kind": "reasoning_delta"
+          },
+          "seq": 10,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245099834,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:474",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.211Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "8d67b525-06b7-4c58-8b9a-151f2dea0f96",
+          "payload": {
+            "assistantMessageId": "fixture-4",
+            "delta": " without feedback, end without retrying.\n\nThis is a test scenario — the user explicitly says there is no implementation task and no file access is needed. The instruction is clear and self-contained. I should just call ExitPlanMode with the exact plan text and no allowedPrompts.\n\nThe plan mode workflow instructions say to explore, design, review, etc., but the user's explicit instruction overrides this — they explicitly state this is an acceptance test with no implementation task",
+            "done": false,
+            "kind": "reasoning_delta"
+          },
+          "seq": 12,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100211,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:476",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.404Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "9a9ae93b-5e5e-4d37-adee-dec6689b0869",
+          "payload": {
+            "assistantMessageId": "fixture-4",
+            "delta": ". The system reminder says plan mode instructions supersede other instructions, but the ExitPlanMode call is exactly what the plan workflow ends with anyway. The user's instruction is compatible: call ExitPlanMode once with the inline plan.\n\nSo I'll call ExitPlanMode now with the exact plan text, omitting allowedPrompts.",
+            "done": false,
+            "kind": "reasoning_delta"
+          },
+          "seq": 13,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100391,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:477",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.404Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "e41aa8aa-32d7-4d5b-bf42-a5ba967ebf35",
+          "payload": {
+            "assistantMessageId": "fixture-4",
+            "delta": "",
+            "done": false,
+            "kind": "tool_input_start",
+            "toolCallId": "chatcmpl-tool-ba0ec0ce4168f43a",
+            "toolName": "ExitPlanMode"
+          },
+          "seq": 14,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100404,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:478",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.603Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "8bbfe64e-11e6-41e4-a03c-a8c156504ae0",
+          "payload": {
+            "assistantMessageId": "fixture-4",
+            "delta": "{\"plan\": \"Acceptance-only plan: wait for the user review. No commands, file access, code changes, or other actions will be performed.\"}",
+            "done": false,
+            "kind": "tool_input_delta",
+            "toolCallId": "chatcmpl-tool-ba0ec0ce4168f43a"
+          },
+          "seq": 15,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100603,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:479",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.604Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "3e470912-087f-483e-b678-1ff73ae41876",
+          "payload": {
+            "assistantMessageId": "fixture-4",
+            "delta": "",
+            "done": false,
+            "kind": "tool_input_end",
+            "toolCallId": "chatcmpl-tool-ba0ec0ce4168f43a"
+          },
+          "seq": 16,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100603,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:480",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.605Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "09b07079-8da4-4c98-84ee-685eadd836cb",
+          "payload": {
+            "assistantMessageId": "fixture-4",
+            "delta": "",
+            "done": false,
+            "input": {
+              "plan": "Acceptance-only plan: wait for the user review. No commands, file access, code changes, or other actions will be performed."
+            },
+            "kind": "tool_call",
+            "toolCallId": "chatcmpl-tool-ba0ec0ce4168f43a",
+            "toolName": "ExitPlanMode"
+          },
+          "seq": 17,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100605,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:481",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.609Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "b0240b52-4387-4c7e-9ea0-77f7a438ed3f",
+          "payload": {
+            "baseURL": "https://provider.example.invalid",
+            "maxAttempts": 11,
+            "model": {
+              "providerId": "ea668817-72ad-430c-b16d-405b19895c88",
+              "modelId": "GLM-5.3-Flash-NVFP4",
+              "role": "main",
+              "source": "session",
+              "variant": "max"
+            },
+            "modelRequestSessionType": "main",
+            "requestId": "f7002609-702c-49a1-a26b-4a0334fe672d",
+            "sessionId": "fixture-1",
+            "spanId": "19166933-37f1-48",
+            "parentSpanId": "9d4d712a-7ffe-41",
+            "querySource": "main_turn",
+            "queryId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+            "providerKind": "openai-compatible",
+            "transport": "sse",
+            "turnId": "fixture-3",
+            "modelCall": {
+              "operation": "agent_step",
+              "actorKind": "main",
+              "operationId": "19166933-37f1-48",
+              "logicalCallId": "32c275a0-92aa-4349-96c5-f28ea7debdb4",
+              "stepIndex": 0,
+              "reasoning": {
+                "capability": "supported",
+                "requestedControl": "fixed_level",
+                "requestedState": "enabled",
+                "effectiveControl": "fixed_level",
+                "effectiveState": "enabled",
+                "requestedLevel": "max",
+                "effectiveLevel": "max"
+              }
+            },
+            "attempt": 1,
+            "durationMs": 3218,
+            "requestHeaderCount": 15,
+            "requestHeaders": {
+              "http-referer": "https://zcode.z.ai",
+              "user-agent": "ZCode/unknown",
+              "x-title": "Z Code@electron",
+              "x-release-channel": "production",
+              "x-client-language": "en-US",
+              "x-client-timezone": "Asia/Shanghai",
+              "x-platform": "darwin-arm64",
+              "x-os-category": "macos",
+              "x-os-version": "27.0.0",
+              "x-zcode-agent": "glm",
+              "x-request-id": "f7002609-702c-49a1-a26b-4a0334fe672d",
+              "x-zcode-session-type": "main",
+              "x-zcode-trace-id": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+              "x-query-id": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+              "x-session-id": "ee554b11-98d6-4e0f-a7f8-eadc1036030c"
+            },
+            "responseHeaderCount": 9,
+            "responseHeaders": {
+              "alt-svc": "h3=\":8443\"; ma=2592000",
+              "cache-control": "no-store",
+              "content-type": "text/event-stream; charset=utf-8",
+              "date": "Sat, 12 Sep 2026 20:31:38 GMT",
+              "transfer-encoding": "chunked",
+              "via": "1.1 Caddy",
+              "x-accel-buffering": "no",
+              "x-content-type-options": "nosniff",
+              "x-request-id": "a33c03a4bb1959f5"
+            },
+            "providerRequestId": "a33c03a4bb1959f5",
+            "finishReason": "tool-calls",
+            "usage": {
+              "inputTokens": 22738,
+              "outputTokens": 365,
+              "totalTokens": 23103,
+              "cacheReadTokens": 0,
+              "reasoningTokens": 326
+            },
+            "timeToFirstProviderEventMs": 5,
+            "timeToFirstContentMs": 1689,
+            "streamStallCount": 0,
+            "streamOutputCommitted": true,
+            "timestamp": "2026-09-12T20:31:40.608Z",
+            "type": "model_request_completed",
+            "_meta": {
+              "zcode": {
+                "apiRetry": null
+              }
+            }
+          },
+          "seq": 18,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100608,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:482",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.618Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "3460ab42-5581-4907-bf7d-c1c0a8d86443",
+          "payload": {
+            "content": "",
+            "contextWindow": 1048576,
+            "querySource": "main_turn",
+            "stopReason": "tool-calls",
+            "usage": {
+              "inputTokens": 22738,
+              "outputTokens": 365,
+              "totalTokens": 23103,
+              "cacheReadTokens": 0,
+              "reasoningTokens": 326
+            },
+            "cacheHit": {
+              "inputTokens": 22738,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0,
+              "latestHitRate": 0,
+              "hitRate": 0,
+              "hitRateRequestCount": 1,
+              "totalInputTokens": 22738,
+              "totalCacheReadTokens": 0,
+              "totalCacheWriteTokens": 0
+            },
+            "contextUsageBreakdown": [
+              {
+                "source": "system_prompt",
+                "chars": 6750
+              },
+              {
+                "source": "meta_user_context",
+                "chars": 1224
+              },
+              {
+                "source": "skills",
+                "chars": 6894
+              },
+              {
+                "source": "system_tool_schemas",
+                "chars": 83541
+              },
+              {
+                "source": "mcp_tool_schemas",
+                "chars": 68945
+              },
+              {
+                "source": "messages",
+                "chars": 866
+              }
+            ],
+            "toolCallCount": 1
+          },
+          "seq": 19,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100616,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:483",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.625Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "837fcc9c-d02b-4963-8476-69b440bb6072",
+          "payload": {
+            "toolCallId": "chatcmpl-tool-ba0ec0ce4168f43a",
+            "assistantMessageId": "fixture-4",
+            "toolName": "ExitPlanMode",
+            "dependencies": [],
+            "parallelGroupIndex": 0,
+            "canRunParallel": false,
+            "schedule": {
+              "parallelGroups": [
+                [
+                  "chatcmpl-tool-ba0ec0ce4168f43a"
+                ]
+              ],
+              "executionOrder": [
+                "chatcmpl-tool-ba0ec0ce4168f43a"
+              ]
+            },
+            "kind": "scheduled",
+            "inputByteLength": 134,
+            "inputOmitted": true,
+            "inputRef": "model_stream"
+          },
+          "seq": 20,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100622,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "tool.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:484",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:31:40.637Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "23d05a1d-6364-4389-af7d-984792615b77",
+          "payload": {
+            "requestId": "perm_96b9bfa8-9739-42a6-97ff-96946be13798",
+            "toolCallId": "chatcmpl-tool-ba0ec0ce4168f43a",
+            "toolName": "ExitPlanMode",
+            "riskLevel": "low",
+            "reason": "Tool ExitPlanMode requires user interaction",
+            "input": {
+              "plan": "Acceptance-only plan: wait for the user review. No commands, file access, code changes, or other actions will be performed."
+            },
+            "suggestedPermissionUpdates": [
+              {
+                "behavior": "allow",
+                "rules": [
+                  {
+                    "toolName": "ExitPlanMode"
+                  }
+                ],
+                "type": "addRules"
+              }
+            ],
+            "options": [
+              {
+                "kind": "allow_once",
+                "name": "Allow once",
+                "optionId": "allow_once",
+                "response": {
+                  "decision": "allow",
+                  "reason": "Approved once"
+                }
+              },
+              {
+                "description": "Do not ask again for matching requests in this project",
+                "kind": "allow_always",
+                "name": "Always allow in this project",
+                "optionId": "allow_project",
+                "response": {
+                  "decision": "allow",
+                  "permissionUpdates": [
+                    {
+                      "behavior": "allow",
+                      "rules": [
+                        {
+                          "toolName": "ExitPlanMode"
+                        }
+                      ],
+                      "type": "addRules"
+                    }
+                  ],
+                  "reason": "Approved for this project"
+                }
+              },
+              {
+                "kind": "deny",
+                "name": "Deny",
+                "optionId": "deny",
+                "response": {
+                  "decision": "deny",
+                  "reason": "Denied"
+                }
+              }
+            ]
+          },
+          "seq": 21,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245100630,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "permission.requested"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:510",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:54.301Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "5bc69ad0-8303-44dd-bc0c-1b4155221e2b",
+          "payload": {
+            "requestId": "perm_96b9bfa8-9739-42a6-97ff-96946be13798",
+            "toolCallId": "chatcmpl-tool-ba0ec0ce4168f43a",
+            "decision": "deny",
+            "reason": "Keep this as a review only. Do not execute any actions."
+          },
+          "seq": 22,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245174299,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "permission.resolved"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:511",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:54.303Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "a5bdd236-05b8-40e7-8c1f-eeef7432e6d4",
+          "payload": {
+            "toolCallIds": [
+              "chatcmpl-tool-ba0ec0ce4168f43a"
+            ],
+            "successCount": 0,
+            "errorCount": 1,
+            "kind": "batch"
+          },
+          "seq": 23,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245174303,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "tool.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:512",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:54.306Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "6f33ad63-7a0b-455a-a241-ab208176e38b",
+          "payload": {
+            "anchorId": "fixture-5",
+            "attemptId": "fixture-6",
+            "kind": "tool_error",
+            "assistantMessageId": "fixture-4",
+            "toolCallId": "chatcmpl-tool-ba0ec0ce4168f43a",
+            "toolName": "ExitPlanMode",
+            "resultPartId": "part_mtyuc3f0_ee6cc4ba-8660-407f-9fef-760282d5face",
+            "committedToolCallIds": [
+              "chatcmpl-tool-ba0ec0ce4168f43a"
+            ],
+            "committedAt": "2026-09-12T20:32:54.303Z"
+          },
+          "seq": 24,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245174306,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "streamRecovery.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:513",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:54.308Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "d3ce0348-16ea-4273-8e2b-715a7bf1ee1b",
+          "payload": {
+            "queryId": "query_83cb4ef1-c93c-49d7-b5e6-d980c4731be9",
+            "pendingInputId": "pending_fixture-3_1",
+            "input": "Keep this as a review only. Do not execute any actions.",
+            "inputPreview": "Keep this as a review only. Do not execute any actions.",
+            "inputSize": 55,
+            "source": "plan_approval_feedback",
+            "delivery": "guide",
+            "targetTurnId": "fixture-3",
+            "queueLength": 1
+          },
+          "seq": 25,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245174307,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "turn.steerQueued"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:514",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:54.314Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "d882ea16-4382-4e0c-b396-5003ff0f9fc5",
+          "payload": {
+            "pendingInputId": "pending_fixture-3_1",
+            "sourceCommandId": "query_83cb4ef1-c93c-49d7-b5e6-d980c4731be9",
+            "messageId": "fixture-7"
+          },
+          "seq": 26,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245174314,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:515",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:54.315Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "c2413e49-055b-4580-a1fc-f82176ccedf9",
+          "payload": {
+            "injectedMessageIds": [
+              "fixture-7"
+            ],
+            "pendingInputIds": [
+              "pending_fixture-3_1"
+            ],
+            "drainedInputs": [
+              {
+                "pendingInputId": "pending_fixture-3_1",
+                "messageId": "fixture-7",
+                "text": "Public demo content 3",
+                "delivery": "guide"
+              }
+            ],
+            "queryIds": [
+              "query_83cb4ef1-c93c-49d7-b5e6-d980c4731be9"
+            ],
+            "targetTurnId": "fixture-3"
+          },
+          "seq": 27,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245174314,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "turn.steerDrained"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:516",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:54.319Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "79fe8b58-cc7e-4968-bf89-46a6d77f990c",
+          "payload": {
+            "messageCount": 10,
+            "model": "ea668817-72ad-430c-b16d-405b19895c88/GLM-5.3-Flash-NVFP4",
+            "modelRef": {
+              "providerId": "ea668817-72ad-430c-b16d-405b19895c88",
+              "modelId": "GLM-5.3-Flash-NVFP4"
+            },
+            "toolCount": 66,
+            "iteration": 1
+          },
+          "seq": 28,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245174318,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:517",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:54.325Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "9ccf2eb4-8be9-4738-8765-e76cc41ccd5b",
+          "payload": {
+            "baseURL": "https://provider.example.invalid",
+            "maxAttempts": 11,
+            "model": {
+              "providerId": "ea668817-72ad-430c-b16d-405b19895c88",
+              "modelId": "GLM-5.3-Flash-NVFP4",
+              "role": "main",
+              "source": "session",
+              "variant": "max"
+            },
+            "modelRequestSessionType": "main",
+            "requestId": "c48a1cda-e5a3-44de-aacc-43ce42921e46",
+            "sessionId": "fixture-1",
+            "spanId": "eebf0a49-1522-44",
+            "parentSpanId": "9d4d712a-7ffe-41",
+            "querySource": "main_turn",
+            "queryId": "query_83cb4ef1-c93c-49d7-b5e6-d980c4731be9",
+            "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+            "providerKind": "openai-compatible",
+            "transport": "sse",
+            "turnId": "fixture-3",
+            "modelCall": {
+              "operation": "agent_step",
+              "actorKind": "main",
+              "operationId": "eebf0a49-1522-44",
+              "logicalCallId": "597c7b94-d578-4728-bff7-1420d31d4e9e",
+              "stepIndex": 1,
+              "reasoning": {
+                "capability": "supported",
+                "requestedControl": "fixed_level",
+                "requestedState": "enabled",
+                "effectiveControl": "fixed_level",
+                "effectiveState": "enabled",
+                "requestedLevel": "max",
+                "effectiveLevel": "max"
+              }
+            },
+            "attempt": 1,
+            "requestHeaderCount": 15,
+            "requestHeaders": {
+              "http-referer": "https://zcode.z.ai",
+              "user-agent": "ZCode/unknown",
+              "x-title": "Z Code@electron",
+              "x-release-channel": "production",
+              "x-client-language": "en-US",
+              "x-client-timezone": "Asia/Shanghai",
+              "x-platform": "darwin-arm64",
+              "x-os-category": "macos",
+              "x-os-version": "27.0.0",
+              "x-zcode-agent": "glm",
+              "x-request-id": "c48a1cda-e5a3-44de-aacc-43ce42921e46",
+              "x-zcode-session-type": "main",
+              "x-zcode-trace-id": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+              "x-query-id": "83cb4ef1-c93c-49d7-b5e6-d980c4731be9",
+              "x-session-id": "ee554b11-98d6-4e0f-a7f8-eadc1036030c"
+            },
+            "timestamp": "2026-09-12T20:32:54.321Z",
+            "type": "model_request_started",
+            "_meta": {
+              "zcode": {
+                "apiRetry": null
+              }
+            }
+          },
+          "seq": 29,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245174324,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:521",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:55.214Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "bbf2f9de-6317-4e67-a54f-c5b41b158121",
+          "payload": {
+            "assistantMessageId": "fixture-8",
+            "delta": "The",
+            "done": false,
+            "kind": "reasoning_delta"
+          },
+          "seq": 30,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245175214,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:522",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:55.593Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "e247b5fe-b5a4-408a-90a2-bdd5ba718552",
+          "payload": {
+            "assistantMessageId": "fixture-8",
+            "delta": " user submitted feedback via the non-approval path: \"Keep this as a review only. Do not execute any actions.\"\n\nPer the original instructions: after the feedback arrives, reply only with NATIVE_PLAN_FEEDBACK_RECEIVED followed by the exact feedback text, then end. No tools",
+            "done": false,
+            "kind": "reasoning_delta"
+          },
+          "seq": 32,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245175593,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:523",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:55.595Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "fecc9dab-13de-46cd-8a38-ab9ba3021332",
+          "payload": {
+            "assistantMessageId": "fixture-8",
+            "delta": ", no plan review, no re-approval request.",
+            "done": false,
+            "kind": "reasoning_delta"
+          },
+          "seq": 33,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245175595,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:524",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:55.596Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "f25508e4-d56d-47fa-a011-267dd92cad2a",
+          "payload": {
+            "assistantMessageId": "fixture-8",
+            "delta": "NATIVE",
+            "done": false,
+            "kind": "text_delta"
+          },
+          "seq": 34,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245175596,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:525",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:55.600Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "6b9a1302-1cd1-475b-b529-ead1453dbef9",
+          "payload": {
+            "assistantMessageId": "fixture-8",
+            "delta": "_PLAN_FEEDBACK_RECEIVED: Keep this as a review only. Do not execute any actions.",
+            "done": false,
+            "kind": "text_delta"
+          },
+          "seq": 35,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245175598,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "model.streaming"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:526",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:55.603Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "44ba3e48-bc28-422d-a38b-22e043461abe",
+          "payload": {
+            "baseURL": "https://provider.example.invalid",
+            "maxAttempts": 11,
+            "model": {
+              "providerId": "ea668817-72ad-430c-b16d-405b19895c88",
+              "modelId": "GLM-5.3-Flash-NVFP4",
+              "role": "main",
+              "source": "session",
+              "variant": "max"
+            },
+            "modelRequestSessionType": "main",
+            "requestId": "c48a1cda-e5a3-44de-aacc-43ce42921e46",
+            "sessionId": "fixture-1",
+            "spanId": "eebf0a49-1522-44",
+            "parentSpanId": "9d4d712a-7ffe-41",
+            "querySource": "main_turn",
+            "queryId": "query_83cb4ef1-c93c-49d7-b5e6-d980c4731be9",
+            "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+            "providerKind": "openai-compatible",
+            "transport": "sse",
+            "turnId": "fixture-3",
+            "modelCall": {
+              "operation": "agent_step",
+              "actorKind": "main",
+              "operationId": "eebf0a49-1522-44",
+              "logicalCallId": "597c7b94-d578-4728-bff7-1420d31d4e9e",
+              "stepIndex": 1,
+              "reasoning": {
+                "capability": "supported",
+                "requestedControl": "fixed_level",
+                "requestedState": "enabled",
+                "effectiveControl": "fixed_level",
+                "effectiveState": "enabled",
+                "requestedLevel": "max",
+                "effectiveLevel": "max"
+              }
+            },
+            "attempt": 1,
+            "durationMs": 1281,
+            "requestHeaderCount": 15,
+            "requestHeaders": {
+              "http-referer": "https://zcode.z.ai",
+              "user-agent": "ZCode/unknown",
+              "x-title": "Z Code@electron",
+              "x-release-channel": "production",
+              "x-client-language": "en-US",
+              "x-client-timezone": "Asia/Shanghai",
+              "x-platform": "darwin-arm64",
+              "x-os-category": "macos",
+              "x-os-version": "27.0.0",
+              "x-zcode-agent": "glm",
+              "x-request-id": "c48a1cda-e5a3-44de-aacc-43ce42921e46",
+              "x-zcode-session-type": "main",
+              "x-zcode-trace-id": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+              "x-query-id": "83cb4ef1-c93c-49d7-b5e6-d980c4731be9",
+              "x-session-id": "ee554b11-98d6-4e0f-a7f8-eadc1036030c"
+            },
+            "responseHeaderCount": 9,
+            "responseHeaders": {
+              "alt-svc": "h3=\":8443\"; ma=2592000",
+              "cache-control": "no-store",
+              "content-type": "text/event-stream; charset=utf-8",
+              "date": "Sat, 12 Sep 2026 20:32:55 GMT",
+              "transfer-encoding": "chunked",
+              "via": "1.1 Caddy",
+              "x-accel-buffering": "no",
+              "x-content-type-options": "nosniff",
+              "x-request-id": "d1a6dd1c17245ada"
+            },
+            "providerRequestId": "d1a6dd1c17245ada",
+            "finishReason": "stop",
+            "usage": {
+              "inputTokens": 23130,
+              "outputTokens": 89,
+              "totalTokens": 23219,
+              "cacheReadTokens": 0,
+              "reasoningTokens": 67
+            },
+            "timeToFirstProviderEventMs": 6,
+            "timeToFirstContentMs": 892,
+            "timeToFirstTextMs": 1275,
+            "streamStallCount": 0,
+            "streamOutputCommitted": true,
+            "timestamp": "2026-09-12T20:32:55.602Z",
+            "type": "model_request_completed",
+            "_meta": {
+              "zcode": {
+                "apiRetry": null
+              }
+            }
+          },
+          "seq": 36,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245175602,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:527",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:55.614Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "a3484bc8-d848-4099-b162-d5001bbcef4a",
+          "payload": {
+            "content": "NATIVE_PLAN_FEEDBACK_RECEIVED: Keep this as a review only. Do not execute any actions.",
+            "contextWindow": 1048576,
+            "querySource": "main_turn",
+            "stopReason": "stop",
+            "usage": {
+              "inputTokens": 23130,
+              "outputTokens": 89,
+              "totalTokens": 23219,
+              "cacheReadTokens": 0,
+              "reasoningTokens": 67
+            },
+            "cacheHit": {
+              "inputTokens": 23130,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0,
+              "latestHitRate": 0,
+              "hitRate": 0,
+              "hitRateRequestCount": 2,
+              "totalInputTokens": 45868,
+              "totalCacheReadTokens": 0,
+              "totalCacheWriteTokens": 0
+            },
+            "contextUsageBreakdown": [
+              {
+                "source": "system_prompt",
+                "chars": 6750
+              },
+              {
+                "source": "meta_user_context",
+                "chars": 1224
+              },
+              {
+                "source": "skills",
+                "chars": 6894
+              },
+              {
+                "source": "system_tool_schemas",
+                "chars": 83541
+              },
+              {
+                "source": "mcp_tool_schemas",
+                "chars": 68945
+              },
+              {
+                "source": "messages",
+                "chars": 2976
+              }
+            ],
+            "toolCallCount": 0
+          },
+          "seq": 37,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245175610,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "session.updated"
+        }
+      }
+    },
+    {
+      "id": "d774e1d6-eb3a-486b-9811-7362da4560f4:528",
+      "type": "runtime.event",
+      "timestamp": "2026-09-12T20:32:55.625Z",
+      "sessionId": "fixture-1",
+      "data": {
+        "event": {
+          "deliveryKind": "web-remote-replayable",
+          "eventId": "3c92f5f9-b661-4eb6-ac69-d40b6d051858",
+          "payload": {
+            "response": "NATIVE_PLAN_FEEDBACK_DONE",
+            "tokenCount": 46322,
+            "usage": {
+              "source": "provider",
+              "modelRequestCount": 2,
+              "inputTokens": 45868,
+              "outputTokens": 454,
+              "totalTokens": 46322,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0,
+              "reasoningTokens": 393,
+              "webFetchRequests": 0,
+              "webSearchRequests": 0
+            },
+            "toolCallCount": 1,
+            "historyRoundCount": 2,
+            "duration": 80879,
+            "resultType": "success",
+            "cacheStats": {
+              "totalMessages": 11,
+              "cachedMessages": 5,
+              "lastCacheHit": false
+            },
+            "inputId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2"
+          },
+          "seq": 38,
+          "sessionId": "fixture-1",
+          "timestamp": 1789245175623,
+          "traceId": "721c50e8-6742-4823-85a1-c8f8e5d15bb2",
+          "turnId": "fixture-3",
+          "type": "turn.completed"
+        }
+      }
+    }
+  ],
+  "testDataOnly": true
+}

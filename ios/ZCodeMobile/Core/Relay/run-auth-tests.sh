@@ -12,4 +12,4 @@ done
 if [[ -n "${2:-}" ]]; then relay_auth_sources+=("$2"); fi
 relay_auth_sdk="$(xcrun --sdk macosx --show-sdk-path)"
 xcrun --sdk macosx swiftc -sdk "$relay_auth_sdk" -swift-version 6 -warnings-as-errors -D RELAY_AUTH_SELF_TESTS "${relay_auth_sources[@]}" -o "$relay_auth_build/auth-tests"
-"$relay_auth_build/auth-tests" "$relay_auth_root/docs/backend/evidence/relay-auth-official-vectors.json" "${1:-/tmp/relay-auth-tests.json}"
+"$relay_auth_build/auth-tests" "$relay_auth_root/tests/fixtures/relay/relay-auth-official-vectors.json" "${1:-$relay_auth_build/results.json}"

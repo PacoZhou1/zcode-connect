@@ -3,25 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "start": "node src/server.mjs",
     "test": "node --test tests/*.test.mjs",
     "check": "node scripts/check.mjs",
     "pair": "node scripts/pair.mjs",
-    "smoke": "node scripts/smoke.mjs",
-    "smoke:interactions": "node scripts/interaction-smoke.mjs",
-    "smoke:denials": "node scripts/denial-smoke.mjs",
-    "smoke:restart": "node scripts/restart-smoke.mjs",
-    "smoke:media": "node scripts/media-smoke.mjs",
-    "smoke:settings": "node scripts/settings-smoke.mjs",
-    "smoke:drafts": "node scripts/draft-smoke.mjs",
-    "smoke:activity": "node scripts/activity-smoke.mjs",
-    "smoke:subagents": "node scripts/subagent-smoke.mjs",
-    "smoke:https": "node scripts/https-smoke.mjs",
-    "verify:relay": "node scripts/verify-relay-codecs.mjs",
-    "inspect:relay": "node scripts/inspect-relay-contract.mjs",
-    "inspect": "node scripts/inspect-protocol.mjs",
     "secure:plan": "node scripts/secure-gateway.mjs --plan"
   }
 }

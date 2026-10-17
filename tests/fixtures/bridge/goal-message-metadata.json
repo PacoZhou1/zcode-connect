@@ -1,0 +1,342 @@
+{
+  "rows": [
+    {
+      "id": "goal-fixture-0",
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1789207089247
+        },
+        "agent": "zcode-agent",
+        "model": {
+          "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+          "modelID": "GLM-5.3-Flash-NVFP4",
+          "variant": "max"
+        },
+        "contextSnapshot": {
+          "envInfo": {
+            "cwd": "/workspace/demo",
+            "platform": "darwin",
+            "shell": "zsh",
+            "osVersion": "darwin 27.0.0 arm64",
+            "nodeVersion": "v22.22.3",
+            "isGitRepository": false,
+            "gitStatus": "not_repo"
+          }
+        },
+        "semantics": {
+          "origin": "real_user",
+          "kind": "user_prompt",
+          "uiVisibility": "visible",
+          "providerVisibility": "visible",
+          "transcriptVisibility": "visible"
+        },
+        "anchor": {
+          "origin": "realUser",
+          "sourceCommandId": "d6f81f3f-051d-4349-b12e-47a3562966b7"
+        },
+        "tools": {
+          "Agent": true,
+          "AskUserQuestion": true,
+          "Bash": true,
+          "CronCreate": true,
+          "CronDelete": true,
+          "CronList": true,
+          "CronUpdate": true,
+          "Edit": true,
+          "EnterPlanMode": true,
+          "ExitPlanMode": true,
+          "Read": true,
+          "Skill": true,
+          "TaskOutput": true,
+          "TaskStop": true,
+          "TodoRead": true,
+          "TodoWrite": true,
+          "WebFetch": true,
+          "Write": true,
+          "SendMessage": true,
+          "ReadSessionContext": true
+        },
+        "metadata": {
+          "inputIntent": {
+            "sourceCommandId": "d6f81f3f-051d-4349-b12e-47a3562966b7",
+            "queueItemId": "queue_d6f81f3f-051d-4349-b12e-47a3562966b7",
+            "clientId": "zcode-mobile-bridge",
+            "kind": "sendGoalCommand",
+            "text": "Public demo content 7",
+            "admissionSeq": 1,
+            "admittedAt": 1789207089190,
+            "requestedDelivery": "startNow",
+            "admittedDelivery": "startNow"
+          },
+          "conversationInputIntent": {
+            "sourceCommandId": "d6f81f3f-051d-4349-b12e-47a3562966b7",
+            "queueItemId": "queue_d6f81f3f-051d-4349-b12e-47a3562966b7",
+            "clientId": "zcode-mobile-bridge",
+            "kind": "sendGoalCommand",
+            "text": "Public demo content 7",
+            "attachments": [],
+            "delivery": {
+              "requested": "startNow",
+              "admitted": "startNow"
+            },
+            "order": {
+              "admissionSeq": 1
+            },
+            "steer": {
+              "state": "notRequested"
+            },
+            "dispatch": {
+              "state": "drained"
+            },
+            "admittedAt": 1789207089190
+          },
+          "inputClientId": "zcode-mobile-bridge",
+          "executionKind": "controlOnly"
+        }
+      },
+      "parts": [
+        {
+          "id": "part_mty7pdnj_03059a64-aa07-4bc7-a5de-9748f01017c6",
+          "data": {
+            "type": "text",
+            "text": "/goal Build a demo home page",
+            "time": {
+              "start": 1789207089247,
+              "end": 1789207089247
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "goal-fixture-1",
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1789207227556
+        },
+        "agent": "zcode-agent",
+        "metadata": {
+          "source": "goal_state_change",
+          "visibility": "model-only"
+        },
+        "model": {
+          "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+          "modelID": "GLM-5.3-Flash-NVFP4",
+          "variant": "max"
+        },
+        "semantics": {
+          "origin": "agent_runtime",
+          "kind": "system_reminder",
+          "source": "goal_state_change",
+          "uiVisibility": "hidden",
+          "providerVisibility": "visible",
+          "transcriptVisibility": "hidden"
+        },
+        "anchor": {
+          "origin": "synthetic"
+        },
+        "source": "goal_state_change",
+        "synthetic": true,
+        "tools": {
+          "Agent": true,
+          "AskUserQuestion": true,
+          "Bash": true,
+          "CronCreate": true,
+          "CronDelete": true,
+          "CronList": true,
+          "CronUpdate": true,
+          "Edit": true,
+          "EnterPlanMode": true,
+          "ExitPlanMode": true,
+          "Read": true,
+          "Skill": true,
+          "TaskOutput": true,
+          "TaskStop": true,
+          "TodoRead": true,
+          "TodoWrite": true,
+          "WebFetch": true,
+          "Write": true,
+          "SendMessage": true,
+          "ReadSessionContext": true
+        },
+        "visibility": "model-only"
+      },
+      "parts": [
+        {
+          "id": "part_mty7scdg_839edcba-306d-4de5-bcce-ea24d6fc8722",
+          "data": {
+            "type": "text",
+            "text": "Demo control reminder",
+            "synthetic": true,
+            "time": {
+              "start": 1789207227556,
+              "end": 1789207227556
+            },
+            "metadata": {
+              "runtimeMessage": {
+                "source": "goal_state_change"
+              },
+              "source": "goal_state_change",
+              "visibility": "model-only"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "goal-fixture-2",
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1789207534608
+        },
+        "agent": "zcode-agent",
+        "metadata": {
+          "source": "goal_state_change",
+          "visibility": "model-only"
+        },
+        "model": {
+          "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+          "modelID": "GLM-5.3-Flash-NVFP4",
+          "variant": "max"
+        },
+        "semantics": {
+          "origin": "agent_runtime",
+          "kind": "system_reminder",
+          "source": "goal_state_change",
+          "uiVisibility": "hidden",
+          "providerVisibility": "visible",
+          "transcriptVisibility": "hidden"
+        },
+        "anchor": {
+          "origin": "synthetic"
+        },
+        "source": "goal_state_change",
+        "synthetic": true,
+        "tools": {
+          "Agent": true,
+          "AskUserQuestion": true,
+          "Bash": true,
+          "CronCreate": true,
+          "CronDelete": true,
+          "CronList": true,
+          "CronUpdate": true,
+          "Edit": true,
+          "EnterPlanMode": true,
+          "ExitPlanMode": true,
+          "Read": true,
+          "Skill": true,
+          "TaskOutput": true,
+          "TaskStop": true,
+          "TodoRead": true,
+          "TodoWrite": true,
+          "WebFetch": true,
+          "Write": true,
+          "SendMessage": true,
+          "ReadSessionContext": true
+        },
+        "visibility": "model-only"
+      },
+      "parts": [
+        {
+          "id": "part_mty7yxao_1dd48abd-3344-42ce-890d-8a4904bc4b06",
+          "data": {
+            "type": "text",
+            "text": "Demo control reminder",
+            "synthetic": true,
+            "time": {
+              "start": 1789207534608,
+              "end": 1789207534608
+            },
+            "metadata": {
+              "runtimeMessage": {
+                "source": "goal_state_change"
+              },
+              "source": "goal_state_change",
+              "visibility": "model-only"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "goal-fixture-3",
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1789207543296
+        },
+        "agent": "zcode-agent",
+        "metadata": {
+          "source": "goal_state_change",
+          "visibility": "model-only"
+        },
+        "model": {
+          "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+          "modelID": "GLM-5.3-Flash-NVFP4",
+          "variant": "max"
+        },
+        "semantics": {
+          "origin": "agent_runtime",
+          "kind": "system_reminder",
+          "source": "goal_state_change",
+          "uiVisibility": "hidden",
+          "providerVisibility": "visible",
+          "transcriptVisibility": "hidden"
+        },
+        "anchor": {
+          "origin": "synthetic"
+        },
+        "source": "goal_state_change",
+        "synthetic": true,
+        "tools": {
+          "Agent": true,
+          "AskUserQuestion": true,
+          "Bash": true,
+          "CronCreate": true,
+          "CronDelete": true,
+          "CronList": true,
+          "CronUpdate": true,
+          "Edit": true,
+          "EnterPlanMode": true,
+          "ExitPlanMode": true,
+          "Read": true,
+          "Skill": true,
+          "TaskOutput": true,
+          "TaskStop": true,
+          "TodoRead": true,
+          "TodoWrite": true,
+          "WebFetch": true,
+          "Write": true,
+          "SendMessage": true,
+          "ReadSessionContext": true
+        },
+        "visibility": "model-only"
+      },
+      "parts": [
+        {
+          "id": "part_mty7z400_dae7271b-c93a-4847-b20c-b2732c0089fa",
+          "data": {
+            "type": "text",
+            "text": "Demo control reminder",
+            "synthetic": true,
+            "time": {
+              "start": 1789207543296,
+              "end": 1789207543296
+            },
+            "metadata": {
+              "runtimeMessage": {
+                "source": "goal_state_change"
+              },
+              "source": "goal_state_change",
+              "visibility": "model-only"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "testDataOnly": true
+}

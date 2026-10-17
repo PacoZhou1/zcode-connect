@@ -1,4 +1,31 @@
 .DS_Store
+
+# Local credentials, signing material and runtime state must never be published.
+.env
+.env.*
+!.env.example
+!.env.template
+**/.runtime/
+**/.state/
+**/node_modules/
+*.p8
+*.p12
+*.pfx
+*.key
+*.pem
+*.mobileprovision
+*.keychain
+*.keychain-db
+
+# Internal release/account records, personal evidence and raw screenshot sources.
+# Ignore rules do not remove files already tracked or erase their Git history.
+evidence/
+docs/backend/evidence/
+docs/audit/
+docs/release/
+docs/localization/
+docs/upstream-zcode/
+docs/marketing/wechat-moments/
 ios/DerivedData/
 **/xcuserdata/
 .build/

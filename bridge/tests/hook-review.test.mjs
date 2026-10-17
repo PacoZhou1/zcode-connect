@@ -9,7 +9,7 @@ import { BridgeService } from '../src/service.mjs';
 import { createBridgeServer } from '../src/server.mjs';
 import { hookCanonicalJSON, hookInteractions, hookOperation, hookOperationFingerprint, validateHookReview, swiftStringCompare } from '../src/hook-review.mjs';
 
-const golden = JSON.parse(readFileSync(new URL('../../docs/backend/evidence/hook-review-contract.json', import.meta.url), 'utf8')).vectors.request;
+const golden = JSON.parse(readFileSync(new URL('../../tests/fixtures/relay/hook-review-contract.json', import.meta.url), 'utf8')).vectors.request;
 const copy = value => structuredClone(value), at = 1800000000000;
 function review(patch = {}) { return { ...copy(golden), createdAt: at - 1000, deadlineAt: at + 600000, ...patch }; }
 function bodyFor(request, action = 'respond', clientCommandId = randomUUID(), fields = {}) {

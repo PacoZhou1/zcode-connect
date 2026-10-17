@@ -8,7 +8,7 @@ import { OfficialRelayClient, parseOfficialPairing } from '../src/relay/client.m
 
 const identity = { bridgeSessionId: 'bridge-test', bridgeGeneration: 1, recoveryId: 'recovery-test' };
 test('IPC codec matches independently extracted official web client vectors', () => {
-  const evidence = JSON.parse(readFileSync(new URL('../../docs/backend/evidence/relay-ipc-vectors.json', import.meta.url)));
+  const evidence = JSON.parse(readFileSync(new URL('../../tests/fixtures/relay/relay-ipc-vectors.json', import.meta.url)));
   for (const vector of evidence.vectors) { const encoded = encodeIPC(vector.header, vector.body); assert.equal(encoded.toString('hex'), vector.hex); assert.deepEqual(decodeIPC(encoded), { header: vector.header, body: vector.body }); }
   assert.equal(crc32(Buffer.from('123456789')), 'cbf43926');
   assert.throws(() => decodeIPC(Buffer.from([4, 3, 1])), /Truncated/);

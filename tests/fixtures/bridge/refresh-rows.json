@@ -1,0 +1,475 @@
+{
+  "rows": [
+    {
+      "id": "fixture-9",
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1789245095298,
+          "completed": 1789245095298
+        },
+        "parentID": "fixture-9",
+        "modelID": "GLM-5.3-Flash-NVFP4",
+        "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+        "mode": "plan",
+        "agent": "zcode-agent",
+        "path": {
+          "cwd": "/workspace/demo",
+          "root": "/workspace/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "completed",
+        "semantics": {
+          "origin": "system",
+          "kind": "timeline_event",
+          "uiVisibility": "visible",
+          "providerVisibility": "hidden",
+          "transcriptVisibility": "visible"
+        }
+      },
+      "parts": [
+        {
+          "id": "part_part_mtyuby34_4d2fa6d1-72a0-47e9-9dfa-e86b5e00ba48_timeline",
+          "timelineType": "model_change",
+          "display": "separator",
+          "status": "completed",
+          "fromModel": {
+            "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+            "modelID": "GLM-5.3-Flash-NVFP4",
+            "label": "ea668817-72ad-430c-b16d-405b19895c88/GLM-5.3-Flash-NVFP4"
+          },
+          "toModel": {
+            "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+            "modelID": "GLM-5.3-Flash-NVFP4",
+            "variant": "max",
+            "label": "ea668817-72ad-430c-b16d-405b19895c88/GLM-5.3-Flash-NVFP4"
+          },
+          "time": {
+            "start": 1789245095298,
+            "end": 1789245095298
+          },
+          "type": "timeline"
+        }
+      ]
+    },
+    {
+      "id": "fixture-2",
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1789245095303
+        },
+        "agent": "zcode-agent",
+        "model": {
+          "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+          "modelID": "GLM-5.3-Flash-NVFP4",
+          "variant": "max"
+        },
+        "contextSnapshot": {
+          "envInfo": {
+            "cwd": "/workspace/demo",
+            "platform": "darwin",
+            "shell": "zsh",
+            "osVersion": "darwin 27.0.0 arm64",
+            "nodeVersion": "v22.22.3",
+            "isGitRepository": false,
+            "gitStatus": "not_repo"
+          }
+        },
+        "semantics": {
+          "origin": "real_user",
+          "kind": "user_prompt",
+          "uiVisibility": "visible",
+          "providerVisibility": "visible",
+          "transcriptVisibility": "visible"
+        },
+        "anchor": {
+          "turnId": "fixture-3",
+          "origin": "realUser",
+          "sourceCommandId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2"
+        },
+        "tools": {
+          "Agent": true,
+          "AskUserQuestion": true,
+          "Bash": true,
+          "CronCreate": true,
+          "CronDelete": true,
+          "CronList": true,
+          "CronUpdate": true,
+          "Edit": true,
+          "EnterPlanMode": true,
+          "ExitPlanMode": true,
+          "Read": true,
+          "Skill": true,
+          "TaskOutput": true,
+          "TaskStop": true,
+          "TodoRead": true,
+          "TodoWrite": true,
+          "WebFetch": true,
+          "Write": true,
+          "SendMessage": true,
+          "ReadSessionContext": true
+        },
+        "metadata": {
+          "inputIntent": {
+            "sourceCommandId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "queueItemId": "queue_native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "clientId": "zcode-mobile-bridge",
+            "kind": "sendText",
+            "text": "Public demo content 2",
+            "admissionSeq": 1,
+            "admittedAt": 1789245094553,
+            "requestedDelivery": "startNow",
+            "admittedDelivery": "startNow"
+          },
+          "conversationInputIntent": {
+            "sourceCommandId": "native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "queueItemId": "queue_native-plan-feedback-0ffbea10-2573-46d9-9aa7-88d63e4d33a2",
+            "clientId": "zcode-mobile-bridge",
+            "kind": "sendText",
+            "text": "Public demo content 2",
+            "attachments": [],
+            "delivery": {
+              "requested": "startNow",
+              "admitted": "startNow"
+            },
+            "order": {
+              "admissionSeq": 1
+            },
+            "steer": {
+              "state": "notRequested"
+            },
+            "dispatch": {
+              "state": "drained"
+            },
+            "admittedAt": 1789245094553
+          },
+          "inputClientId": "zcode-mobile-bridge"
+        }
+      },
+      "parts": [
+        {
+          "id": "part_mtyubzbb_e2230a74-143e-4b40-a3ef-cc8c76a56d20",
+          "type": "text",
+          "text": "Public demo content 2",
+          "time": {
+            "start": 1789245095303,
+            "end": 1789245095303
+          }
+        }
+      ]
+    },
+    {
+      "id": "fixture-4",
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1789245097384,
+          "completed": 1789245174310
+        },
+        "parentID": "fixture-2",
+        "modelID": "GLM-5.3-Flash-NVFP4",
+        "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+        "mode": "plan",
+        "agent": "zcode-agent",
+        "path": {
+          "cwd": "/workspace/demo",
+          "root": "/workspace/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 23103,
+          "input": 22738,
+          "output": 365,
+          "reasoning": 326,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "tool-calls",
+        "semantics": {
+          "origin": "agent_runtime",
+          "kind": "assistant_response",
+          "uiVisibility": "visible",
+          "providerVisibility": "visible",
+          "transcriptVisibility": "visible"
+        },
+        "anchor": {
+          "turnId": "fixture-3"
+        }
+      },
+      "parts": [
+        {
+          "id": "part_mtyuc0x6_d2bd24a5-ec97-4ad0-9742-1f9a7796d78d",
+          "type": "step-start"
+        },
+        {
+          "id": "part_mtyuc3ev_2f018785-8a93-42fc-abe4-afebfb663c2e",
+          "type": "reasoning",
+          "text": "Public demo content 4",
+          "time": {
+            "start": 1789245097384,
+            "end": 1789245100615
+          }
+        },
+        {
+          "id": "part_mtyuc3f0_ee6cc4ba-8660-407f-9fef-760282d5face",
+          "type": "tool",
+          "callID": "chatcmpl-tool-ba0ec0ce4168f43a",
+          "tool": "ExitPlanMode",
+          "state": {
+            "status": "error",
+            "input": {
+              "plan": "Acceptance-only plan: wait for the user review. No commands, file access, code changes, or other actions will be performed."
+            },
+            "error": "Keep this as a review only. Do not execute any actions.",
+            "metadata": {
+              "modelContent": "The plan was not approved by the user."
+            },
+            "time": {
+              "start": 1789245174303,
+              "end": 1789245174303
+            }
+          }
+        },
+        {
+          "id": "part_mtyudo9w_439a5a7e-dab8-414c-ad79-79516f6a7766",
+          "type": "step-finish",
+          "reason": "tool-calls",
+          "cost": 0,
+          "tokens": {
+            "total": 23103,
+            "input": 22738,
+            "output": 365,
+            "reasoning": 326,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "fixture-7",
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1789245174311
+        },
+        "agent": "zcode-agent",
+        "model": {
+          "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+          "modelID": "GLM-5.3-Flash-NVFP4",
+          "variant": "max"
+        },
+        "contextSnapshot": {
+          "envInfo": {
+            "cwd": "/workspace/demo",
+            "platform": "darwin",
+            "shell": "zsh",
+            "osVersion": "darwin 27.0.0 arm64",
+            "nodeVersion": "v22.22.3",
+            "isGitRepository": false,
+            "gitStatus": "not_repo"
+          }
+        },
+        "semantics": {
+          "origin": "real_user",
+          "kind": "user_prompt",
+          "uiVisibility": "visible",
+          "providerVisibility": "visible",
+          "transcriptVisibility": "visible"
+        },
+        "anchor": {
+          "turnId": "fixture-3",
+          "origin": "realUser",
+          "sourceCommandId": "query_83cb4ef1-c93c-49d7-b5e6-d980c4731be9"
+        },
+        "tools": {
+          "Agent": true,
+          "AskUserQuestion": true,
+          "Bash": true,
+          "CronCreate": true,
+          "CronDelete": true,
+          "CronList": true,
+          "CronUpdate": true,
+          "Edit": true,
+          "EnterPlanMode": true,
+          "ExitPlanMode": true,
+          "Read": true,
+          "Skill": true,
+          "TaskOutput": true,
+          "TaskStop": true,
+          "TodoRead": true,
+          "TodoWrite": true,
+          "WebFetch": true,
+          "Write": true,
+          "SendMessage": true,
+          "ReadSessionContext": true,
+          "mcp__plugin_android-emulator_android-emulator__android_preflight": true,
+          "mcp__plugin_android-emulator_android-emulator__android_discover_project": true,
+          "mcp__plugin_android-emulator_android-emulator__android_create_app": true,
+          "mcp__plugin_android-emulator_android-emulator__android_build_app": true,
+          "mcp__plugin_android-emulator_android-emulator__android_build_and_run": true,
+          "mcp__plugin_android-emulator_android-emulator__android_list_devices": true,
+          "mcp__plugin_android-emulator_android-emulator__android_list_avds": true,
+          "mcp__plugin_android-emulator_android-emulator__android_start_emulator": true,
+          "mcp__plugin_android-emulator_android-emulator__android_stop_emulator": true,
+          "mcp__plugin_android-emulator_android-emulator__android_create_avd": true,
+          "mcp__plugin_android-emulator_android-emulator__android_install_app": true,
+          "mcp__plugin_android-emulator_android-emulator__android_launch_app": true,
+          "mcp__plugin_android-emulator_android-emulator__android_terminate_app": true,
+          "mcp__plugin_android-emulator_android-emulator__android_open_url": true,
+          "mcp__plugin_android-emulator_android-emulator__android_screenshot": true,
+          "mcp__plugin_android-emulator_android-emulator__android_logs": true,
+          "mcp__plugin_android-emulator_android-emulator__android_ui_status": true,
+          "mcp__plugin_android-emulator_android-emulator__android_ui_describe": true,
+          "mcp__plugin_android-emulator_android-emulator__android_ui_resolve": true,
+          "mcp__plugin_android-emulator_android-emulator__android_ui_tap": true,
+          "mcp__plugin_android-emulator_android-emulator__android_ui_swipe": true,
+          "mcp__plugin_android-emulator_android-emulator__android_ui_type_text": true,
+          "mcp__plugin_android-emulator_android-emulator__android_ui_keyevent": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_preflight": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_list_simulators": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_boot_simulator": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_show_simulator": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_discover_project": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_create_app": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_build_app": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_build_and_run": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_install_app": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_launch_app": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_terminate_app": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_open_url": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_screenshot": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_logs": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_ui_status": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_ui_tap": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_ui_swipe": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_ui_type_text": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_ui_button": true,
+          "mcp__plugin_ios-simulator_ios-simulator__ios_ui_describe": true,
+          "mcp__node_repl__js": true,
+          "mcp__node_repl__js_add_node_module_dir": true,
+          "mcp__node_repl__js_reset": true
+        },
+        "metadata": {
+          "turnSteerDelivery": "guide"
+        }
+      },
+      "parts": [
+        {
+          "id": "part_mtyudo9z_cc2a85b1-5444-42d0-bab6-9e220c18e8bf",
+          "type": "text",
+          "text": "Public demo content 3",
+          "time": {
+            "start": 1789245174311,
+            "end": 1789245174311
+          }
+        }
+      ]
+    },
+    {
+      "id": "fixture-8",
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1789245174316,
+          "completed": 1789245175617
+        },
+        "parentID": "fixture-7",
+        "modelID": "GLM-5.3-Flash-NVFP4",
+        "providerID": "ea668817-72ad-430c-b16d-405b19895c88",
+        "mode": "plan",
+        "agent": "zcode-agent",
+        "path": {
+          "cwd": "/workspace/demo",
+          "root": "/workspace/demo"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 23219,
+          "input": 23130,
+          "output": 89,
+          "reasoning": 67,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "finish": "stop",
+        "semantics": {
+          "origin": "agent_runtime",
+          "kind": "assistant_response",
+          "uiVisibility": "visible",
+          "providerVisibility": "visible",
+          "transcriptVisibility": "visible"
+        },
+        "anchor": {
+          "turnId": "fixture-3",
+          "historyRoundCount": 2,
+          "orderedMessageIds": [
+            "fixture-7",
+            "fixture-8"
+          ],
+          "boundaryMessageId": "fixture-8",
+          "goalBoundary": {
+            "kind": "none"
+          }
+        }
+      },
+      "parts": [
+        {
+          "id": "part_mtyudoa5_baf53b26-d3fe-4902-8fe3-e876053deb9c",
+          "type": "step-start"
+        },
+        {
+          "id": "part_mtyudp9z_ad0a392d-b669-49ce-a2ef-6f01fbce9a80",
+          "type": "reasoning",
+          "text": "Public demo content 5",
+          "time": {
+            "start": 1789245174316,
+            "end": 1789245175607
+          }
+        },
+        {
+          "id": "part_mtyudpa0_c40c6933-9218-4689-bf7d-e1837c5453a4",
+          "type": "text",
+          "text": "NATIVE_PLAN_FEEDBACK_DONE",
+          "time": {
+            "start": 1789245174316,
+            "end": 1789245175608
+          }
+        },
+        {
+          "id": "part_mtyudpa8_24a2624e-1c38-4221-86cd-54f4532bbfc9",
+          "type": "step-finish",
+          "reason": "stop",
+          "cost": 0,
+          "tokens": {
+            "total": 23219,
+            "input": 23130,
+            "output": 89,
+            "reasoning": 67,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "testDataOnly": true
+}
