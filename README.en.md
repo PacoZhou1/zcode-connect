@@ -50,7 +50,7 @@ Project names, conversations, and task content in the campaign images are public
 
 Most users can simply install the App. For local builds, deployment notes, and development, see [Development](docs/DEVELOPMENT.md).
 
-This repository is being prepared for an open-source release. Its source snapshot is not guaranteed to match the App Store build. See the [pre-publication review](docs/security/OPEN_SOURCE_REVIEW_20261017.md) for the current status. An open-source license has not yet been selected; access to the code does not itself grant an open-source license.
+The source is available under the [MIT License](LICENSE). This is a privacy-reviewed source snapshot and is not guaranteed to match the App Store build. See the [publication and security review](docs/security/OPEN_SOURCE_REVIEW_20261017.md). Third-party assets and dependencies retain their own terms; see [Asset notes](docs/marketing/ASSETS.md).
 
 ## Feedback and support
 

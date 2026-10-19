@@ -50,7 +50,7 @@ App 支持简体中文、英语、日语、法语、韩语和德语，默认跟�
 
 普通用户直接安装 App 即可，不需要编译。想自行构建、部署或参与开发，请看 [开发说明](docs/DEVELOPMENT.md)。
 
-仓库正在进行开源前整理；现有源码快照与 App Store 版本不保证一一对应。安全与公开准备状态见 [开源前审查](docs/security/OPEN_SOURCE_REVIEW_20261017.md)。正式开源许可证尚待确认，不把“可以看到代码”等同于已获得开源许可。
+源码采用 [MIT 许可证](LICENSE)。当前公开的是经过脱敏整理的源码快照，与 App Store 版本不保证一一对应。安全整理记录见 [公开与安全审查](docs/security/OPEN_SOURCE_REVIEW_20261017.md)。第三方素材和依赖保留各自的许可，见 [素材说明](docs/marketing/ASSETS.md)。
 
 ## 联系与反馈
 

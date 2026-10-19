@@ -33,6 +33,6 @@ Select the `ZCodeMobile` scheme and your own iOS 26+ simulator. For a physical d
 
 Both relay options require a compatible desktop runtime. The HTTP bridge is a separate advanced connection mode; an HTTP address is not a native pairing payload. Use your own domain, TLS configuration, and credentials when self-hosting, and verify the actual desktop version in isolation before connecting real tasks.
 
-此仓库仍在整理。内部验收材料和早期部署笔记不应直接当作公开安装教程；源码快照不保证与商店二进制一致。安全审查见 [公开前审查](security/OPEN_SOURCE_REVIEW_20261017.md)。
+当前公开的是经过脱敏整理的源码快照，采用 [MIT 许可证](../LICENSE)，不保证与商店二进制一致。安全整理记录见 [公开与安全审查](security/OPEN_SOURCE_REVIEW_20261017.md)。
 
-The repository is still being prepared. Internal acceptance records and early deployment notes are not public installation instructions. This source snapshot is not guaranteed to match the store binary. See the [pre-publication review](security/OPEN_SOURCE_REVIEW_20261017.md).
+This privacy-reviewed source snapshot is available under the [MIT License](../LICENSE) and is not guaranteed to match the store binary. See the [publication and security review](security/OPEN_SOURCE_REVIEW_20261017.md).
