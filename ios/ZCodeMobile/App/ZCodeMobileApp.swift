@@ -7,6 +7,10 @@ struct ZCodeMobileApp: App {
     @State private var store: AppStore
     private static func makeStore() -> AppStore {
         #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let index = args.firstIndex(of: "--official-account-review"), args.count > index + 1 {
+            return OfficialAccountReview.makeStore(args[index + 1])
+        }
         if ProcessInfo.processInfo.arguments.contains("--onboarding-review"),
            let defaults = UserDefaults(suiteName: "dev.paco.zcode.mobile.onboarding-review") {
             if ProcessInfo.processInfo.arguments.contains("--reset-onboarding-review") {

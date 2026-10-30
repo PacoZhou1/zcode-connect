@@ -38,7 +38,7 @@ You do not need your own server to use the official relay. Self-hosting is an ad
 
 ## Connecting to the new desktop release
 
-This branch adds account-based connections for ZCode 3.17.1. Choose the same platform (Z.ai or BigModel) and account on your phone and computer, enable remote control on the computer, then choose it from the phone's computer list or scan the new QR code. You can sign out in Settings.
+This branch adds account-based connections for ZCode 3.17.1. Choose the same platform (Z.ai or BigModel) and account on your phone and computer, enable remote control on the computer, then choose it from the phone's computer list or scan the new QR code. BigModel and Z.ai show and retain their sign-ins separately. Choose the account to use or sign out of either platform independently. After sign-in, the next step shows QR scanning and computer connections.
 
 This source change is undergoing acceptance testing and **has not shipped to the App Store**. Protocol checks and Simulator sign-in page/cancellation tests pass; real account authorization and connection to the new desktop release remain unverified. The self-hosted relay retains its legacy protocol and needs a compatible desktop version; it cannot replace the new official relay directly.
 

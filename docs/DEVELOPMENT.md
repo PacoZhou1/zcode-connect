@@ -54,3 +54,7 @@ scripts/tests/run-relay-v2-tests.sh --live-auth-preflight
 The iOS test targets include `RelayAccountKeychainTests`, `LocalizationTests`, and `RelayV2OnboardingUITests`. Run them on your own dedicated iOS 26+ Simulator. A separate QA app can use `ZCODE_APP_BUNDLE_ID=dev.example.zcode.relayv2qa` at build time; use ad-hoc signing for Simulator Keychain tests. Provider-page UI tests access official public login pages, so they require network access. They do not sign in. Do not commit generated screenshots, logs, result bundles, authorization URLs, or real pairing information.
 
 真实验收仍需用户在官方页面完成授权，并用已登录的 ZCode 3.17.1 桌面端确认项目、对话、文件、子智能体和重连。协议模拟、登录页展示和真实电脑连接是不同的验收层级；本分支尚未上传或提交商店更新。发布前还需核对隐私说明和审核员登录、连接步骤。
+
+The account vault stores separate Z.ai and BigModel sessions in one device-only Keychain item, with an explicit selected platform. Existing single-account values migrate on the next write. Signing out of one platform preserves the other platform; selecting an account still clears the previous account’s visible workspace state. Closing Safari starts a brief confirmation phase for an in-flight grant; only a verified grant successfully saved to Keychain produces signed-in status. Cancelling in the app cancels the attempt immediately. Pairing and Settings present authorization only from the visible screen, so the hidden onboarding screen cannot dismiss a Settings authorization.
+
+登录后的连接页分别显示平台状态，并把扫码放在电脑列表之前。`--official-account-review` 是仅限 Debug 的界面验收入口，使用独立偏好域、内存账号和虚构内容，不读取或覆盖用户钥匙串。测试截图中的 Demo 登录不能作为真实授权或实连证据。

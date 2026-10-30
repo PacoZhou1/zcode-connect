@@ -2,7 +2,7 @@ import Foundation
 
 private struct CheckFailure: Error { let label: String }
 private actor HTTPFixture: RelayHTTPTransport {
-    enum Mode: Sendable { case normal, invalidToken, expired, businessError, malformedDevice, lateReady, forbiddenRedirect, multiWindow }
+    enum Mode: Sendable { case normal, invalidToken, expired, businessError, malformedDevice, lateReady, forbiddenRedirect, multiWindow, pending }
     var mode: Mode
     var calls: [URLRequest] = []
     init(_ mode: Mode = .normal) { self.mode = mode }
@@ -19,6 +19,7 @@ private actor HTTPFixture: RelayHTTPTransport {
                             "expires_at": .number(Date().timeIntervalSince1970 + 120), "poll_interval_sec": .int(1)])
         } else if path.contains("/poll/") {
             if mode == .lateReady { try? await Task.sleep(for: .milliseconds(200)) }
+            if mode == .pending { return try reply(.object(["code": .int(0), "data": .object(["status": .string("pending")])])) }
             data = .object(["status": .string("ready"), "token": .string("synthetic-account-credential"),
                             "user": .object(["user_id": .string("test-user"), "name": .string("Demo")]),
                             "zai": .object(["access_token": .string("synthetic-provider-credential")])])
@@ -178,6 +179,20 @@ struct RelayV2SelfTests {
         try await Task.sleep(for: .milliseconds(50)); cancelled.cancelLogin()
         try await Task.sleep(for: .milliseconds(250))
         try check("Cancelled authorization cannot persist a late ready response", try cancelledVault.read() == nil && cancelled.identity == nil)
+
+        let lateVault = MemoryAccountStorage()
+        let late = OfficialAccountController(api: OfficialRelayAPI(http: HTTPFixture(.lateReady)), storage: lateVault)
+        late.signIn(.zai)
+        try await Task.sleep(for: .milliseconds(50)); late.browserDidDismiss()
+        try check("Browser dismissal confirms instead of cancelling the authorization in flight", late.confirmingLogin && late.signingIn)
+        try await Task.sleep(for: .milliseconds(300))
+        try check("A late verified grant is saved and publishes the signed-in platform", late.identity?.provider == .zai && late.identities[.zai] != nil && late.loginCompletion != nil && !late.signingIn)
+        try check("Successful grant closes the browser and clears transient progress", late.authorizationURL == nil && !late.confirmingLogin && late.loginProvider == nil)
+        let closed = OfficialAccountController(api: OfficialRelayAPI(http: HTTPFixture(.pending)), storage: MemoryAccountStorage())
+        closed.signIn(.bigmodel)
+        try await Task.sleep(for: .milliseconds(50)); closed.browserDidDismiss()
+        try await Task.sleep(for: .seconds(7))
+        try check("Closing an unapproved browser never produces signed-in status", closed.identity == nil && closed.loginCompletion == nil && !closed.signingIn && closed.failure != nil)
 
         let socket = StrictV2Socket(); let client = try RelayClient(clientID: "test-client", transport: socket)
         try await client.connect(pairing: pairing, confirmedControllerReplacement: true, oneTimeToken: token)

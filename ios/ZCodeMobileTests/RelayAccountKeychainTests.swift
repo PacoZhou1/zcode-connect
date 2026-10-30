@@ -1,10 +1,11 @@
 import XCTest
+import Security
 @testable import ZCodeMobile
 
 final class RelayAccountKeychainTests: XCTestCase {
     func testDeviceOnlyAccountRoundTripAndRemoval() throws {
         let vault = RelayAccountKeychain(account: "test-" + UUID().uuidString)
-        defer { try? vault.clear() }
+        defer { for provider in RelayAccountProvider.allCases { try? vault.remove(provider) } }
         XCTAssertNil(try vault.read())
         let identity = RelayAccountIdentity(provider: .zai, userID: "synthetic-user", name: "Demo")
         let session = RelayAccountSession(identity: identity, jwt: "synthetic-not-a-login-token", expiresAt: nil)
@@ -16,6 +17,36 @@ final class RelayAccountKeychainTests: XCTestCase {
         XCTAssertEqual(try vault.read()?.identity.scope, "bigmodel:synthetic-other")
         try vault.clear()
         XCTAssertNil(try vault.read())
+    }
+    func testBothPlatformsPersistAndSignOutIndependently() throws {
+        let vault = RelayAccountKeychain(account: "test-two-platforms-" + UUID().uuidString)
+        defer { for provider in RelayAccountProvider.allCases { try? vault.remove(provider) } }
+        let zai = RelayAccountSession(identity: .init(provider: .zai, userID: "fixture-zai", name: "Demo"), jwt: "synthetic-zai", expiresAt: nil)
+        let big = RelayAccountSession(identity: .init(provider: .bigmodel, userID: "fixture-bigmodel", name: "Demo"), jwt: "synthetic-bigmodel", expiresAt: nil)
+        try vault.save(zai); try vault.save(big)
+        XCTAssertEqual(try vault.readAccounts().count, 2)
+        XCTAssertEqual(try vault.read()?.identity.provider, .bigmodel)
+        XCTAssertEqual(try vault.select(.zai)?.jwt, zai.jwt)
+        XCTAssertEqual(try vault.read()?.identity.provider, .zai)
+        try vault.remove(.bigmodel)
+        XCTAssertEqual(try vault.read()?.identity.provider, .zai)
+        XCTAssertEqual(try vault.readAccounts().count, 1)
+        try vault.clear(); XCTAssertNil(try vault.read())
+        XCTAssertTrue(try vault.readAccounts().isEmpty)
+    }
+    func testExistingSingleAccountKeychainValueMigrates() throws {
+        let key = "test-legacy-migration-" + UUID().uuidString
+        let vault = RelayAccountKeychain(account: key)
+        defer { for provider in RelayAccountProvider.allCases { try? vault.remove(provider) } }
+        let old = RelayAccountSession(identity: .init(provider: .bigmodel, userID: "fixture-old", name: "Demo"), jwt: "synthetic-old", expiresAt: nil)
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "dev.paco.zcode.mobile.official-account", kSecAttrAccount as String: key,
+            kSecValueData as String: try JSONEncoder().encode(old), kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+        XCTAssertEqual(SecItemAdd(query as CFDictionary, nil), errSecSuccess)
+        XCTAssertEqual(try vault.read()?.jwt, old.jwt)
+        try vault.save(.init(identity: .init(provider: .zai, userID: "fixture-new", name: "Demo"), jwt: "synthetic-new", expiresAt: nil))
+        XCTAssertEqual(try vault.readAccounts().count, 2)
+        XCTAssertEqual(try vault.select(.bigmodel)?.jwt, old.jwt)
     }
     @MainActor
     func testAccountCacheIsGuardedBeforeTheFirstUIFrame() throws {

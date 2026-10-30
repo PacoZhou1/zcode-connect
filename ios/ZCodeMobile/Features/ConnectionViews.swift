@@ -88,7 +88,12 @@ struct PairingView: View {
             Button(L10n.tr("取消"), role: .cancel) {}
         } message: { Text(L10n.tr("将连接“{0}”，通过{1}读取项目。若另一台手机正在控制，可能会替换它的连接。电脑上的任务会保留。", "\(name.isEmpty ? L10n.tr("我的电脑") : name)", "\(relayServiceHost.map { L10n.tr("你的中转服务器 {0}", "\($0)") } ?? L10n.tr("ZCode 官方中转"))")) }
         .onAppear { isVisible = true; restoreWorkspaceSelection() }
-        .modifier(OfficialLoginPresentation())
+        .modifier(OfficialLoginPresentation(enabled: !embedded || store.sheet == nil))
+        .onChange(of: store.officialAccount.loginCompletion) { _, _ in
+            if isVisible, let identity = store.officialAccount.identity {
+                UIAccessibility.post(notification: .announcement, argument: L10n.tr("{0} 登录成功", identity.provider.title) + ". " + L10n.tr("下一步：连接电脑"))
+            }
+        }
         .onChange(of: store.relayWorkspaceSelection?.id) { _, _ in restoreWorkspaceSelection() }
         .onDisappear {
             isVisible = false
@@ -172,32 +177,32 @@ struct PairingView: View {
                 } header: { Text(L10n.tr("HTTP 桥接")) } footer: { Text(L10n.tr("连接密钥保存在钥匙串中。此方式不会接管原 ZCode 桌面任务。")) }
                 connectButton
             } else {
-                Section {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Image(systemName: "laptopcomputer.and.iphone")
-                            .font(.system(size: 40, weight: .light)).foregroundStyle(ZTheme.accent)
-                        Text(L10n.tr("在手机上继续电脑任务")).font(.title2.weight(.semibold))
-                        Text(relayServiceHost == nil
-                             ? L10n.tr("使用 ZCode 官方中转，无需准备服务器。电脑需保持开机、联网并运行 ZCode。")
-                             : L10n.tr("使用你自己的中转服务器。电脑需保持开机、联网并通过已配置的启动入口运行 ZCode。"))
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }.padding(.vertical, 8)
-                }.listRowBackground(Color.clear)
+                if store.officialAccount.identities.isEmpty {
+                    Section {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Image(systemName: "laptopcomputer.and.iphone")
+                                .font(.system(size: 40, weight: .light)).foregroundStyle(ZTheme.accent)
+                            Text(L10n.tr("在手机上继续电脑任务")).font(.title2.weight(.semibold))
+                            Text(relayServiceHost == nil
+                                 ? L10n.tr("使用 ZCode 官方中转，无需准备服务器。电脑需保持开机、联网并运行 ZCode。")
+                                 : L10n.tr("使用你自己的中转服务器。电脑需保持开机、联网并通过已配置的启动入口运行 ZCode。"))
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }.padding(.vertical, 8)
+                    }.listRowBackground(Color.clear)
+                }
                 if relayPayload == nil {
-                    OfficialAccountSection(onSelect: { device in
-                        parse(device.pairingURL()); confirmRelay = relayPayload != nil
-                    })
-                    Section(L10n.tr("连接帮助")) {
-                        Label(L10n.tr("在电脑上登录，并开启远程控制"), systemImage: "laptopcomputer")
+                    OfficialAccountSection(showDevices: false)
+                    Section {
+                        if let identity = store.officialAccount.identity {
+                            Label(L10n.tr("{0} 登录成功", identity.provider.title), systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green).accessibilityIdentifier("pairing.loginSuccess")
+                            Text(L10n.tr("在电脑上登录同一账号，开启远程控制，然后扫描二维码。"))
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
 
-                        NavigationLink { ConnectionGuideView() } label: {
-                            Text(L10n.tr("还没安装，或找不到二维码？"))
-                        }.accessibilityIdentifier("pairing.guide")
-                    }
-                    Section(L10n.tr("扫码或粘贴链接")) {
                         Button { Task { await startScanning() } } label: {
                             Label(L10n.tr("扫描电脑二维码"), systemImage: "qrcode.viewfinder").fontWeight(.semibold)
-                        }.accessibilityIdentifier("pairing.scan").disabled(connecting)
+                        }.accessibilityIdentifier("pairing.scan").disabled(connecting || store.officialAccount.signingIn)
                         Button { enteringLink.toggle() } label: {
                             Label(L10n.tr("粘贴连接链接"), systemImage: "link")
                         }.accessibilityIdentifier("pairing.showPaste").disabled(connecting)
@@ -212,6 +217,16 @@ struct PairingView: View {
                                     .accessibilityIdentifier("pairing.recognize")
                             }.buttonStyle(.borderless)
                         }
+                    } header: {
+                        Text(store.officialAccount.identity == nil ? L10n.tr("扫码或粘贴链接") : L10n.tr("下一步：连接电脑"))
+                    }
+                    OfficialComputerSection(onSelect: { device in
+                        parse(device.pairingURL()); confirmRelay = relayPayload != nil
+                    })
+                    Section(L10n.tr("连接帮助")) {
+                        NavigationLink { ConnectionGuideView() } label: {
+                            Text(L10n.tr("还没安装，或找不到二维码？"))
+                        }.accessibilityIdentifier("pairing.guide")
                     }
                 } else {
                     if (try? RelayPairing(payload: relayPayload ?? ""))?.usesAccount == true {

@@ -16,6 +16,13 @@ struct SettingsView: View {
         @Bindable var store = store
         return Form {
             OfficialAccountSection(showDevices: false)
+            if store.officialAccount.identity != nil {
+                Section {
+                    Button { store.sheet = .pairing } label: {
+                        Label(L10n.tr("下一步：连接电脑"), systemImage: "qrcode.viewfinder")
+                    }.accessibilityIdentifier("settings.connectComputer")
+                }
+            }
             Section(L10n.tr("语言")) {
                 Picker(L10n.tr("App 语言"), selection: $language.selection) {
                     ForEach(AppLanguage.allCases) { option in

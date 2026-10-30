@@ -800,3 +800,13 @@
 "在 App 中选择电脑" = "Choisir un ordinateur dans l’app";
 "登录后选择在线电脑，再选择项目。也可以扫描二维码或粘贴完整链接。" = "Après connexion, choisissez un ordinateur en ligne et un projet. Vous pouvez aussi scanner un QR code ou coller le lien complet.";
 "此工具包用于旧协议。新版桌面还需适配账号与令牌服务，请勿向自建中转提供官方登录凭据。" = "Ce kit utilise l’ancien protocole. Les nouvelles versions nécessitent aussi les services de compte et de jeton. Ne transmettez jamais vos identifiants officiels à un relais personnel.";
+
+"使用此账号" = "Utiliser ce compte";
+"已登录 · 当前使用" = "Connecté · Actif";
+"已登录" = "Connecté";
+"未登录" = "Non connecté";
+"正在确认登录…" = "Confirmation de la connexion…";
+"电脑暂未出现在列表中，可扫描电脑上的二维码连接。" = "Ordinateur absent de la liste ? Scannez son code QR pour vous connecter.";
+"{0} 登录成功" = "Connexion à {0} réussie";
+"在电脑上登录同一账号，开启远程控制，然后扫描二维码。" = "Connectez-vous au même compte sur votre ordinateur, activez le contrôle à distance, puis scannez le code QR.";
+"下一步：连接电脑" = "Étape suivante : connecter l’ordinateur";
