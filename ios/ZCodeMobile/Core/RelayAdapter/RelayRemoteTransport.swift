@@ -51,16 +51,24 @@ actor RelayRemoteTransport: RemoteTransport {
     private var replay: [BridgeEnvelope] = []
     private var sinks: [UUID: AsyncThrowingStream<BridgeEnvelope, any Error>.Continuation] = [:]
 
-    init(client: RelayClient, bootstrap: RelayBootstrap, bridge: RelayBridge, hostName: String, journalDirectory: URL? = nil) async throws {
+    init(client: RelayClient, bootstrap: RelayBootstrap, bridge: RelayBridge, hostName: String, journalDirectory: URL? = nil, accountScope: String? = nil) async throws {
         guard await client.bridge == bridge, let deviceID = await client.pairedDeviceID, let serviceID = await client.pairedServiceID,
               bootstrap.workspaces.contains(where: { $0.id == bridge.workspaceKey && $0.workspacePath == bridge.workspacePath }) else {
             throw RelayFailure("relay_workspace_mismatch", "The adapter needs the currently attached desktop workspace.")
+        }
+        guard serviceID != OfficialRelay.serviceID || accountScope?.isEmpty == false else {
+            throw OfficialRelay.failure("account_login_required")
         }
         self.client = client; self.bridge = bridge; self.deviceID = deviceID; self.serviceID = serviceID; self.hostName = hostName
         version = await client.connectedAppVersion
         // Preserve the official scope byte-for-byte so existing uncertain commands
         // remain recoverable. A custom service can never read that journal.
-        let scopedDevice = serviceID == RelayPairing.officialServiceID ? deviceID : "service:" + relayDigest(Data(serviceID.utf8)) + "\n" + deviceID
+        let scopedDevice: String
+        if serviceID == OfficialRelay.serviceID {
+            scopedDevice = "account:" + relayDigest(Data(accountScope!.utf8)) + "\nservice:" + relayDigest(Data(serviceID.utf8)) + "\n" + deviceID
+        } else {
+            scopedDevice = serviceID == RelayPairing.officialServiceID ? deviceID : "service:" + relayDigest(Data(serviceID.utf8)) + "\n" + deviceID
+        }
         projectID = "relay-" + String(relayDigest(Data((scopedDevice + "\n" + bridge.workspaceKey).utf8)).prefix(24))
         journal = try RelayAdapterJournal(scope: scopedDevice + "\n" + bridge.workspaceKey + "\n" + client.clientID, directory: journalDirectory)
         for task in bootstrap.tasks ?? [] where Self.belongs(task, to: bridge) {
@@ -110,12 +118,12 @@ actor RelayRemoteTransport: RemoteTransport {
             try Task.checkCancellation()
             try await checkScope()
             try Task.checkCancellation()
-            if waited, ContinuousClock.now >= deadline { throw RelayFailure("relay_operation_in_progress", "当前任务的另一项操作尚未完成，请稍后重试。") }
+            if waited, ContinuousClock.now >= deadline { throw RelayFailure("relay_operation_in_progress", L10n.tr("当前任务的另一项操作尚未完成，请稍后重试。")) }
             if busy.insert(key).inserted { return }
             guard waitForSettings, ContinuousClock.now < deadline else {
                 // This is only local operation contention. It says nothing about
                 // whether an earlier message was delivered, so keep its journal.
-                throw RelayFailure("relay_operation_in_progress", "当前任务的另一项操作尚未完成，请稍后重试。")
+                throw RelayFailure("relay_operation_in_progress", L10n.tr("当前任务的另一项操作尚未完成，请稍后重试。"))
             }
             waited = true
             try await Task.sleep(for: .milliseconds(40))
@@ -143,8 +151,8 @@ actor RelayRemoteTransport: RemoteTransport {
 
     private func checkScope() async throws {
         let state = await client.state
-        if state == .replaced { throw RelayFailure("controller_replaced", "当前连接已被其他设备接管，请重新连接。") }
-        if state == .disconnected { throw lastRelayFailure ?? RelayFailure("relay_disconnected", "连接已断开，正在等待重新连接。") }
+        if state == .replaced { throw RelayFailure("controller_replaced", L10n.tr("当前连接已被其他设备接管，请重新连接。")) }
+        if state == .disconnected { throw lastRelayFailure ?? RelayFailure("relay_disconnected", L10n.tr("连接已断开，正在等待重新连接。")) }
         guard !closed, await client.pairedDeviceID == deviceID, await client.pairedServiceID == serviceID, await client.bridge == bridge else {
             throw RelayFailure("relay_workspace_changed", "Reconnect this view to the selected desktop workspace.")
         }
@@ -431,13 +439,13 @@ actor RelayRemoteTransport: RemoteTransport {
     private func subagentDirectoryPage(_ id: String, projection: RelayConversationProjection, cursor: String?) async throws -> RelayJSON {
         let version = directoryVersion(projection)
         if let cursor {
-            guard directoryVersions[id] == version, let prior = subagentDirectories[id], prior.nextCursor == cursor else { throw RelayFailure("subagent_directory_changed", "智能体列表已更新，请刷新后继续加载。") }
+            guard directoryVersions[id] == version, let prior = subagentDirectories[id], prior.nextCursor == cursor else { throw RelayFailure("subagent_directory_changed", L10n.tr("智能体列表已更新，请刷新后继续加载。")) }
             let page = try await client.listSubagentDirectory(parentSessionID: id, cursor: cursor)
             try await checkScope()
             guard let latest = await client.currentProjection(sessionID: id), directoryVersion(latest) == version,
                   directoryVersions[id] == version, subagentDirectories[id] == prior, page.revision == prior.revision else {
                 directoryVersions[id] = nil
-                throw RelayFailure("subagent_directory_changed", "智能体列表已更新，请刷新后继续加载。")
+                throw RelayFailure("subagent_directory_changed", L10n.tr("智能体列表已更新，请刷新后继续加载。"))
             }
             var raw = try page.raw.requiringObject(), ended = try page.raw["ended"].requiringObject()
             let old = prior.raw["ended"]["items"].array ?? [], incoming = page.raw["ended"]["items"].array ?? []
@@ -448,7 +456,7 @@ actor RelayRemoteTransport: RemoteTransport {
             if directoryErrors[id] != nil { directoryVersions[id] = nil }
             await refreshSubagentDirectory(id, projection: projection, force: true)
         }
-        guard directoryVersions[id] == version, let directory = subagentDirectories[id], directoryErrors[id] == nil else { throw RelayFailure("subagent_directory_unavailable", "主机尚未返回完整智能体列表，请稍后刷新。") }
+        guard directoryVersions[id] == version, let directory = subagentDirectories[id], directoryErrors[id] == nil else { throw RelayFailure("subagent_directory_unavailable", L10n.tr("主机尚未返回完整智能体列表，请稍后刷新。")) }
         let activity = hostActivity(projection)
         try emit(type: "host.activity", sessionID: id, data: ["hostActivity": activity])
         return .object(["hostActivity": activity, "directory": directory.raw])
@@ -552,7 +560,7 @@ actor RelayRemoteTransport: RemoteTransport {
                     replacement = await client.makeCommand(sessionID: sessionID, type: type, payload: payload, commandID: key)
                 }
                 guard (replacement.baseRevision ?? -1) >= ack.revisionAtDecision else {
-                    throw RelayFailure("queue_sync_pending", "会话正在同步，请稍后重试。")
+                    throw RelayFailure("queue_sync_pending", L10n.tr("会话正在同步，请稍后重试。"))
                 }
                 try journal.commit { $0.commands[key] = .init(intentHash: hash, envelope: replacement, context: record.context) }
                 return try await durableCommand(key: key, intent: intent, sessionID: sessionID, type: type, payload: payload, context: context, confirmFullAccess: confirmFullAccess, hookReviewAuthorization: hookReviewAuthorization, staleRetries: staleRetries - 1)
@@ -582,7 +590,7 @@ actor RelayRemoteTransport: RemoteTransport {
         guard ack.admitted else {
             if type == "sendGoalCommand" {
                 let rejected = ["rejected", "stale"].contains(ack.status)
-                throw RelayFailure(rejected ? "goal_start_rejected" : "goal_start_uncertain", rejected ? "主机拒绝了这个目标，请调整后重试。" : "主机尚未确认目标是否已设置，请用原请求重试。", outcomeUncertain: !rejected)
+                throw RelayFailure(rejected ? "goal_start_rejected" : "goal_start_uncertain", rejected ? L10n.tr("主机拒绝了这个目标，请调整后重试。") : L10n.tr("主机尚未确认目标是否已设置，请用原请求重试。"), outcomeUncertain: !rejected)
             }
             if type == "forkAssistant" {
                 let description = [ack.reasonCode, ack.message].compactMap { $0 }.joined(separator: ": ")
@@ -630,7 +638,7 @@ actor RelayRemoteTransport: RemoteTransport {
         let itemID = try body.requiringString("queueItemId")
         let key = "queue-guide-" + relayDigest(Data((id + "|" + itemID).utf8))
         let source = journal.state.commands[key + "-remove"]?.context ?? projections[id]?.raw["queue"]["items"].array?.first(where: { $0["queueItemId"].string == itemID })
-        guard let source, let text = source["text"].string, source["kind"].string == nil || source["kind"].string == "sendText" else { throw RelayFailure("queue_item_missing", "这条消息已被处理，请刷新会话。") }
+        guard let source, let text = source["text"].string, source["kind"].string == nil || source["kind"].string == "sendText" else { throw RelayFailure("queue_item_missing", L10n.tr("这条消息已被处理，请刷新会话。")) }
         let intent: RelayJSON = .object(["sessionId": .string(id), "queueItemId": .string(itemID)])
         // Confirm deletion before admitting the replacement. A missing/drained
         // source is rejected by the host, so it can never become a second input.
@@ -839,10 +847,10 @@ actor RelayRemoteTransport: RemoteTransport {
             // Session read intentionally contains only the current model. Validate a
             // replacement against the same fresh workspace catalog used by the picker.
             let available = model == nil ? (current.raw["settings"]["model"]["available"].array ?? []) : try await client.listModels()
-            guard available.contains(where: { $0["ref"]["providerId"] == selected["providerId"] && $0["ref"]["modelId"] == selected["modelId"] && $0["disabledReason"].string == nil }) else { throw RelayFailure("model_unavailable", "此模型已不可用，请刷新列表。") }
+            guard available.contains(where: { $0["ref"]["providerId"] == selected["providerId"] && $0["ref"]["modelId"] == selected["modelId"] && $0["disabledReason"].string == nil }) else { throw RelayFailure("model_unavailable", L10n.tr("此模型已不可用，请刷新列表。")) }
             if model == nil, let thought {
                 let levels = current.raw["settings"]["thoughtLevel"]["available"].array?.compactMap { $0["value"].string ?? $0.string } ?? []
-                guard levels.contains(thought) else { throw RelayFailure("thought_level_unsupported", "此强度已不可用，请重新选择。") }
+                guard levels.contains(thought) else { throw RelayFailure("thought_level_unsupported", L10n.tr("此强度已不可用，请重新选择。")) }
             }
             let payload: RelayJSON = .object(["provider": selected["providerId"], "model": selected["modelId"], "thought": .string(thought ?? (model == nil ? current.thoughtLevel : nil) ?? "")])
             _ = try await durableCommand(key: body["clientCommandId"].string ?? UUID().uuidString, intent: body, sessionID: id, type: "switchModelConfig", payload: payload)
@@ -852,7 +860,7 @@ actor RelayRemoteTransport: RemoteTransport {
                 snapshot = try await client.readSession(id, messageLimit: 1)
                 if snapshot.model == selected && (thought == nil || snapshot.thoughtLevel == thought) { break }
                 if ContinuousClock.now >= deadline {
-                    throw RelayFailure("settings_not_confirmed", "电脑尚未确认设置修改，请稍后重试。", outcomeUncertain: true)
+                    throw RelayFailure("settings_not_confirmed", L10n.tr("电脑尚未确认设置修改，请稍后重试。"), outcomeUncertain: true)
                 }
                 try await Task.sleep(for: .milliseconds(350))
             } while true

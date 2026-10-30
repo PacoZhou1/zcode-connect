@@ -6,14 +6,14 @@ struct GlassCalibrationView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 30) {
-                    Text("官方材质基准 · 相同尺寸与背景").font(.headline)
+                    Text(L10n.tr("官方材质基准 · 相同尺寸与背景")).font(.headline)
                     ZStack {
                         VStack(spacing: 8) {
                             ForEach(0..<7) { index in
                                 HStack {
                                     Text("Example-Mac.local").foregroundStyle(index.isMultiple(of: 2) ? .purple : .primary)
                                     Spacer()
-                                    Text("正在继续你的工作").foregroundStyle(.secondary)
+                                    Text(L10n.tr("正在继续你的工作")).foregroundStyle(.secondary)
                                 }
                             }
                         }.font(.system(size: 17))
@@ -30,7 +30,7 @@ struct GlassCalibrationView: View {
                         Button {} label: { Image(systemName: "plus").frame(width: 34, height: 34) }
                             .buttonStyle(.glass)
                     }.font(.system(size: 22)).buttonBorderShape(.circle)
-                    Text("文件夹图标与项目文字").font(.headline)
+                    Text(L10n.tr("文件夹图标与项目文字")).font(.headline)
                     ForEach([12.0, 13, 14, 15, 16], id: \.self) { size in
                         HStack(spacing: 6) {
                             Text("\(Int(size)) pt").frame(width: 58, alignment: .leading)
@@ -41,7 +41,7 @@ struct GlassCalibrationView: View {
                         }.foregroundStyle(ZTheme.listSecondary)
                     }
                 }.padding(24)
-            }.navigationTitle("材质与尺寸校准").navigationBarTitleDisplayMode(.inline)
+            }.navigationTitle(L10n.tr("材质与尺寸校准")).navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { Button {} label: { Image(systemName: "chevron.left") } }
                     ToolbarItem(placement: .topBarTrailing) { Button {} label: { Image(systemName: "ellipsis") } }

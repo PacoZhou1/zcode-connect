@@ -81,35 +81,35 @@ struct HomeView: View {
             }
         }
         .background(ZTheme.background)
-        .confirmationDialog("切换到这台电脑？", isPresented: Binding(get: { computerToConfirm != nil }, set: { if !$0 { computerToConfirm = nil } }), titleVisibility: .visible) {
-            Button("连接并切换") {
+        .confirmationDialog(L10n.tr("切换到这台电脑？"), isPresented: Binding(get: { computerToConfirm != nil }, set: { if !$0 { computerToConfirm = nil } }), titleVisibility: .visible) {
+            Button(L10n.tr("连接并切换")) {
                 guard let profile = computerToConfirm else { return }
                 computerToConfirm = nil
                 search = ""; collapsed = []
                 Task { await store.switchComputer(profile, confirmedControllerReplacement: true) }
             }
-            Button("取消", role: .cancel) { computerToConfirm = nil }
+            Button(L10n.tr("取消"), role: .cancel) { computerToConfirm = nil }
         } message: {
-            Text("连接 \(computerToConfirm?.name ?? "所选电脑") 并加载其任务。如果另一台手机正在控制该电脑，此次连接可能替换它；电脑上的任务会继续运行。")
+            Text(L10n.tr("连接 {0} 并加载其任务。如果另一台手机正在控制该电脑，此次连接可能替换它；电脑上的任务会继续运行。", "\(computerToConfirm?.name ?? L10n.tr("所选电脑"))"))
         }
-        .confirmationDialog("重新连接 ZCode 远程控制？", isPresented: $confirmRelayReconnect, titleVisibility: .visible) {
-            Button("连接这台电脑") {
+        .confirmationDialog(L10n.tr("重新连接 ZCode 远程控制？"), isPresented: $confirmRelayReconnect, titleVisibility: .visible) {
+            Button(L10n.tr("连接这台电脑")) {
                 if let profile = store.activeProfile { Task { await store.connect(profile, confirmedControllerReplacement: true) } }
             }
-        } message: { Text("同一电脑工作区只允许一个移动端控制器。连接后可能替换当前已连接的手机。") }
+        } message: { Text(L10n.tr("同一电脑工作区只允许一个移动端控制器。连接后可能替换当前已连接的手机。")) }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { store.sheet = .connections } label: {
                     MenuLinesGlyph().stroke(style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
                         .frame(width: 22, height: 24)
-                }.tint(.primary).accessibilityLabel("打开连接与导航")
+                }.tint(.primary).accessibilityLabel(L10n.tr("打开连接与导航"))
                     .accessibilityIdentifier("home.sidebar")
             }
             ToolbarItem(placement: .principal) {
                 Button { store.sheet = .connections } label: {
                     VStack(spacing: 2) {
-                        Text(store.showArchived ? "已归档任务" : "Zcode connect")
+                        Text(store.showArchived ? L10n.tr("已归档任务") : "zcode connect")
                             .font(.system(size: 17, weight: .semibold)).foregroundStyle(.primary)
                         HStack(spacing: 6) {
                             Circle().fill(store.connection.isOnline ?
@@ -117,10 +117,10 @@ struct HomeView: View {
                                 .frame(width: 6, height: 6)
                             Image(systemName: "laptopcomputer").font(.system(size: 11))
                             Text(store.connection.isOnline && !store.isReferenceMode && !store.streamConnected
-                                 ? "\(store.hostName) · 正在重连" : store.hostName).font(.system(size: 13))
+                                 ? L10n.tr("{0} · 正在重连", "\(store.hostName)") : store.hostName).font(.system(size: 13))
                         }.foregroundStyle(.secondary)
                     }
-                }.buttonStyle(.plain).accessibilityLabel("当前电脑，\(store.hostName)，\(store.connection.label)")
+                }.buttonStyle(.plain).accessibilityLabel(L10n.tr("当前电脑，{0}，{1}", "\(store.hostName)", "\(store.connection.label)"))
             }
             ToolbarItem(placement: .topBarTrailing) {
                 homeMenu
@@ -128,26 +128,26 @@ struct HomeView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 12) {
-                GlassSearchField(text: $search, placeholder: "搜索聊天")
+                GlassSearchField(text: $search, placeholder: L10n.tr("搜索聊天"))
                 Button {
                     if store.connection.isOnline { store.path.append(.newSession) }
                     else { store.sheet = .pairing }
                 } label: {
                     HStack(spacing: 10) {
                         ComposeGlyph().stroke(style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round)).frame(width: 25, height: 25)
-                        if !store.connection.isOnline { Text("聊天").font(.system(size: 18, weight: .semibold)) }
+                        if !store.connection.isOnline { Text(L10n.tr("聊天")).font(.system(size: 18, weight: .semibold)) }
                     }.frame(width: store.connection.isOnline ? 36 : 106, height: store.connection.isOnline ? 36 : 34)
                 }.buttonStyle(.glassProminent).buttonBorderShape(store.connection.isOnline ? .circle : .capsule)
                     .frame(width: store.connection.isOnline ? 48 : 120, height: 48)
-                    .accessibilityLabel("新建聊天").accessibilityIdentifier("home.new")
+                    .accessibilityLabel(L10n.tr("新建聊天")).accessibilityIdentifier("home.new")
                     .measureLayout("home.new")
             }
             .padding(.horizontal, 28).padding(.top, 10).padding(.bottom, 8)
         }
-        .alert("重命名任务", isPresented: Binding(get: { renameSession != nil }, set: { if !$0 { renameSession = nil } })) {
-            TextField("任务名称", text: $renameText)
-            Button("取消", role: .cancel) { renameSession = nil }
-            Button("保存") {
+        .alert(L10n.tr("重命名任务"), isPresented: Binding(get: { renameSession != nil }, set: { if !$0 { renameSession = nil } })) {
+            TextField(L10n.tr("任务名称"), text: $renameText)
+            Button(L10n.tr("取消"), role: .cancel) { renameSession = nil }
+            Button(L10n.tr("保存")) {
                 if renameAvailable, let id = renameSession?.id {
                     store.rename(id, title: renameText)
                 }
@@ -172,26 +172,26 @@ struct HomeView: View {
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if store.sessionListTruncated {
-                    InlineNotice(symbol: "list.bullet", text: "已加载 \(store.sessions.count) 个任务，电脑还有未返回的记录。当前搜索只覆盖已加载任务。")
+                    InlineNotice(symbol: "list.bullet", text: L10n.tr("已加载 {0} 个任务，电脑还有未返回的记录。当前搜索只覆盖已加载任务。", "\(store.sessions.count)"))
                         .padding(.bottom, 16)
                 }
                 if store.isReferenceMode && !store.referenceReview {
                     HStack {
-                        Text("界面体验").font(.caption.weight(.medium))
+                        Text(L10n.tr("界面体验")).font(.caption.weight(.medium))
                         Spacer()
-                        Button("连接我的电脑") { store.leaveReferenceMode(); store.sheet = .pairing }
+                        Button(L10n.tr("连接我的电脑")) { store.leaveReferenceMode(); store.sheet = .pairing }
                             .font(.caption)
                     }.foregroundStyle(.secondary).padding(.bottom, 20)
                 }
                 if store.showArchived {
                     Button { store.showArchived = false } label: {
-                        Label("返回全部任务", systemImage: "arrow.left").font(.subheadline)
+                        Label(L10n.tr("返回全部任务"), systemImage: "arrow.left").font(.subheadline)
                     }.padding(.bottom, 20)
                 }
                 if visibleGroups.isEmpty {
-                    ContentUnavailableView(search.isEmpty ? "还没有任务" : "没有找到聊天",
+                    ContentUnavailableView(search.isEmpty ? L10n.tr("还没有任务") : L10n.tr("没有找到聊天"),
                         systemImage: search.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
-                        description: Text(search.isEmpty ? "创建一个任务，从手机继续你的工作。" : "试试其他任务名称或项目名称。"))
+                        description: Text(search.isEmpty ? L10n.tr("创建一个任务，从手机继续你的工作。") : L10n.tr("试试其他任务名称或项目名称。")))
                         .padding(.top, 100)
                 }
                 ForEach(visibleGroups) { group in
@@ -234,14 +234,14 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 6.666667) {
                 HStack(spacing: 8) {
                     if session.status == .running { StatusDot(status: session.status) }
-                    else if store.isUnread(session.id) { Circle().fill(ZTheme.accent).frame(width: 7, height: 7).accessibilityLabel("未读") }
-                    if session.isPinned { Image(systemName: "flag.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(ZTheme.accent).accessibilityLabel("已置顶") }
+                    else if store.isUnread(session.id) { Circle().fill(ZTheme.accent).frame(width: 7, height: 7).accessibilityLabel(L10n.tr("未读")) }
+                    if session.isPinned { Image(systemName: "flag.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(ZTheme.accent).accessibilityLabel(L10n.tr("已置顶")) }
                     Text(session.title).font(.system(size: 17))
                         .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                 }.foregroundStyle(.primary)
                 HStack(spacing: 4.666667) {
                     Group {
-                        if session.projectName == "聊天" {
+                        if session.projectName == L10n.tr("聊天") {
                             ChatGlyph().stroke(style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
                         } else {
                             FolderGlyph().stroke(style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
@@ -314,30 +314,30 @@ struct HomeView: View {
                         }
                         .accessibilityIdentifier("home.computer.\(profile.id)")
                     }
-                    if store.profiles.isEmpty { Text("还没有添加电脑") }
+                    if store.profiles.isEmpty { Text(L10n.tr("还没有添加电脑")) }
                     Divider()
-                    Button("添加电脑", systemImage: "plus") { store.sheet = .pairing }
-                    Button("管理电脑", systemImage: "laptopcomputer") { store.sheet = .connections }
-                } label: { Label("切换电脑", systemImage: "laptopcomputer") }
-                Button("添加连接", systemImage: "plus") { store.sheet = .pairing }
+                    Button(L10n.tr("添加电脑"), systemImage: "plus") { store.sheet = .pairing }
+                    Button(L10n.tr("管理电脑"), systemImage: "laptopcomputer") { store.sheet = .connections }
+                } label: { Label(L10n.tr("切换电脑"), systemImage: "laptopcomputer") }
+                Button(L10n.tr("添加连接"), systemImage: "plus") { store.sheet = .pairing }
                     .accessibilityIdentifier("home.addConnection")
             }
-            Picker("排序方式", selection: $store.sortOrder) {
-                ForEach(SortOrder.allCases) { sort in Label(sort.rawValue, systemImage: sort.symbol).tag(sort) }
+            Picker(L10n.tr("排序方式"), selection: $store.sortOrder) {
+                ForEach(SortOrder.allCases) { sort in Label(L10n.tr(sort.rawValue), systemImage: sort.symbol).tag(sort) }
             }.pickerStyle(.inline)
-            Section("管理") {
-                Button("云端任务", systemImage: "cloud") {
-                    store.errorMessage = "云端任务暂未接入。当前任务在所连接的电脑上运行；中转服务器只负责传输，不会在电脑离线后继续执行任务。"
+            Section(L10n.tr("管理")) {
+                Button(L10n.tr("云端任务"), systemImage: "cloud") {
+                    store.errorMessage = L10n.tr("云端任务暂未接入。当前任务在所连接的电脑上运行；中转服务器只负责传输，不会在电脑离线后继续执行任务。")
                 }
-                Button(store.showArchived ? "全部任务" : "已归档任务", systemImage: "archivebox") { store.showArchived.toggle() }
-                Button("设置", systemImage: "gearshape") { store.sheet = .settings }
+                Button(store.showArchived ? L10n.tr("全部任务") : L10n.tr("已归档任务"), systemImage: "archivebox") { store.showArchived.toggle() }
+                Button(L10n.tr("设置"), systemImage: "gearshape") { store.sheet = .settings }
             }
             if store.isReferenceMode {
-                Section("剩余用量") { Text("本周 59%").foregroundStyle(.secondary) }
+                Section(L10n.tr("剩余用量")) { Text(L10n.tr("本周 59%")).foregroundStyle(.secondary) }
             }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 21, weight: .semibold))
-        }.tint(.primary).accessibilityLabel("远程菜单").accessibilityIdentifier("home.menu")
+        }.tint(.primary).accessibilityLabel(L10n.tr("远程菜单")).accessibilityIdentifier("home.menu")
     }
 
     private func computerLabel(_ profile: ConnectionProfile) -> String {
@@ -351,7 +351,7 @@ struct HomeView: View {
             Spacer()
             VStack(spacing: 22) {
                 Text("\(store.connection.label) · \(store.hostName)").font(.system(size: 20))
-                Text(store.connection == .connecting ? "正在加载这台电脑的任务…" : "请确保 ZCode 正在这台电脑上运行。")
+                Text(store.connection == .connecting ? L10n.tr("正在加载这台电脑的任务…") : L10n.tr("请确保 ZCode 正在这台电脑上运行。"))
                     .font(.system(size: 19)).multilineTextAlignment(.center)
                 if store.activeProfile != nil {
                     Button {
@@ -359,13 +359,13 @@ struct HomeView: View {
                         else { Task { await store.refresh() } }
                     } label: {
                         if store.connection == .connecting { ProgressView().frame(width: 78, height: 26) }
-                        else { Text("重新连接").frame(width: 78, height: 26) }
+                        else { Text(L10n.tr("重新连接")).frame(width: 78, height: 26) }
                     }.buttonStyle(NativeGlassButtonStyle()).disabled(store.connection == .connecting)
                 } else {
-                    Button("添加连接") { store.sheet = .pairing }
+                    Button(L10n.tr("添加连接")) { store.sheet = .pairing }
                         .buttonStyle(NativeGlassButtonStyle()).controlSize(.large)
                     if !store.referenceReview {
-                        Button("先体验界面") { store.enterReferenceMode() }.font(.subheadline)
+                        Button(L10n.tr("查看演示")) { store.enterReferenceMode() }.font(.subheadline)
                     }
                 }
             }.foregroundStyle(.secondary).padding(.horizontal, 28)
@@ -375,9 +375,9 @@ struct HomeView: View {
 
     private func groupTitle(_ date: Date) -> String {
         let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "今天" }
-        if calendar.isDateInYesterday(date) { return "昨天" }
-        if (calendar.dateComponents([.day], from: date, to: .now).day ?? 100) < 7 { return "过去 7 天" }
-        return "更早"
+        if calendar.isDateInToday(date) { return L10n.tr("今天") }
+        if calendar.isDateInYesterday(date) { return L10n.tr("昨天") }
+        if (calendar.dateComponents([.day], from: date, to: .now).day ?? 100) < 7 { return L10n.tr("过去 7 天") }
+        return L10n.tr("更早")
     }
 }

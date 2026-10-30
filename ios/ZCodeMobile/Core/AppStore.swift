@@ -4,10 +4,12 @@ import UIKit
 
 @MainActor @Observable
 final class AppStore {
+    let officialAccount: OfficialAccountController
+    @ObservationIgnored private var relayPairingAccountScope: String?
     var path: [AppRoute] = []
     var sheet: AppSheet?
     var connection: ConnectionState = .disconnected
-    var hostName = "你的电脑"
+    var hostName = L10n.tr("你的电脑")
     var isReferenceMode = false
     var referenceReview = false
     var sessions: [RemoteSession] = []
@@ -51,7 +53,7 @@ final class AppStore {
     var profiles: [ConnectionProfile] = []
     var activeProfileID: String?
     var selectedProjectID: String?
-    var appearance = "跟随系统"
+    var appearance = L10n.tr("跟随系统")
     var hapticsEnabled = true
     private struct CachedReadingState: Codable {
         var savedAt: Date
@@ -99,7 +101,7 @@ final class AppStore {
         guard let pending = pendingSubmissions[key], !sendingSessions.contains(pending.sessionID ?? "") else { return }
         var next = pendingSubmissions; next[key] = nil
         do { try submissionJournal.write(next, scope: persistenceScope); pendingSubmissions = next }
-        catch { errorMessage = "无法移除发送提示，请重试。" }
+        catch { errorMessage = L10n.tr("无法移除发送提示，请重试。") }
     }
 
     func reconcilePendingSubmissions(_ id: String) async {
@@ -190,7 +192,9 @@ final class AppStore {
     @ObservationIgnored private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard,
+         officialAccount: OfficialAccountController? = nil,
          reconnectDelay: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+        self.officialAccount = officialAccount ?? OfficialAccountController()
         self.defaults = defaults
         self.reconnectDelay = reconnectDelay
         automaticConnectionBlocks = defaults.dictionary(forKey: "automaticConnectionBlocks") as? [String: String] ?? [:]
@@ -199,6 +203,12 @@ final class AppStore {
             ? !profiles.isEmpty : defaults.bool(forKey: "hasConnectedBefore")
         defaults.set(hasConnectedBefore, forKey: "hasConnectedBefore")
         activeProfileID = defaults.string(forKey: "activeConnection")
+        // Gate the cache before the first SwiftUI frame, not only in the later .task start.
+        self.officialAccount.restore()
+        if let profile = profiles.first(where: { $0.id == activeProfileID }), profile.isAccountRelay,
+           profile.relayAccountScope == nil || profile.relayAccountScope != self.officialAccount.identity?.scope {
+            activeProfileID = nil; defaults.removeObject(forKey: "activeConnection"); sheet = .pairing
+        }
         drafts = decode([String: String].self, key: scopedKey("drafts")) ?? [:]
         localTitles = decode([String: String].self, key: scopedKey("titles")) ?? [:]
         pinnedIDs = Set(defaults.stringArray(forKey: scopedKey("pins")) ?? [])
@@ -210,7 +220,7 @@ final class AppStore {
         completionNotifications = defaults.object(forKey: "completionNotifications") as? Bool ?? true
 
         do { try loadScopedState() }
-        catch { errorMessage = "无法恢复待发送消息：\(error.localizedDescription)" }
+        catch { errorMessage = L10n.tr("无法恢复待发送消息：{0}", "\(error.localizedDescription)") }
 
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
@@ -223,83 +233,87 @@ final class AppStore {
                     path = [.session(ReferenceData.conversationID)]
                 case "activity-transition-review":
                     transcripts[ReferenceData.conversationID] = [
-                        ChatMessage(id: "transition-user", role: .user, text: "检查工具结束到正文出现的过渡", transcript: .init(turnID: "transition", state: .running, role: .input)),
+                        ChatMessage(id: "transition-user", role: .user, text: L10n.tr("检查工具结束到正文出现的过渡"), transcript: .init(turnID: "transition", state: .running, role: .input)),
                         ChatMessage(id: "transition-tools", role: .assistant, text: "", steps: [
-                            ToolStep(id: "transition-read", title: "Read", detail: "文件读取详情", status: .completed, inputJSON: #"{"path":"/project/ChatView.swift"}"#),
-                            ToolStep(id: "transition-test", title: "RunTests", detail: "测试执行详情", status: .running, inputJSON: #"{"name":"阅读体验测试"}"#)
+                            ToolStep(id: "transition-read", title: "Read", detail: L10n.tr("文件读取详情"), status: .completed, inputJSON: #"{"path":"/project/ChatView.swift"}"#),
+                            ToolStep(id: "transition-test", title: "RunTests", detail: L10n.tr("测试执行详情"), status: .running, inputJSON: #"{"name":"Reading experience test"}"#)
                         ], transcript: .init(turnID: "transition", state: .running, role: .process))
                     ]
                     setStatus(ReferenceData.conversationID, .running)
                     path = [.session(ReferenceData.conversationID)]
                 case "scroll-layout-review":
-                    let text = (0..<35).map { "第 \($0) 段：这是一段用于检查长消息气泡高度的文本。滚动时应当保持位置稳定，不应突然回到底部。" }.joined(separator: "\n\n")
-                    transcripts[ReferenceData.conversationID] = [ChatMessage(id: "long-answer", role: .assistant, text: text), ChatMessage(id: "long-bubble", role: .user, text: "这个问题气泡经过屏幕中部时，请保持阅读位置。"), ChatMessage(id: "short-answer", role: .assistant, text: "这是回复末尾，滚动检查。")]
+                    let text = (0..<35).map { L10n.tr("第 {0} 段：这是一段用于检查长消息气泡高度的文本。滚动时应当保持位置稳定，不应突然回到底部。", "\($0)") }.joined(separator: "\n\n")
+                    transcripts[ReferenceData.conversationID] = [ChatMessage(id: "long-answer", role: .assistant, text: text), ChatMessage(id: "long-bubble", role: .user, text: L10n.tr("这个问题气泡经过屏幕中部时，请保持阅读位置。")), ChatMessage(id: "short-answer", role: .assistant, text: L10n.tr("这是回复末尾，滚动检查。"))]
                     path = [.session(ReferenceData.conversationID)]
                 case "markdown-review":
-                    let sample = "### 标题应呈现为标题\n\n正文 **加粗**、*强调* 与 [Apple](https://developer.apple.com)。\n\n- 第一项\n- 第二项\n\n1. 有序项目\n2. 下一项\n\n> 引用应有独立视觉层级。\n\n```swift\nlet text = \"### 保留代码里的标记\"\n```\n\n| 项目 | 结果 |\n|---|---|\n| 标题 | 正常 |"
+                    let sample = L10n.tr("### 标题应呈现为标题\n\n正文 **加粗**、*强调* 与 [Apple](https://developer.apple.com)。\n\n- 第一项\n- 第二项\n\n1. 有序项目\n2. 下一项\n\n> 引用应有独立视觉层级。\n\n```swift\nlet text = \"### 保留代码里的标记\"\n```\n\n| 项目 | 结果 |\n|---|---|\n| 标题 | 正常 |")
                     transcripts[ReferenceData.conversationID] = [ChatMessage(id: "markdown-review", role: .assistant, text: sample)]
                     path = [.session(ReferenceData.conversationID)]
                 case "activity-review":
                     for kind in ToolActivityKind.allCases { precondition(UIImage(systemName: kind.symbol) != nil, "Missing SF Symbol: " + kind.symbol) }
                     let command = #"{"command":"python3 scripts/tests/run-outbox-tests.py --suite metadata-actions --verbose"}"#
                     transcripts[ReferenceData.conversationID] = [
-                        ChatMessage(id: "activity-user", role: .user, text: "检查工具图标、状态和对齐"),
-                        ChatMessage(id: "activity-commands", role: .tool, text: "命令、文件和网页使用统一的图标列。完整内容可以展开查看。", steps: [
-                            ToolStep(id: "cmd-done", title: "Bash", detail: "输入\npython3 scripts/tests/run-outbox-tests.py\n\n输出\n57/57 passed", inputJSON: command),
-                            ToolStep(id: "read-done", title: "Read", detail: "已读取文件；这里是完整输入输出。", inputJSON: #"{"file_path":"/project/ios/ZCodeMobile/Features/ChatView.swift"}"#),
-                            ToolStep(id: "write-done", title: "ApplyPatch", detail: "文件修改的原始补丁。", inputJSON: #"{"path":"/project/ios/ZCodeMobile/Features/MessageView.swift"}"#)
+                        ChatMessage(id: "activity-user", role: .user, text: L10n.tr("检查工具图标、状态和对齐")),
+                        ChatMessage(id: "activity-commands", role: .tool, text: L10n.tr("命令、文件和网页使用统一的图标列。完整内容可以展开查看。"), steps: [
+                            ToolStep(id: "cmd-done", title: "Bash", detail: L10n.tr("输入\npython3 scripts/tests/run-outbox-tests.py\n\n输出\n57/57 passed"), inputJSON: command),
+                            ToolStep(id: "read-done", title: "Read", detail: L10n.tr("已读取文件；这里是完整输入输出。"), inputJSON: #"{"file_path":"/project/ios/ZCodeMobile/Features/ChatView.swift"}"#),
+                            ToolStep(id: "write-done", title: "ApplyPatch", detail: L10n.tr("文件修改的原始补丁。"), inputJSON: #"{"path":"/project/ios/ZCodeMobile/Features/MessageView.swift"}"#)
                         ]),
-                        ChatMessage(id: "activity-live", role: .tool, text: "没有真实耗时的数据时，不显示计时。", steps: [
-                            ToolStep(id: "fetch-live", title: "WebFetch", detail: "网页获取中", status: .running, websiteURL: "https://www.apple.com/"),
-                            ToolStep(id: "search-live", title: "WebSearch", detail: "搜索输入", status: .running, inputJSON: #"{"query":"Apple SF Symbols 图标设计"}"#),
-                            ToolStep(id: "permission", title: "Bash", detail: "等待用户允许运行", status: .waiting, inputJSON: #"{"command":"xcodebuild -scheme ZCodeMobile build"}"#, rawStatus: "pendingApproval"),
-                            ToolStep(id: "test-fail", title: "RunTests", detail: "测试失败的真实错误在此显示。", status: .failed, inputJSON: #"{"name":"UI 布局测试"}"#),
-                            ToolStep(id: "cancelled", title: "Bash", detail: "用户中断", status: .failed, inputJSON: command, rawStatus: "cancelled"),
-                            ToolStep(id: "future", title: "FutureWorkspaceTool", detail: "未来未知工具仍可以查看详情。", status: .idle)
+                        ChatMessage(id: "activity-live", role: .tool, text: L10n.tr("没有真实耗时的数据时，不显示计时。"), steps: [
+                            ToolStep(id: "fetch-live", title: "WebFetch", detail: L10n.tr("网页获取中"), status: .running, websiteURL: "https://www.apple.com/"),
+                            ToolStep(id: "search-live", title: "WebSearch", detail: L10n.tr("搜索输入"), status: .running, inputJSON: #"{"query":"Apple SF Symbols icon design"}"#),
+                            ToolStep(id: "permission", title: "Bash", detail: L10n.tr("等待用户允许运行"), status: .waiting, inputJSON: #"{"command":"xcodebuild -scheme ZCodeMobile build"}"#, rawStatus: "pendingApproval"),
+                            ToolStep(id: "test-fail", title: "RunTests", detail: L10n.tr("测试失败的真实错误在此显示。"), status: .failed, inputJSON: #"{"name":"UI layout test"}"#),
+                            ToolStep(id: "cancelled", title: "Bash", detail: L10n.tr("用户中断"), status: .failed, inputJSON: command, rawStatus: "cancelled"),
+                            ToolStep(id: "future", title: "FutureWorkspaceTool", detail: L10n.tr("未来未知工具仍可以查看详情。"), status: .idle)
                         ]),
                         ChatMessage(id: "activity-symbols", role: .tool, text: "", steps: ToolActivityKind.allCases.map {
-                            ToolStep(id: "symbol-" + $0.rawValue, title: ["command":"Bash", "read":"Read", "write":"Edit", "search":"Grep", "files":"ListFiles", "webFetch":"WebFetch", "webSearch":"WebSearch", "build":"Build", "test":"RunTests", "versionControl":"Git", "package":"InstallPackage", "network":"HTTPRequest", "computer":"Computer", "agent":"Agent", "plan":"UpdatePlan", "question":"AskUserQuestion", "wait":"Sleep", "image":"ViewImage", "generic":"CustomTool"][$0.rawValue]!, detail: "图标与状态覆盖测试")
+                            ToolStep(id: "symbol-" + $0.rawValue, title: ["command":"Bash", "read":"Read", "write":"Edit", "search":"Grep", "files":"ListFiles", "webFetch":"WebFetch", "webSearch":"WebSearch", "build":"Build", "test":"RunTests", "versionControl":"Git", "package":"InstallPackage", "network":"HTTPRequest", "computer":"Computer", "agent":"Agent", "plan":"UpdatePlan", "question":"AskUserQuestion", "wait":"Sleep", "image":"ViewImage", "generic":"CustomTool"][$0.rawValue]!, detail: L10n.tr("图标与状态覆盖测试"))
                         })
                     ]
                     setStatus(ReferenceData.conversationID, .completed)
                     path = [.session(ReferenceData.conversationID)]
                 case "web-review":
                     transcripts[ReferenceData.conversationID] = [
-                        ChatMessage(id: "web-review-user", role: .user, text: "查看网页工具的显示状态"),
+                        ChatMessage(id: "web-review-user", role: .user, text: L10n.tr("查看网页工具的显示状态")),
                         ChatMessage(id: "web-review-tools", role: .tool, text: "", steps: [
-                            ToolStep(id: "fetch-running", title: "WebFetch", detail: "网页获取中的界面测试", status: .running, websiteURL: "https://www.apple.com/"),
-                            ToolStep(id: "search-running", title: "WebSearch", detail: "搜索没有单一目标网站时显示搜索图标", status: .running),
-                            ToolStep(id: "fetch-failed", title: "WebFetch", detail: "图标不可用时保留默认图标", status: .failed),
-                            ToolStep(id: "fetch-done", title: "WebFetch", detail: "网页读取完成", websiteURL: "https://www.apple.com/")
+                            ToolStep(id: "fetch-running", title: "WebFetch", detail: L10n.tr("网页获取中的界面测试"), status: .running, websiteURL: "https://www.apple.com/"),
+                            ToolStep(id: "search-running", title: "WebSearch", detail: L10n.tr("搜索没有单一目标网站时显示搜索图标"), status: .running),
+                            ToolStep(id: "fetch-failed", title: "WebFetch", detail: L10n.tr("图标不可用时保留默认图标"), status: .failed),
+                            ToolStep(id: "fetch-done", title: "WebFetch", detail: L10n.tr("网页读取完成"), websiteURL: "https://www.apple.com/")
                         ])
                     ]
                     setStatus(ReferenceData.conversationID, .completed)
-                    setDraft("发送后定位在顶部菜单栏下方", for: ReferenceData.conversationID)
+                    setDraft(L10n.tr("发送后定位在顶部菜单栏下方"), for: ReferenceData.conversationID)
                     path = [.session(ReferenceData.conversationID)]
                 case "turn-review":
                     transcripts[ReferenceData.conversationID] = ReferenceData.transcriptReviewMessages
                     path = [.session(ReferenceData.conversationID)]
-                case "new", "voice": path = [.newSession]
+                case "new", "voice":
+                    path = [.newSession]
+                    if args.contains("--store-assets") {
+                        drafts["new:\(ReferenceData.project.id)"] = L10n.tr("检查这个项目的测试结果，整理需要修复的问题。")
+                    }
                 case "hooks", "hooks-expired":
                     path = [.session(ReferenceData.conversationID)]
                     do { pendingInteractions[ReferenceData.conversationID] = [try ReferenceData.hookReviewInteraction(expired: args[index + 1] == "hooks-expired")] }
-                    catch { errorMessage = "无法读取审查体验数据：\(error.localizedDescription)" }
+                    catch { errorMessage = L10n.tr("无法读取审查体验数据：{0}", "\(error.localizedDescription)") }
                 case "files": path = [.session(ReferenceData.conversationID)]; sheet = .files(ReferenceData.conversationID, false)
                 case "advanced": path = [.session(ReferenceData.conversationID)]; sheet = .advanced
                 case "context-review", "context-empty-review", "compact-review", "agents-review":
                     path = [.session(ReferenceData.conversationID)]
-                    setDraft(args[index + 1] == "context-empty-review" ? "" : "上下文与智能体验收", for: ReferenceData.conversationID)
+                    setDraft(args[index + 1] == "context-empty-review" ? "" : L10n.tr("上下文与智能体验收"), for: ReferenceData.conversationID)
                     contextUsage[ReferenceData.conversationID] = ContextUsage(available: true, usedTokens: 44_000, maxTokens: 1_050_000, usedPercent: 4.2, autoCompactThresholdTokens: 900_000, breakdown: [
                         .init(source: "system_tool_schemas", chars: 3590, percent: 35.9), .init(source: "mcp_tool_schemas", chars: 2960, percent: 29.6), .init(source: "messages", chars: 2690, percent: 26.9), .init(source: "system_prompt", chars: 380, percent: 3.8), .init(source: "skills", chars: 270, percent: 2.7), .init(source: "meta_user_context", chars: 110, percent: 1.1)
                     ], breakdownBasis: "characters", compaction: .init(active: args[index + 1] == "compact-review", latest: nil))
                     agentTasks[ReferenceData.conversationID] = [
-                        .init(id: "qa-running", title: "检查后端连接", status: .running, detail: "合成验收数据", colorIndex: 0, statusText: "正在处理"),
-                        .init(id: "qa-complete", title: "审查项目质量", status: .completed, detail: "合成验收数据", colorIndex: 1, statusText: "完成"),
-                        .init(id: "qa-waiting", title: "等待操作批准", status: .waiting, detail: "合成验收数据", colorIndex: 2, statusText: "等待批准")
+                        .init(id: "qa-running", title: L10n.tr("检查后端连接"), status: .running, detail: L10n.tr("合成验收数据"), colorIndex: 0, statusText: L10n.tr("正在处理")),
+                        .init(id: "qa-complete", title: L10n.tr("审查项目质量"), status: .completed, detail: L10n.tr("合成验收数据"), colorIndex: 1, statusText: L10n.tr("完成")),
+                        .init(id: "qa-waiting", title: L10n.tr("等待操作批准"), status: .waiting, detail: L10n.tr("合成验收数据"), colorIndex: 2, statusText: L10n.tr("等待批准"))
                     ]
                 case "send-review":
                     path = [.session(ReferenceData.conversationID)]
-                    setDraft("主题和发送体验验收", for: ReferenceData.conversationID)
+                    setDraft(L10n.tr("主题和发送体验验收"), for: ReferenceData.conversationID)
                 case "status-review":
                     if !sessions.isEmpty { sessions[0].status = .running }
                     if sessions.count > 1 { sessions[1].status = .waiting }
@@ -310,11 +324,23 @@ final class AppStore {
             }
         }
         #endif
+        // Deterministic, offline-only state for App Store screenshot capture and review.
+        if ProcessInfo.processInfo.arguments.contains("--app-store-demo") {
+            enterReferenceMode()
+        }
     }
 
     var activeProfile: ConnectionProfile? { profiles.first { $0.id == activeProfileID } }
+    static func connectionCacheScope(_ profile: ConnectionProfile) -> String {
+        let base = profile.id + "|" + profile.baseURL
+        guard profile.isAccountRelay else { return base }
+        return base + "|account:" + relayDigest(Data((profile.relayAccountScope ?? "").utf8))
+            + "|device:" + (profile.relayDeviceID ?? "")
+    }
     private var persistenceScope: String {
-        isReferenceMode ? "reference" : "\(activeProfileID ?? "unconnected")|\(activeProfile?.baseURL ?? "")"
+        if isReferenceMode { return "reference" }
+        if let activeProfile { return Self.connectionCacheScope(activeProfile) }
+        return "\(activeProfileID ?? "unconnected")|"
     }
     private func scopedKey(_ key: String) -> String { "\(persistenceScope)|\(key)" }
     private func loadScopedState() throws {
@@ -453,7 +479,31 @@ final class AppStore {
         completionEventSink?(id, sessions.first { $0.id == id }?.title ?? hostName)
     }
 
+    private func officialAccountChanged() {
+        let scope = officialAccount.identity?.scope
+        let pairingChanged = relayPairingAccountScope != nil && relayPairingAccountScope != scope
+        let activeChanged = activeProfile?.isAccountRelay == true && activeProfile?.relayAccountScope != scope
+        if pairingChanged || activeChanged {
+            disconnect()
+            sessions = []; transcripts = [:]; histories = [:]; pendingInteractions = [:]
+            projects = []; path = []; activeProfileID = nil
+            modelSelections = [:]; remoteSettings = [:]; projectSettings = [:]; uploadedAttachments = [:]
+            options = SessionOptions(); relayPairingAccountScope = nil
+            drafts = [:]; draftAttachments = [:]; pendingSubmissions = [:]
+            localTitles = [:]; localFeedback = [:]; pinnedIDs = []; archivedIDs = []
+            localUnreadIDs = []; locallyReadTimestamps = [:]; cachedTranscriptIDs = []
+            selectedProjectID = nil; newModelSelection = nil; hostName = L10n.tr("你的电脑")
+            defaults.removeObject(forKey: "activeConnection")
+        }
+        for profile in profiles where profile.isAccountRelay && profile.relayAccountScope == scope && scope != nil {
+            setAutomaticConnectionBlock(nil, profileID: profile.id)
+        }
+    }
+
     func start() async {
+        officialAccount.onIdentityChange = { [weak self] in self?.officialAccountChanged() }
+        officialAccount.restore()
+        officialAccountChanged()
         guard !didStart else { return }
         didStart = true
         #if DEBUG
@@ -464,7 +514,7 @@ final class AppStore {
             guard let endpoint = URL(string: baseURL), endpoint.scheme == "http", endpoint.host == "127.0.0.1",
                   endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
                   endpoint.path.isEmpty || endpoint.path == "/", let port = endpoint.port else {
-                errorMessage = "验收入口仅支持本机专用测试端口。"
+                errorMessage = L10n.tr("验收入口仅支持本机专用测试端口。")
                 return
             }
             let profileID = port == 18789 ? "simulator-acceptance" : "simulator-acceptance-\(port)"
@@ -477,6 +527,7 @@ final class AppStore {
     }
 
     func applicationDidBecomeActive() async {
+        officialAccount.restore()
         let wasActive = isApplicationActive
         isApplicationActive = true
         if !wasActive { automaticConnectionAttempt = 0 }
@@ -515,7 +566,7 @@ final class AppStore {
         if let code {
             return ["relay_transport_failed", "relay_disconnected", "relay_pairing_timeout", "relay_desktop_unpaired",
                     "relay_heartbeat_timeout", "relay_request_timeout", "relay_rpc_timeout", "relay_read_timeout",
-                    "desktop_bridge_degraded", "relay_ack_timeout", "relay_assembly_timeout"].contains(code)
+                    "desktop_bridge_degraded", "relay_ack_timeout", "relay_assembly_timeout", "account_network", "account_offline"].contains(code)
         }
         let failure = error as NSError
         guard failure.domain == NSURLErrorDomain else { return false }
@@ -528,7 +579,7 @@ final class AppStore {
         tearDownConnection()
         let code = (error as? RelayFailure)?.code ?? (error as? BridgeFailure)?.code ?? "connection_failed"
         let message = code == "controller_replaced"
-            ? "另一台手机已接管连接。自动重连已暂停，你可以在连接页面手动重新连接。"
+            ? L10n.tr("另一台手机已接管连接。自动重连已暂停，你可以在连接页面手动重新连接。")
             : Self.connectionErrorMessage(error)
         if !Self.retryableConnectionFailure(error) { setAutomaticConnectionBlock(code, profileID: profile.id) }
         connection = .failed(message)
@@ -602,7 +653,7 @@ final class AppStore {
         tearDownConnection()
         isReferenceMode = true
         localUnreadIDs = []; locallyReadTimestamps = [:]
-        hostName = "Example-Mac.local"
+        hostName = L10n.tr("示例电脑")
         connection = .connected
         projects = ReferenceData.projects
         selectedProjectID = projects.first?.id
@@ -616,6 +667,44 @@ final class AppStore {
         options.permission = .full
     }
 
+    /// Refresh only app-owned demo fixtures. Remote titles, messages, and drafts are never translated.
+    func refreshLocalizedDemo() {
+        guard isReferenceMode else {
+            if activeProfile == nil { hostName = L10n.tr("你的电脑") }
+            return
+        }
+        hostName = L10n.tr("示例电脑")
+        projects = ReferenceData.projects
+        let fresh = Dictionary(uniqueKeysWithValues: ReferenceData.sessions.map { ($0.id, $0) })
+        let titleKeys = [ReferenceData.conversationID: "整理发布说明", "demo-running": "检查任务进度", "demo-waiting": "等待确认的操作"]
+        sessions = sessions.map { session in
+            var result = session
+            if let sample = fresh[session.id], let key = titleKeys[session.id] {
+                // A user may rename a demo task; that title is no longer UI copy.
+                if AppLanguage.supportedCodes.contains(where: { L10n.render(key, language: $0) == session.title }) {
+                    result.title = sample.title
+                }
+                result.projectName = sample.projectName
+            }
+            return result
+        }
+        let messages = Dictionary(uniqueKeysWithValues: ReferenceData.messages.map { ($0.id, $0) })
+        for id in Array(transcripts.keys) {
+            transcripts[id] = transcripts[id]?.map { message in
+                guard var sample = messages[message.id] else { return message }
+                sample.feedback = message.feedback
+                return sample
+            }
+        }
+        if var goal = goals[ReferenceData.conversationID],
+           AppLanguage.supportedCodes.contains(where: { L10n.render("这是应用内演示任务。连接你自己的 ZCode 桌面端后，内容将替换为你的任务。", language: $0) == goal.text }) {
+            goal.text = ReferenceData.goal.text
+            goal.elapsed = ReferenceData.goal.elapsed
+            goals[ReferenceData.conversationID] = goal
+        }
+        agentTasks[ReferenceData.conversationID] = ReferenceData.agents
+    }
+
     func leaveReferenceMode() {
         cancelAutomaticConnection()
         tearDownConnection()
@@ -627,7 +716,7 @@ final class AppStore {
         projects = []
         goals = [:]
         agentTasks = [:]
-        hostName = activeProfile?.name ?? "你的电脑"
+        hostName = activeProfile?.name ?? L10n.tr("你的电脑")
         options = SessionOptions()
         path = []
         didStart = false
@@ -687,7 +776,7 @@ final class AppStore {
         setAutomaticConnectionBlock(nil, profileID: profile.id)
         guard let url = Self.validatedURL(profile.baseURL),
               let secret = token ?? CredentialStore.read(profile.id), !secret.isEmpty else {
-            connection = .failed("请检查连接地址和密钥。")
+            connection = .failed(L10n.tr("请检查连接地址和密钥。"))
             return
         }
         tearDownConnection()
@@ -695,7 +784,7 @@ final class AppStore {
         connection = .connecting
         if let pin = profile.certificateSHA256,
            (url.scheme != "https" || pin.count != 64 || !pin.allSatisfy(\.isHexDigit)) {
-            connection = .failed("连接证书信息无效，请重新扫描电脑上的二维码。")
+            connection = .failed(L10n.tr("连接证书信息无效，请重新扫描电脑上的二维码。"))
             return
         }
         let newClient = BridgeClient(baseURL: url, token: secret, certificateSHA256: profile.certificateSHA256)
@@ -751,14 +840,34 @@ final class AppStore {
 
     private func connectSavedRelay(_ profile: ConnectionProfile, token: String? = nil, reportFailure: Bool) async throws {
         guard let raw = token ?? CredentialStore.read(profile.id), let workspace = profile.relayWorkspaceKey else {
-            throw BridgeFailure(message: "连接信息已失效，请重新扫描电脑上的二维码。", code: "relay_credentials_unavailable")
+            throw BridgeFailure(message: L10n.tr("连接信息已失效，请重新扫描电脑上的二维码。"), code: "relay_credentials_unavailable")
         }
         let pairing = try RelayPairing(payload: raw)
         guard profile.relayDeviceID == pairing.deviceID,
               (profile.relayServiceID ?? RelayPairing.legacyServiceID(profileURL: profile.baseURL)) == pairing.serviceID else {
-            throw BridgeFailure(message: "保存的连接与配对服务不一致，请重新添加连接。", code: "relay_profile_mismatch")
+            throw BridgeFailure(message: L10n.tr("保存的连接与配对服务不一致，请重新添加连接。"), code: "relay_profile_mismatch")
         }
-        let context = try await pairRelay(raw, confirmedControllerReplacement: true, attempt: UUID(), reportFailure: reportFailure, pairing: pairing)
+        if pairing.usesAccount {
+            officialAccount.restore()
+            guard profile.relayAccountScope == officialAccount.identity?.scope, profile.relayAccountScope != nil else {
+                throw OfficialRelay.failure(officialAccount.identity == nil ? "account_login_required" : "account_mismatch")
+            }
+        }
+        let context: RelayWorkspaceSelectionContext
+        do {
+            context = try await pairRelay(raw, confirmedControllerReplacement: true, attempt: UUID(),
+                                         reportFailure: pairing.usesAccount ? false : reportFailure, pairing: pairing)
+        } catch {
+            guard pairing.usesAccount, let failure = error as? RelayFailure,
+                  ["account_mismatch", "account_offline"].contains(failure.code),
+                  let scope = profile.relayAccountScope,
+                  let mid = profile.relayMachineID ?? URLComponents(string: raw)?.queryItems?.first(where: { $0.name == "mid" })?.value else { throw error }
+            let epoch = connectionEpoch
+            guard let replacement = try await officialAccount.replacementDevice(machineID: mid, excludingSID: pairing.deviceID, expectedScope: scope) else { throw error }
+            guard !Task.isCancelled, epoch == connectionEpoch else { throw CancellationError() }
+            context = try await pairRelay(replacement.pairingURL(), confirmedControllerReplacement: true,
+                                          attempt: UUID(), reportFailure: reportFailure)
+        }
         guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
         if !relayWorkspaces.contains(where: { $0.id == workspace && $0.canAttach }) {
             offerRelayWorkspaceSelection(context, name: profile.name)
@@ -773,15 +882,15 @@ final class AppStore {
         guard failure.domain == NSURLErrorDomain else { return error.localizedDescription }
         switch URLError.Code(rawValue: failure.code) {
         case .cannotConnectToHost:
-            return "无法连接到这台电脑。请确认电脑上的 ZCode 和远程连接服务正在运行。"
+            return L10n.tr("无法连接到这台电脑。请确认电脑上的 ZCode 和远程连接服务正在运行。")
         case .cannotFindHost, .dnsLookupFailed:
-            return "找不到这台电脑。请检查连接地址和网络。"
+            return L10n.tr("找不到这台电脑。请检查连接地址和网络。")
         case .notConnectedToInternet:
-            return "当前没有网络连接。联网后可以重新连接电脑。"
+            return L10n.tr("当前没有网络连接。联网后可以重新连接电脑。")
         case .networkConnectionLost:
-            return "与电脑的连接已中断，草稿已保留。请重新连接。"
+            return L10n.tr("与电脑的连接已中断，草稿已保留。请重新连接。")
         case .timedOut:
-            return "连接电脑超时。请检查电脑和网络后重试。"
+            return L10n.tr("连接电脑超时。请检查电脑和网络后重试。")
         default:
             return error.localizedDescription
         }
@@ -794,7 +903,7 @@ final class AppStore {
     private func offerRelayWorkspaceSelection(_ context: RelayWorkspaceSelectionContext, name: String) {
         guard isCurrentRelaySelection(context) else { return }
         relayWorkspaceSelection = .init(attempt: context.attempt, epoch: context.epoch, name: name,
-            reason: "原项目已关闭或暂不可连接，请选择这台电脑上已打开的项目。")
+            reason: L10n.tr("原项目已关闭或暂不可连接，请选择这台电脑上已打开的项目。"))
         connection = .connecting
         errorMessage = nil
     }
@@ -810,12 +919,12 @@ final class AppStore {
 
     func refreshRelayWorkspaces(context: RelayWorkspaceSelectionContext) async throws {
         guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
-        guard relaySelectionOperation == nil else { throw BridgeFailure(message: "正在连接项目，请稍后再刷新。", code: "relay_busy") }
+        guard relaySelectionOperation == nil else { throw BridgeFailure(message: L10n.tr("正在连接项目，请稍后再刷新。"), code: "relay_busy") }
         let operation = UUID(); relaySelectionOperation = operation
         defer { if relaySelectionOperation == operation { relaySelectionOperation = nil } }
         do {
             guard let relayClient, relayBootstrap != nil else {
-                throw BridgeFailure(message: "连接已结束，请重新扫描电脑的连接码。", code: "relay_not_paired")
+                throw BridgeFailure(message: L10n.tr("连接已结束，请重新扫描电脑的连接码。"), code: "relay_not_paired")
             }
             let bootstrap = try await relayClient.workspaces()
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
@@ -831,7 +940,7 @@ final class AppStore {
     @discardableResult
     func beginRelayPairing(_ raw: String, confirmedControllerReplacement: Bool, attempt: UUID = UUID(), reportFailure: Bool = false) async throws -> RelayWorkspaceSelectionContext {
         let pairing = try RelayPairing(payload: raw)
-        guard confirmedControllerReplacement else { throw BridgeFailure(message: "请先确认连接这台电脑。", code: "controller_confirmation_required") }
+        guard confirmedControllerReplacement else { throw BridgeFailure(message: L10n.tr("请先确认连接这台电脑。"), code: "controller_confirmation_required") }
         guard !Task.isCancelled else { throw CancellationError() }
         disconnect()
         return try await pairRelay(raw, confirmedControllerReplacement: confirmedControllerReplacement, attempt: attempt, reportFailure: reportFailure, pairing: pairing)
@@ -840,7 +949,7 @@ final class AppStore {
     private func pairRelay(_ raw: String, confirmedControllerReplacement: Bool, attempt: UUID,
                            reportFailure: Bool, pairing parsed: RelayPairing? = nil) async throws -> RelayWorkspaceSelectionContext {
         let pairing = try parsed ?? RelayPairing(payload: raw)
-        guard confirmedControllerReplacement else { throw BridgeFailure(message: "请先确认连接这台电脑。", code: "controller_confirmation_required") }
+        guard confirmedControllerReplacement else { throw BridgeFailure(message: L10n.tr("请先确认连接这台电脑。"), code: "controller_confirmation_required") }
         guard !Task.isCancelled else { throw CancellationError() }
         tearDownConnection()
         relayConnectionAttempt = attempt
@@ -849,9 +958,16 @@ final class AppStore {
         let installationID = defaults.string(forKey: "relayInstallationID") ?? UUID().uuidString
         defaults.set(installationID, forKey: "relayInstallationID")
         do {
+            var oneTimeToken: String?
+            relayPairingAccountScope = nil
+            if pairing.usesAccount {
+                let authorization = try await officialAccount.terminalToken()
+                guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
+                oneTimeToken = authorization.token; relayPairingAccountScope = authorization.scope
+            }
             let paired = try RelayClient(clientID: installationID)
             relayClient = paired
-            try await paired.connect(pairing: pairing, confirmedControllerReplacement: true)
+            try await paired.connect(pairing: pairing, confirmedControllerReplacement: true, oneTimeToken: oneTimeToken)
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
             let bootstrap = try await paired.bootstrap()
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
@@ -869,15 +985,15 @@ final class AppStore {
 
     func completeRelayPairing(workspaceKey: String, name: String, context: RelayWorkspaceSelectionContext, reportFailure: Bool = false) async throws {
         guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
-        guard relaySelectionOperation == nil else { throw BridgeFailure(message: "正在连接项目，请稍后重试。", code: "relay_busy") }
+        guard relaySelectionOperation == nil else { throw BridgeFailure(message: L10n.tr("正在连接项目，请稍后重试。"), code: "relay_busy") }
         let operation = UUID(); relaySelectionOperation = operation
         defer { if relaySelectionOperation == operation { relaySelectionOperation = nil } }
         do {
             guard let paired = relayClient, let bootstrap = relayBootstrap, let raw = relayPairingText else {
-                throw BridgeFailure(message: "连接已结束，请重新扫描电脑的连接码。", code: "relay_not_paired")
+                throw BridgeFailure(message: L10n.tr("连接已结束，请重新扫描电脑的连接码。"), code: "relay_not_paired")
             }
             guard bootstrap.workspaces.contains(where: { $0.id == workspaceKey && $0.canAttach }) else {
-                throw BridgeFailure(message: "这个项目当前无法连接，请在电脑上激活后重试。", code: "relay_workspace_unavailable")
+                throw BridgeFailure(message: L10n.tr("这个项目当前无法连接，请在电脑上激活后重试。"), code: "relay_workspace_unavailable")
             }
             if let old = client as? RelayRemoteTransport { await old.shutdown() }
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
@@ -885,16 +1001,28 @@ final class AppStore {
             let bridge = try await paired.openWorkspace(key: workspaceKey)
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
             let pairing = try RelayPairing(payload: raw)
+            if pairing.usesAccount {
+                guard let scope = relayPairingAccountScope, scope == officialAccount.identity?.scope else {
+                    throw OfficialRelay.failure("account_mismatch")
+                }
+            }
             let adapter = try await RelayRemoteTransport(client: paired, bootstrap: bootstrap, bridge: bridge,
-                                                         hostName: name.isEmpty ? pairing.deviceName : name)
+                                                         hostName: name.isEmpty ? pairing.deviceName : name,
+                                                         accountScope: relayPairingAccountScope)
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { await adapter.shutdown(); throw CancellationError() }
-            let existing = profiles.first { $0.relayDeviceID == pairing.deviceID && $0.relayWorkspaceKey == workspaceKey
-                && ($0.relayServiceID ?? RelayPairing.legacyServiceID(profileURL: $0.baseURL)) == pairing.serviceID }
+            let selectedMID = URLComponents(string: raw)?.queryItems?.first(where: { $0.name == "mid" })?.value
+            let existing = profiles.first { ($0.relayDeviceID == pairing.deviceID || pairing.usesAccount && selectedMID != nil && $0.relayMachineID == selectedMID)
+                && $0.relayWorkspaceKey == workspaceKey
+                && ($0.relayServiceID ?? RelayPairing.legacyServiceID(profileURL: $0.baseURL)) == pairing.serviceID
+                && $0.relayAccountScope == relayPairingAccountScope }
             let profile = ConnectionProfile(id: existing?.id ?? UUID().uuidString,
                 name: name.isEmpty ? pairing.deviceName : name, baseURL: pairing.profileURL.absoluteString,
-                relayDeviceID: pairing.deviceID, relayWorkspaceKey: workspaceKey, relayServiceID: pairing.serviceID)
+                relayDeviceID: pairing.deviceID, relayWorkspaceKey: workspaceKey, relayServiceID: pairing.serviceID,
+                relayAccountScope: relayPairingAccountScope,
+                relayMachineID: selectedMID)
             try CredentialStore.save(raw, id: profile.id)
             let keepsReadingState = !isReferenceMode && activeProfileID == profile.id && activeProfile?.baseURL == profile.baseURL
+                && activeProfile?.relayDeviceID == profile.relayDeviceID && activeProfile?.relayAccountScope == profile.relayAccountScope
             client = adapter
             if !keepsReadingState {
                 sessions = []; transcripts = [:]; histories = [:]; loadingHistory = []; pendingInteractions = [:]
@@ -926,7 +1054,7 @@ final class AppStore {
             if unavailable {
                 offerRelayWorkspaceSelection(context, name: name.isEmpty ? context.name : name)
                 // Normalize the client's local workspace guard to the Store/UI contract.
-                throw BridgeFailure(message: "这个项目当前无法连接，请在电脑上激活后重试。", code: "relay_workspace_unavailable")
+                throw BridgeFailure(message: L10n.tr("这个项目当前无法连接，请在电脑上激活后重试。"), code: "relay_workspace_unavailable")
             }
             failRelaySelection(error, context: context, reportFailure: reportFailure)
             throw error
@@ -969,7 +1097,7 @@ final class AppStore {
         needsIndexRefresh = false
         if let adapter = client as? RelayRemoteTransport { Task { await adapter.shutdown() } }
         if let relayClient { Task { await relayClient.disconnect() } }
-        relayClient = nil
+        relayClient = nil; relayPairingAccountScope = nil
         relayBootstrap = nil
         relayPairingText = nil
         relayWorkspaces = []
@@ -1080,7 +1208,7 @@ final class AppStore {
                                         URLQueryItem(name: "limit", value: "100"), URLQueryItem(name: "cursor", value: cursor)]
                     let next: Sessions = try await client.get("v1/sessions?\(query.percentEncodedQuery ?? "")")
                     guard next.pagination?.snapshotId == activeFirstPage.pagination?.snapshotId else {
-                        throw BridgeFailure(message: "任务列表已更新，请刷新后重试。", code: "session_cursor_mismatch")
+                        throw BridgeFailure(message: L10n.tr("任务列表已更新，请刷新后重试。"), code: "session_cursor_mismatch")
                     }
                     sessionResponse.sessions.append(contentsOf: next.sessions)
                     truncated = truncated || (next.pagination?.truncated ?? true)
@@ -1125,7 +1253,7 @@ final class AppStore {
 
     func previewMessages(_ id: String) async throws -> [ChatMessage] {
         if isReferenceMode { return messages(id) }
-        guard let client else { throw BridgeFailure(message: "连接已断开。", code: "offline") }
+        guard let client else { throw BridgeFailure(message: L10n.tr("连接已断开。"), code: "offline") }
         let epoch = connectionEpoch
         let detail: BridgeDetail = try await client.get("v1/sessions/\(id)")
         guard epoch == connectionEpoch else { throw CancellationError() }
@@ -1196,8 +1324,8 @@ final class AppStore {
             if let onFailure { onFailure(error.localizedDescription) }
             else {
                 transcriptLoadErrors[id] = messages(id).isEmpty
-                    ? (session(id)?.source == "official-relay-subagent" ? "暂时无法读取智能体记录，请重试。" : "暂时无法读取会话，请重试。")
-                    : "暂时无法更新，请稍后重试。已缓存的内容仍可查看。"
+                    ? (session(id)?.source == "official-relay-subagent" ? L10n.tr("暂时无法读取智能体记录，请重试。") : L10n.tr("暂时无法读取会话，请重试。"))
+                    : L10n.tr("暂时无法更新，请稍后重试。已缓存的内容仍可查看。")
             }
         }
     }
@@ -1234,14 +1362,14 @@ final class AppStore {
             if let failure = error as? BridgeFailure, failure.code == "relay_history_changed" {
                 await loadTranscript(id)
                 guard epoch == connectionEpoch else { return }
-                errorMessage = "电脑上的会话刚刚更新，已刷新记录。请再次加载更早的消息。"
-            } else { errorMessage = "无法加载更早的消息：\(error.localizedDescription)" }
+                errorMessage = L10n.tr("电脑上的会话刚刚更新，已刷新记录。请再次加载更早的消息。")
+            } else { errorMessage = L10n.tr("无法加载更早的消息：{0}", "\(error.localizedDescription)") }
         }
     }
 
     func createSession(text: String, persistedBody: [String: JSONValue]? = nil) async -> String? {
         guard let project = projects.first(where: { $0.id == selectedProjectID }) ?? projects.first else {
-            errorMessage = "请先选择一个项目。"; return nil
+            errorMessage = L10n.tr("请先选择一个项目。"); return nil
         }
         let title = String(text.prefix(36))
         if isReferenceMode {
@@ -1251,11 +1379,11 @@ final class AppStore {
             transcripts[id] = []
             return id
         }
-        guard let client, connection.isOnline else { errorMessage = "请先连接你的电脑。"; return nil }
+        guard let client, connection.isOnline else { errorMessage = L10n.tr("请先连接你的电脑。"); return nil }
         let epoch = connectionEpoch
         struct Created: Decodable, Sendable { var session: BridgeSession }
         do {
-            var body: [String: JSONValue] = ["projectId": .string(project.id), "title": .string(title.isEmpty ? "新任务" : title),
+            var body: [String: JSONValue] = ["projectId": .string(project.id), "title": .string(title.isEmpty ? L10n.tr("新任务") : title),
                                            "mode": .string(options.isPlanMode ? "plan" : options.permission.wireValue)]
             if !options.isPlanMode && options.permission == .full { body["confirmFullAccess"] = .bool(true) }
             if let newModelSelection { body["model"] = newModelSelection.json }
@@ -1277,9 +1405,9 @@ final class AppStore {
     private func messageLengthError(_ text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if activeProfile?.isRelay == true {
-            return trimmed.utf8.count > 128_000 ? "消息太长，请缩短内容或改为附加文件后发送。" : nil
+            return trimmed.utf8.count > 128_000 ? L10n.tr("消息太长，请缩短内容或改为附加文件后发送。") : nil
         }
-        return trimmed.utf16.count > 32_000 ? "消息太长，请缩短内容或改为附加文件后发送。" : nil
+        return trimmed.utf16.count > 32_000 ? L10n.tr("消息太长，请缩短内容或改为附加文件后发送。") : nil
     }
 
     /// A failed attempt remains immutable until it is acknowledged; changed drafts stay separate.
@@ -1294,11 +1422,11 @@ final class AppStore {
         }
         let epoch = connectionEpoch
         let scope = persistenceScope
-        guard connection.isOnline, client != nil else { errorMessage = "请先连接电脑，草稿会保留。"; return nil }
+        guard connection.isOnline, client != nil else { errorMessage = L10n.tr("请先连接电脑，草稿会保留。"); return nil }
         var entry: PendingSubmission
         if let pending = pendingSubmissions[draftKey] {
             guard retryPending || pending.matches(text: text, attachments: attachments) else {
-                errorMessage = "上一条消息尚未确认送达。请先重试上一条；当前修改会保留为草稿。"
+                errorMessage = L10n.tr("上一条消息尚未确认送达。请先重试上一条；当前修改会保留为草稿。")
                 return nil
             }
             entry = pending
@@ -1306,11 +1434,11 @@ final class AppStore {
             if let error = messageLengthError(text) { errorMessage = error; return nil }
             var creation: [String: JSONValue]?
             if sessionID == nil {
-                guard let projectID = selectedProjectID else { errorMessage = "请先选择项目。"; return nil }
+                guard let projectID = selectedProjectID else { errorMessage = L10n.tr("请先选择项目。"); return nil }
                 let title = String(text.prefix(36))
                 var body: [String: JSONValue] = [
                     "projectId": .string(projectID), "clientDraftId": .string(UUID().uuidString),
-                    "title": .string(title.isEmpty ? "新任务" : title),
+                    "title": .string(title.isEmpty ? L10n.tr("新任务") : title),
                     "mode": .string(options.isPlanMode ? "plan" : options.permission.wireValue)
                 ]
                 if !options.isPlanMode && options.permission == .full { body["confirmFullAccess"] = .bool(true) }
@@ -1323,14 +1451,14 @@ final class AppStore {
         }
         // Even a retry must have a durable journal before its first network mutation.
         do { try submissionJournal.write(pendingSubmissions, scope: scope) }
-        catch { errorMessage = "无法保存待发送消息：\(error.localizedDescription)"; return nil }
+        catch { errorMessage = L10n.tr("无法保存待发送消息：{0}", "\(error.localizedDescription)"); return nil }
         if entry.sessionID == nil {
             guard let id = await createSession(text: entry.text, persistedBody: entry.creation),
                   epoch == connectionEpoch else { return nil }
             entry.sessionID = id
             pendingSubmissions[draftKey] = entry
             do { try submissionJournal.write(pendingSubmissions, scope: scope) }
-            catch { errorMessage = "任务已创建，待发送消息保存失败：\(error.localizedDescription)"; return nil }
+            catch { errorMessage = L10n.tr("任务已创建，待发送消息保存失败：{0}", "\(error.localizedDescription)"); return nil }
         }
         guard let id = entry.sessionID else { return nil }
         for (attachmentID, remoteID) in entry.uploadedIDs { uploadedAttachments["\(id):\(attachmentID)"] = remoteID }
@@ -1343,7 +1471,7 @@ final class AppStore {
         let rejected = rejectedSubmissionIDs.remove(entry.id) != nil
         pendingSubmissions[draftKey] = accepted || rejected ? nil : entry
         do { try submissionJournal.write(pendingSubmissions, scope: scope) }
-        catch { errorMessage = "发送记录保存失败；下次重试会使用相同编号：\(error.localizedDescription)" }
+        catch { errorMessage = L10n.tr("发送记录保存失败；下次重试会使用相同编号：{0}", "\(error.localizedDescription)") }
         if !accepted && !rejected { await reconcilePendingSubmissions(id) }
         return accepted ? id : nil
     }
@@ -1375,7 +1503,7 @@ final class AppStore {
             return false
         }
         guard session(id)?.canControl == true else {
-            errorMessage = "这个任务当前只能查看。你可以新建一个手机可控制的任务。"; return false
+            errorMessage = L10n.tr("这个任务当前只能查看。你可以新建一个手机可控制的任务。"); return false
         }
         let isPendingRetry = pendingSubmissions.values.contains { $0.id == inputID && $0.sessionID == id && $0.matches(text: text, attachments: attachments) }
         guard !sendingSessions.contains(id), (![SessionStatus.running, .waiting].contains(session(id)?.status ?? .idle)) || activeProfile?.isRelay == true || isPendingRetry else { return false }
@@ -1392,12 +1520,12 @@ final class AppStore {
                 try? await Task.sleep(for: .milliseconds(600))
                 guard session(id)?.status == .running else { return }
                 transcripts[id, default: []].append(ChatMessage(id: UUID().uuidString, role: .assistant,
-                    text: "已收到这条消息。\n\n你正在体验界面；连接电脑后，这里会显示 ZCode 的真实执行过程与回复。"))
+                    text: L10n.tr("已收到这条消息。\n\n你正在体验界面；连接电脑后，这里会显示 ZCode 的真实执行过程与回复。")))
                 setStatus(id, .completed)
             }
             return true
         }
-        guard let client else { errorMessage = "连接已断开，草稿已保留。"; return false }
+        guard let client else { errorMessage = L10n.tr("连接已断开，草稿已保留。"); return false }
         outgoingBaselineIDs[id] = Set((transcripts[id] ?? []).map(\.id))
         outgoingMessages[id] = ChatMessage(id: "outgoing-" + inputID, role: .user, text: trimmed,
             attachments: attachments.map { MessageAttachment(id: $0.id, fileName: $0.name, mimeType: $0.mimeType) })
@@ -1440,17 +1568,17 @@ final class AppStore {
                 if result.delivery != "queue" && result.delivery != "guide" { setStatus(id, .running) }
                 await loadTranscript(id)
             }
-            if !result.accepted { errorMessage = "电脑没有接受这条消息，请重试。" }
+            if !result.accepted { errorMessage = L10n.tr("电脑没有接受这条消息，请重试。") }
             return result.accepted
         } catch {
             guard epoch == connectionEpoch else { return false }
             if let failure = error as? BridgeFailure, ["invalid_request", "input_rejected"].contains(failure.code) {
                 rejectedSubmissionIDs.insert(inputID)
-                errorMessage = "\(failure.localizedDescription) 请修改后重新发送，草稿已保留。"
+                errorMessage = L10n.tr("{0} 请修改后重新发送，草稿已保留。", "\(failure.localizedDescription)")
             } else if let failure = error as? BridgeFailure, ["invalid_attachment", "attachment_too_large", "attachment_type_unsupported", "invalid_file_name", "attachment_type_mismatch", "attachment_not_found", "attachment_changed", "model_does_not_support_images", "model_does_not_support_pdf"].contains(failure.code) {
                 rejectedSubmissionIDs.insert(inputID)
                 for attachment in attachments { uploadedAttachments.removeValue(forKey: "\(id):\(attachment.id)") }
-                errorMessage = "\(failure.localizedDescription) 请调整附件后重新发送，草稿已保留。"
+                errorMessage = L10n.tr("{0} 请调整附件后重新发送，草稿已保留。", "\(failure.localizedDescription)")
             } else { errorMessage = error.localizedDescription }
             await loadTranscript(id)
             return false
@@ -1469,7 +1597,7 @@ final class AppStore {
             let response: Stopped = try await client.post("v1/sessions/\(id)/stop", body: [:])
             guard epoch == connectionEpoch else { return }
             await loadTranscript(id)
-            if !response.stopped { errorMessage = "电脑还没有确认停止，当前执行状态已刷新。" }
+            if !response.stopped { errorMessage = L10n.tr("电脑还没有确认停止，当前执行状态已刷新。") }
         } catch { if epoch == connectionEpoch { errorMessage = error.localizedDescription } }
     }
 
@@ -1483,12 +1611,12 @@ final class AppStore {
         guard !isReferenceMode, let target = session(review.sessionId),
               target.source == "official-relay" || (target.source == "bridge" && target.canReviewHooks == true),
               let client else {
-            reportFailure("此连接尚不支持工作区命令审查，请回到电脑端处理。")
+            reportFailure(L10n.tr("此连接尚不支持工作区命令审查，请回到电脑端处理。"))
             return false
         }
         guard pendingInteractions[review.sessionId]?.first(where: { $0.id == review.interactionId })?.hookReview == review,
               Date.now.timeIntervalSince1970 * 1000 < Double(review.deadlineAt) else {
-            reportFailure("审查内容已更新或过期，请查看电脑的最新请求。")
+            reportFailure(L10n.tr("审查内容已更新或过期，请查看电脑的最新请求。"))
             return false
         }
         let epoch = connectionEpoch
@@ -1520,7 +1648,7 @@ final class AppStore {
             let result: Accepted = try await client.mutate("v1/sessions/\(review.sessionId)/hooks/review/\(route)", body: body)
             guard epoch == connectionEpoch else { return false }
             guard result.accepted, result.sessionId == review.sessionId else {
-                reportFailure("电脑尚未确认这项操作，请刷新审查状态。")
+                reportFailure(L10n.tr("电脑尚未确认这项操作，请刷新审查状态。"))
                 return false
             }
             await loadTranscript(review.sessionId, onFailure: onFailure)
@@ -1586,7 +1714,7 @@ final class AppStore {
 
     private func readFileResource<T: Decodable & Sendable>(_ path: String) async throws -> T {
         try Task.checkCancellation()
-        guard let client else { throw BridgeFailure(message: "连接已断开。", code: "offline") }
+        guard let client else { throw BridgeFailure(message: L10n.tr("连接已断开。"), code: "offline") }
         let epoch = connectionEpoch
         do {
             let response: T = try await client.get(path)
@@ -1617,7 +1745,7 @@ final class AppStore {
             guard epoch == connectionEpoch, settingsRevisions[id] == revision, !changingSettings.contains(id) else { return }
             remoteSettings[id] = response
             modelSelections[id] = response.model
-        } catch { if epoch == connectionEpoch, settingsRevisions[id] == revision, !changingSettings.contains(id), !Task.isCancelled { transcriptLoadErrors[id] = "设置尚未同步，网络恢复后会重试。" } }
+        } catch { if epoch == connectionEpoch, settingsRevisions[id] == revision, !changingSettings.contains(id), !Task.isCancelled { transcriptLoadErrors[id] = L10n.tr("设置尚未同步，网络恢复后会重试。") } }
     }
 
     func permission(for id: String?) -> PermissionMode {
@@ -1635,7 +1763,7 @@ final class AppStore {
                         confirmFullAccess: Bool = false) async -> Bool {
         if isReferenceMode { return true }
         if (mode == "yolo" || permissionMode == "yolo") && !confirmFullAccess {
-            errorMessage = "请先确认完全访问权限。"
+            errorMessage = L10n.tr("请先确认完全访问权限。")
             return false
         }
         guard let id else {
@@ -1652,7 +1780,7 @@ final class AppStore {
             return true
         }
         guard let client, canEditSettings(id, model: model != nil || reasoning != nil) else {
-            errorMessage = "当前无法更改此设置，请确认电脑已连接、任务可控制。"
+            errorMessage = L10n.tr("当前无法更改此设置，请确认电脑已连接、任务可控制。")
             return false
         }
         let epoch = connectionEpoch
@@ -1712,7 +1840,7 @@ final class AppStore {
         return echoed ? saved : saved + [outgoing]
     }
     func agentCount(_ id: String) -> Int {
-        if isReferenceMode { return (agentTasks[id]?.isEmpty == false) ? 30 : 0 }
+        if isReferenceMode { return agentTasks[id]?.count ?? 0 }
         guard let host = hostAgents[id], host.isVisible else { return 0 }
         return max(Set(host.childSessionIDs).count, Set(host.running.map(\.childSessionID)).count + host.endedTotal)
     }
@@ -1730,29 +1858,29 @@ final class AppStore {
 
     func startGoal(_ text: String, sessionID originalID: String?) async throws {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, text.utf8.count <= 48_000 else { throw BridgeFailure(message: "请填写目标，内容需小于 48 KB。", code: "goal_invalid") }
-        guard canStartGoal(originalID) else { throw BridgeFailure(message: "请先连接可控制的 ZCode 会话。", code: "goal_unavailable") }
+        guard !text.isEmpty, text.utf8.count <= 48_000 else { throw BridgeFailure(message: L10n.tr("请填写目标，内容需小于 48 KB。"), code: "goal_invalid") }
+        guard canStartGoal(originalID) else { throw BridgeFailure(message: L10n.tr("请先连接可控制的 ZCode 会话。"), code: "goal_unavailable") }
         if isReferenceMode {
-            if let originalID { goals[originalID] = TaskGoal(text: text, isPaused: false, elapsed: "刚刚开始") }
+            if let originalID { goals[originalID] = TaskGoal(text: text, isPaused: false, elapsed: L10n.tr("刚刚开始")) }
             else { setDraft(text, for: "new:\(selectedProjectID ?? "")") }
             return
         }
-        guard let client else { throw BridgeFailure(message: "连接已断开，目标尚未发送。", code: "offline") }
+        guard let client else { throw BridgeFailure(message: L10n.tr("连接已断开，目标尚未发送。"), code: "offline") }
         let scope = persistenceScope, epoch = connectionEpoch
         let journal = GoalSubmissionJournal()
         let records = try journal.read(scope: scope)
         var key = originalID ?? "new:\(selectedProjectID ?? "")"
         if let originalID, records[key] == nil {
             let matches = records.filter { $0.value.sessionID == originalID }
-            guard matches.count <= 1 else { throw BridgeFailure(message: "该会话有多个待确认目标，请先核对电脑上的状态。", code: "goal_pending_conflict") }
+            guard matches.count <= 1 else { throw BridgeFailure(message: L10n.tr("该会话有多个待确认目标，请先核对电脑上的状态。"), code: "goal_pending_conflict") }
             if let existing = matches.first { key = existing.key }
         }
         let busyKey = scope + "|" + key
-        guard goalStarts.insert(busyKey).inserted else { throw BridgeFailure(message: "目标正在提交，请稍候。", code: "goal_busy") }
+        guard goalStarts.insert(busyKey).inserted else { throw BridgeFailure(message: L10n.tr("目标正在提交，请稍候。"), code: "goal_busy") }
         defer { goalStarts.remove(busyKey) }
         var pending: PendingGoal
         if let existing = records[key] {
-            guard existing.rejected || existing.text == text else { throw BridgeFailure(message: "上一个目标还未确认送达，请先用原目标重试。", code: "goal_pending") }
+            guard existing.rejected || existing.text == text else { throw BridgeFailure(message: L10n.tr("上一个目标还未确认送达，请先用原目标重试。"), code: "goal_pending") }
             pending = existing
             if existing.rejected {
                 pending.id = UUID().uuidString; pending.text = text; pending.rejected = false
@@ -1761,8 +1889,8 @@ final class AppStore {
         } else {
             pending = PendingGoal(text: text, sessionID: originalID)
             if originalID == nil {
-                guard let project = projects.first(where: { $0.id == selectedProjectID }) ?? projects.first else { throw BridgeFailure(message: "请先选择项目。", code: "project_required") }
-                guard !options.isPlanMode else { throw BridgeFailure(message: "请先关闭计划模式，再开始追求目标。", code: "goal_plan_mode") }
+                guard let project = projects.first(where: { $0.id == selectedProjectID }) ?? projects.first else { throw BridgeFailure(message: L10n.tr("请先选择项目。"), code: "project_required") }
+                guard !options.isPlanMode else { throw BridgeFailure(message: L10n.tr("请先关闭计划模式，再开始追求目标。"), code: "goal_plan_mode") }
                 var creation: [String: JSONValue] = ["projectId": .string(project.id), "title": .string(String(text.prefix(36))),
                     "mode": .string(options.permission.wireValue), "clientDraftId": .string("goal-session-" + pending.id)]
                 if options.permission == .full { creation["confirmFullAccess"] = .bool(true) }
@@ -1772,14 +1900,14 @@ final class AppStore {
             try journal.set(pending, key: key, scope: scope)
         }
         if pending.sessionID == nil {
-            guard let creation = pending.creation else { throw BridgeFailure(message: "目标的会话信息不完整。", code: "goal_pending_invalid") }
+            guard let creation = pending.creation else { throw BridgeFailure(message: L10n.tr("目标的会话信息不完整。"), code: "goal_pending_invalid") }
             struct Created: Decodable, Sendable { var session: BridgeSession }
             let result: Created = try await client.mutate("v1/sessions", body: creation)
             guard epoch == connectionEpoch, scope == persistenceScope else { throw CancellationError() }
             pending.sessionID = result.session.id; try journal.set(pending, key: key, scope: scope)
             upsert(result.session.local)
         }
-        guard let id = pending.sessionID else { throw BridgeFailure(message: "尚未创建目标会话。", code: "goal_pending_invalid") }
+        guard let id = pending.sessionID else { throw BridgeFailure(message: L10n.tr("尚未创建目标会话。"), code: "goal_pending_invalid") }
         struct Accepted: Decodable, Sendable { var accepted: Bool; var hostActivity: JSONValue? }
         let response: Accepted
         do {
@@ -1789,13 +1917,13 @@ final class AppStore {
             let code = (error as? BridgeFailure)?.code ?? (error as? RelayFailure)?.code
             if let code, ["goal_start_invalid", "goal_plan_mode", "goal_start_unavailable", "goal_start_rejected"].contains(code) {
                 pending.rejected = true; try journal.set(pending, key: key, scope: scope)
-                let message = code == "goal_plan_mode" ? "请先关闭计划模式，再开始追求目标。" : "电脑未接受这个目标，请检查任务状态后重试。"
+                let message = code == "goal_plan_mode" ? L10n.tr("请先关闭计划模式，再开始追求目标。") : L10n.tr("电脑未接受这个目标，请检查任务状态后重试。")
                 throw BridgeFailure(message: message, code: code)
             }
             throw error
         }
         guard epoch == connectionEpoch, scope == persistenceScope else { throw CancellationError() }
-        guard response.accepted else { throw BridgeFailure(message: "电脑未接受目标，请刷新后重试。", code: "goal_not_accepted") }
+        guard response.accepted else { throw BridgeFailure(message: L10n.tr("电脑未接受目标，请刷新后重试。"), code: "goal_not_accepted") }
         try journal.set(nil, key: key, scope: scope)
         if let activity = response.hostActivity { applyHostActivity(activity, sessionID: id) }
         await loadTranscript(id)
@@ -1816,7 +1944,7 @@ final class AppStore {
     }
 
     func agentDirectoryError(_ id: String) -> String? {
-        agentDirectoryErrors[id] ?? (hostAgents[id]?.directoryError == nil ? nil : "智能体详情暂未加载，请重试。")
+        agentDirectoryErrors[id] ?? (hostAgents[id]?.directoryError == nil ? nil : L10n.tr("智能体详情暂未加载，请重试。"))
     }
 
     func refreshAgents(_ id: String, loadMore: Bool = false) async {
@@ -1844,21 +1972,21 @@ final class AppStore {
             applyHostActivity(response.hostActivity, sessionID: id)
         } catch {
             guard epoch == connectionEpoch, !Task.isCancelled else { return }
-            agentDirectoryErrors[id] = "无法加载智能体详情，请重试。"
+            agentDirectoryErrors[id] = L10n.tr("无法加载智能体详情，请重试。")
         }
     }
 
     func goalTitle(_ id: String) -> String {
         guard let host = hostGoals[id], !isReferenceMode else {
-            return goals[id]?.isPaused == true ? "已暂停的目标" : "正在追求目标"
+            return goals[id]?.isPaused == true ? L10n.tr("已暂停的目标") : L10n.tr("正在追求目标")
         }
-        return ["active": "正在追求目标", "paused": "已暂停的目标", "verifying": "正在验证目标",
-                "verified": "已完成的目标", "notSatisfied": "正在继续目标", "failed": "目标遇到问题"][host.status] ?? "目标"
+        return ["active": L10n.tr("正在追求目标"), "paused": L10n.tr("已暂停的目标"), "verifying": L10n.tr("正在验证目标"),
+                "verified": L10n.tr("已完成的目标"), "notSatisfied": L10n.tr("正在继续目标"), "failed": L10n.tr("目标遇到问题")][host.status] ?? L10n.tr("目标")
     }
     func goalElapsed(_ id: String, at date: Date) -> String {
         guard let host = hostGoals[id], !isReferenceMode else { return goals[id]?.elapsed ?? "" }
         let seconds = host.elapsedSeconds(atUnixMilliseconds: date.timeIntervalSince1970 * 1000)
-        return "\(seconds / 3600)小时\(seconds / 60 % 60)分钟\(seconds % 60)秒"
+        return L10n.tr("{0}小时{1}分钟{2}秒", "\(seconds / 3600)", "\(seconds / 60 % 60)", "\(seconds % 60)")
     }
     func canToggleGoal(_ id: String) -> Bool {
         if isReferenceMode { return true }
@@ -1915,18 +2043,18 @@ final class AppStore {
                 case "failed", "error": status = .failed
                 default: status = .idle
                 }
-                let title = record.title.isEmpty ? (record.subagentType.isEmpty ? "子任务 " + String(childID.suffix(6)) : record.subagentType) : record.title
-                let labels = ["running": "进行中", "waiting": "等待中", "pending": "准备中", "queued": "排队中",
-                              "success": "已完成", "completed": "已完成", "failed": "失败", "error": "失败",
-                              "cancelled": "已取消", "lost": "已中断", "idle": "就绪"]
+                let title = record.title.isEmpty ? (record.subagentType.isEmpty ? L10n.tr("子任务 ") + String(childID.suffix(6)) : record.subagentType) : record.title
+                let labels = ["running": L10n.tr("进行中"), "waiting": L10n.tr("等待中"), "pending": L10n.tr("准备中"), "queued": L10n.tr("排队中"),
+                              "success": L10n.tr("已完成"), "completed": L10n.tr("已完成"), "failed": L10n.tr("失败"), "error": L10n.tr("失败"),
+                              "cancelled": L10n.tr("已取消"), "lost": L10n.tr("已中断"), "idle": L10n.tr("就绪")]
                 return AgentTask(id: childID, title: title, status: status, detail: record.summary ?? "", colorIndex: index % 4,
-                                 statusText: labels[record.status] ?? "状态待更新")
+                                 statusText: labels[record.status] ?? L10n.tr("状态待更新"))
             }
             let row = rows.last { $0["kind"].string == "subagent" && $0["childSessionId"].string == childID }
-            let title = row?["title"].string ?? session(childID)?.title ?? "子任务 " + String(childID.suffix(6))
+            let title = row?["title"].string ?? session(childID)?.title ?? L10n.tr("子任务 ") + String(childID.suffix(6))
             return AgentTask(id: childID, title: title, status: row?["status"].string.flatMap(SessionStatus.init(rawValue:)) ?? .idle,
-                             detail: row?["summaryText"].string ?? "打开以查看主机上的任务记录。", colorIndex: index % 4,
-                             statusText: row == nil ? "详情待加载" : nil)
+                             detail: row?["summaryText"].string ?? L10n.tr("打开以查看主机上的任务记录。"), colorIndex: index % 4,
+                             statusText: row == nil ? L10n.tr("详情待加载") : nil)
         }
     }
     func loadDraftAttachments(for id: String) async {
@@ -1946,7 +2074,7 @@ final class AppStore {
             loadedAttachmentDrafts.insert(id)
         } catch {
             guard epoch == connectionEpoch else { return }
-            errorMessage = "无法恢复附件草稿：\(error.localizedDescription)"
+            errorMessage = L10n.tr("无法恢复附件草稿：{0}", "\(error.localizedDescription)")
         }
     }
 
@@ -1960,7 +2088,7 @@ final class AppStore {
             await previous?.value
             do { try await draftAttachmentJournal.write(values, scope: scope, draftKey: id) }
             catch {
-                if epoch == connectionEpoch { errorMessage = "附件草稿保存失败：\(error.localizedDescription)" }
+                if epoch == connectionEpoch { errorMessage = L10n.tr("附件草稿保存失败：{0}", "\(error.localizedDescription)") }
             }
         }
     }
@@ -2007,10 +2135,10 @@ final class AppStore {
         guard !value.isEmpty, let i = sessions.firstIndex(where: { $0.id == id }) else { return }
         if !isReferenceMode {
             guard ["bridge", "official-relay"].contains(sessions[i].source) else {
-                errorMessage = "这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。"
+                errorMessage = L10n.tr("这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。")
                 return
             }
-            guard sessions[i].canRename != false else { errorMessage = "当前主机不支持此操作。"; return }
+            guard sessions[i].canRename != false else { errorMessage = L10n.tr("当前主机不支持此操作。"); return }
             let epoch = connectionEpoch
             Task { guard epoch == connectionEpoch else { return }; _ = await mutateMetadata(id, body: ["title": .string(value)]) }
             return
@@ -2027,11 +2155,11 @@ final class AppStore {
         guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
         if !isReferenceMode {
             guard ["bridge", "official-relay"].contains(sessions[i].source) else {
-                errorMessage = "这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。"
+                errorMessage = L10n.tr("这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。")
                 return
             }
             let pinned = !sessions[i].isPinned
-            guard sessions[i].canPin != false else { errorMessage = "当前主机不支持此操作。"; return }
+            guard sessions[i].canPin != false else { errorMessage = L10n.tr("当前主机不支持此操作。"); return }
             let epoch = connectionEpoch
             Task { guard epoch == connectionEpoch else { return }; _ = await mutateMetadata(id, body: ["pinned": .bool(pinned)]) }
             return
@@ -2045,16 +2173,16 @@ final class AppStore {
         guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
         if !isReferenceMode {
             guard ["bridge", "official-relay"].contains(sessions[i].source) else {
-                errorMessage = "这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。"
+                errorMessage = L10n.tr("这是电脑会话的只读镜像。请通过 ZCode 官方远程连接修改主机任务。")
                 return
             }
-            guard sessions[i].canArchive != false else { errorMessage = "当前主机不支持此操作。"; return }
+            guard sessions[i].canArchive != false else { errorMessage = L10n.tr("当前主机不支持此操作。"); return }
             let epoch = connectionEpoch
             Task {
                 guard epoch == connectionEpoch else { return }
                 if await mutateMetadata(id, body: ["archived": .bool(archived)]) {
                     if archived { path = [] }
-                    notify(archived ? "已归档" : "已恢复任务")
+                    notify(archived ? L10n.tr("已归档") : L10n.tr("已恢复任务"))
                 }
             }
             return
@@ -2062,7 +2190,7 @@ final class AppStore {
         sessions[i].isArchived = archived
         if archived { archivedIDs.insert(id) } else { archivedIDs.remove(id) }
         if !isReferenceMode { defaults.set(Array(archivedIDs), forKey: scopedKey("archives")) }
-        if archived { path = []; notify("已归档") } else { notify("已恢复任务") }
+        if archived { path = []; notify(L10n.tr("已归档")) } else { notify(L10n.tr("已恢复任务")) }
     }
     private var forkJournal: ForkJournal { ForkJournal(directory: submissionJournal.directory.appendingPathComponent("Forks")) }
     var forksInFlight: Set<String> = []
@@ -2073,7 +2201,7 @@ final class AppStore {
         guard let parent = session(id), !parent.isArchived else { return }
         if isReferenceMode {
             var child = parent
-            child.id = UUID().uuidString; child.title += "（分支）"; child.updatedAt = .now
+            child.id = UUID().uuidString; child.title += L10n.tr("（分支）"); child.updatedAt = .now
             child.isPinned = false; child.status = .idle
             upsert(child)
             let history = messages(id)
@@ -2084,7 +2212,7 @@ final class AppStore {
             return
         }
         guard parent.canFork == true, connection.isOnline, let client else {
-            errorMessage = "这台电脑当前不支持从此处创建分支。"
+            errorMessage = L10n.tr("这台电脑当前不支持从此处创建分支。")
             return
         }
         let epoch = connectionEpoch, scope = persistenceScope
@@ -2098,7 +2226,7 @@ final class AppStore {
             journal[boundaryKey] = command
             try forkJournal.write(journal, scope: scope)
         } catch {
-            errorMessage = "无法保存分支请求：\(error.localizedDescription)"
+            errorMessage = L10n.tr("无法保存分支请求：{0}", "\(error.localizedDescription)")
             return
         }
         forksInFlight.insert(operationKey)
@@ -2114,13 +2242,13 @@ final class AppStore {
                 let result: Result = try await client.mutate("v1/sessions/\(id)/fork", body: body)
                 guard epoch == connectionEpoch else { return }
                 guard result.session.id == result.forkedSessionId, result.forkedSessionId != id else {
-                    throw BridgeFailure(message: "电脑返回的分支尚未确认，请重试。", code: "fork_uncertain")
+                    throw BridgeFailure(message: L10n.tr("电脑返回的分支尚未确认，请重试。"), code: "fork_uncertain")
                 }
                 var saved = try forkJournal.read(scope: scope)
                 saved[boundaryKey] = nil; try forkJournal.write(saved, scope: scope)
                 upsert(result.session.local)
                 path.append(.session(result.forkedSessionId))
-                notify("已创建分支")
+                notify(L10n.tr("已创建分支"))
             } catch {
                 guard epoch == connectionEpoch else { return }
                 if let failure = error as? BridgeFailure,
@@ -2129,10 +2257,10 @@ final class AppStore {
                         var saved = try forkJournal.read(scope: scope)
                         saved[boundaryKey] = nil
                         try forkJournal.write(saved, scope: scope)
-                        errorMessage = "电脑未创建分支：\(failure.message) 刷新会话后可重新选择回复。"
-                    } catch { errorMessage = "无法更新分支请求记录：\(error.localizedDescription)" }
+                        errorMessage = L10n.tr("电脑未创建分支：{0} 刷新会话后可重新选择回复。", "\(failure.message)")
+                    } catch { errorMessage = L10n.tr("无法更新分支请求记录：{0}", "\(error.localizedDescription)") }
                 } else {
-                    errorMessage = "分支尚未确认：\(error.localizedDescription) 重试会使用同一请求编号。"
+                    errorMessage = L10n.tr("分支尚未确认：{0} 重试会使用同一请求编号。", "\(error.localizedDescription)")
                 }
             }
         }
@@ -2150,7 +2278,7 @@ final class AppStore {
         }
         updated[index].transcript?.state = .completed
         updated.append(ChatMessage(id: "transition-answer", role: .assistant,
-            text: "检查已完成。\n\n工具过程平滑收成一行摘要，正文在下方展开。你仍可以点开查看原始输入输出。",
+            text: L10n.tr("检查已完成。\n\n工具过程平滑收成一行摘要，正文在下方展开。你仍可以点开查看原始输入输出。"),
             transcript: .init(turnID: "transition", state: .completed, role: .finalAnswer)))
         if let user = updated.firstIndex(where: { $0.id == "transition-user" }) { updated[user].transcript?.state = .completed }
         transcripts[id] = updated
@@ -2158,7 +2286,7 @@ final class AppStore {
     }
     #endif
 
-    func copy(_ value: String, message: String = "已复制") {
+    func copy(_ value: String, message: String = L10n.tr("已复制")) {
         UIPasteboard.general.string = value
         notify(message)
     }
@@ -2246,7 +2374,7 @@ final class AppStore {
                     guard !Task.isCancelled, epoch == self.connectionEpoch else { return }
                     self.streamConnected = false
                     if self.activeProfile?.isRelay == true {
-                        self.relayStreamEnded(RelayFailure("relay_disconnected", "远程连接已中断，草稿已保留。"), epoch: epoch)
+                        self.relayStreamEnded(RelayFailure("relay_disconnected", L10n.tr("远程连接已中断，草稿已保留。")), epoch: epoch)
                         return
                     }
                 } catch {
@@ -2268,7 +2396,7 @@ final class AppStore {
         eventRevision += 1
         streamConnected = true
         if event.type == "ready" {
-            if event.data?.connectionStatus == "disconnected" { connection = .failed("电脑上的 ZCode 已断开。") }
+            if event.data?.connectionStatus == "disconnected" { connection = .failed(L10n.tr("电脑上的 ZCode 已断开。")) }
             return
         }
         if let remote = event.data?.session {
@@ -2320,7 +2448,7 @@ final class AppStore {
             if let id = currentSessionID { dirtySessionIDs.insert(id) }
         }
         if event.type == "connection.changed", event.data?.connectionStatus == "disconnected" {
-            connection = .failed("电脑上的 ZCode 已断开，正在等待恢复。")
+            connection = .failed(L10n.tr("电脑上的 ZCode 已断开，正在等待恢复。"))
             // The Relay stream terminates with its exact failure next. Wait for
             // that reason before deciding whether restoration is permitted.
             if activeProfile?.isRelay == true { return }

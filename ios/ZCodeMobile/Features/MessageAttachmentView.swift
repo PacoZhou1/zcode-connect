@@ -21,12 +21,12 @@ struct MessageAttachmentView: View {
                     Image(uiImage: preview).resizable().scaledToFit()
                         .frame(maxWidth: 250, maxHeight: 200)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
-                }.buttonStyle(.plain).accessibilityLabel("查看图片附件，\(displayName)")
+                }.buttonStyle(.plain).accessibilityLabel(L10n.tr("查看图片附件，{0}", "\(displayName)"))
             } else {
                 Label(displayName, systemImage: attachment.mimeType.hasPrefix("image/") ? "photo" : "doc")
                     .font(.subheadline).lineLimit(2)
                     .padding(10).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
-                    .accessibilityLabel("附件，\(displayName)")
+                    .accessibilityLabel(L10n.tr("附件，{0}", "\(displayName)"))
             }
         }
         .task(id: request) {
@@ -48,7 +48,7 @@ struct MessageAttachmentView: View {
     }
 
     private var displayName: String {
-        attachment.fileName == "Attachment" ? (attachment.mimeType.hasPrefix("image/") ? "图片" : "附件") : attachment.fileName
+        attachment.fileName == "Attachment" ? (attachment.mimeType.hasPrefix("image/") ? L10n.tr("图片") : L10n.tr("附件")) : attachment.fileName
     }
 
 }
@@ -129,7 +129,7 @@ private struct AttachmentImagePreview: View {
             ZoomableAttachmentImage(image: image)
                 .background(Color(uiColor: .systemBackground))
                 .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button(L10n.tr("完成")) { dismiss() } } }
         }
     }
 }
@@ -146,7 +146,7 @@ private struct ZoomableAttachmentImage: UIViewRepresentable {
         view.image = image
         view.contentMode = .scaleAspectFit
         view.isAccessibilityElement = true
-        view.accessibilityLabel = "图片预览，可双指缩放"
+        view.accessibilityLabel = L10n.tr("图片预览，可双指缩放")
         scroll.addSubview(view)
         return scroll
     }

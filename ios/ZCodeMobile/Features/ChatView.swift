@@ -34,44 +34,45 @@ struct ChatView: View {
     }
 
     private var session: RemoteSession? { store.session(sessionID) }
+    @State private var disclosure = TranscriptDisclosureState()
     @State private var turns: [TranscriptTurn] = []
 
     private var transcriptHeader: some View {
         VStack(alignment: .leading, spacing: 0) {
                     if !store.isReferenceMode && !store.streamConnected {
-                        InlineNotice(symbol: "wifi.exclamationmark", text: "实时连接正在恢复，已显示的内容可能不是最新状态。")
+                        InlineNotice(symbol: "wifi.exclamationmark", text: L10n.tr("实时连接正在恢复，已显示的内容可能不是最新状态。"))
                     }
                     if store.cachedTranscriptIDs.contains(sessionID) {
-                        InlineNotice(text: "已显示缓存记录，正在与电脑同步。")
+                        InlineNotice(text: L10n.tr("已显示缓存记录，正在与电脑同步。"))
                     }
                     if let message = store.transcriptLoadErrors[sessionID] {
                         HStack {
                             Text(message).font(.caption).foregroundStyle(.secondary)
-                            Button("重试") { Task { await store.loadTranscript(sessionID); await store.loadSettings(sessionID) } }
+                            Button(L10n.tr("重试")) { Task { await store.loadTranscript(sessionID); await store.loadSettings(sessionID) } }
                         }.padding(.vertical, 8)
                     }
                     if store.isReferenceMode && !store.referenceReview {
-                        InlineNotice(text: "界面体验 · 此处为参考会话")
+                        InlineNotice(text: L10n.tr("界面体验 · 此处为参考会话"))
                     }
                     if let session, session.isArchived {
-                        InlineNotice(symbol: "archivebox", text: "此任务已归档。可在右上角菜单取消归档后继续。")
+                        InlineNotice(symbol: "archivebox", text: L10n.tr("此任务已归档。可在右上角菜单取消归档后继续。"))
                     } else if let session, !session.canControl {
                         InlineNotice(symbol: "desktopcomputer",
                                      text: ["bridge-subagent", "official-relay-subagent"].contains(session.source)
-                                        ? "此智能体由父任务管理，这里显示电脑上已保存的记录。"
-                                        : "此任务由电脑上的 ZCode 管理。你可以查看记录，或新建一个手机可控制的任务。")
+                                        ? L10n.tr("此智能体由父任务管理，这里显示电脑上已保存的记录。")
+                                        : L10n.tr("此任务由电脑上的 ZCode 管理。你可以查看记录，或新建一个手机可控制的任务。"))
                     }
                     if store.messages(sessionID).isEmpty {
                         if store.isLoading || store.transcriptLoading.contains(sessionID) { ProgressView().frame(maxWidth: .infinity).padding(.top, 70) }
                         else {
-                            Text(session?.source == "official-relay-subagent" ? "尚未获取到此智能体的记录。" : "从这里继续你的工作。")
+                            Text(session?.source == "official-relay-subagent" ? L10n.tr("尚未获取到此智能体的记录。") : L10n.tr("从这里继续你的工作。"))
                                 .foregroundStyle(.tertiary).frame(maxWidth: .infinity).padding(.top, 80)
                         }
                     }
                     if store.histories[sessionID]?.hasMore == true {
                         HStack(spacing: 8) {
                             if store.loadingHistory.contains(sessionID) { ProgressView() }
-                            Text(store.loadingHistory.contains(sessionID) ? "正在加载更早的消息…" : "继续上滑查看更早的消息")
+                            Text(store.loadingHistory.contains(sessionID) ? L10n.tr("正在加载更早的消息…") : L10n.tr("继续上滑查看更早的消息"))
                         }.font(.caption).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity).padding(.vertical, 12)
                             .accessibilityIdentifier("chat.loadEarlier")
@@ -83,28 +84,57 @@ struct ChatView: View {
         var result: [TranscriptListRow] = []
         let headerState = "\(store.streamConnected)|\(store.cachedTranscriptIDs.contains(sessionID))|\(store.transcriptLoadErrors[sessionID] ?? "")|\(store.histories[sessionID]?.hasMore ?? false)|\(store.loadingHistory.contains(sessionID))|\(store.messages(sessionID).isEmpty)|\(session?.isArchived ?? false)"
         result.append(.init(id: "transcript-header", revision: headerState.hashValue, content: AnyView(transcriptHeader.environment(store))))
-        result += turns.map { turn in
-            let content = TranscriptTurnView(turn: turn, sessionID: sessionID, allowsAutoCollapse: followsBottom || keepSentBubble)
-                .frame(minHeight: turnReadingHeight(turn.id), alignment: .top)
-                .environment(store)
-            return .init(id: turn.id, revision: turn.hashValue ^ turnReadingHeight(turn.id).hashValue ^ (followsBottom || keepSentBubble).hashValue, content: AnyView(content))
+        for turn in turns {
+            for message in turn.userMessages {
+                result.append(.init(id: "message:" + message.id, revision: message.hashValue,
+                    content: AnyView(MessageView(message: message, sessionID: sessionID)
+                        .padding(.top, 12).padding(.bottom, 34).environment(store))))
+            }
+            if !turn.processMessages.isEmpty {
+                if turn.canCollapseProcess {
+                    result.append(.init(id: "process-summary:" + turn.id, revision: turn.state.hashValue ^ turn.processMessages.hashValue,
+                        content: AnyView(TranscriptProcessSummary(turn: turn, disclosure: disclosure)
+                            .padding(.bottom, 12).environment(store))))
+                }
+                if disclosure.expanded(turnID: turn.id, defaultValue: !turn.defaultCollapsed) {
+                    for (index, message) in turn.processMessages.enumerated() {
+                        let following = !turn.resultMessages.isEmpty || turn.processMessages.dropFirst(index + 1).contains { $0.role == .assistant && !$0.text.isEmpty }
+                        result.append(.init(id: "message:" + message.id,
+                            revision: message.hashValue ^ following.hashValue ^ turn.canCollapseProcess.hashValue,
+                            content: AnyView(TranscriptProcessMessage(message: message, sessionID: sessionID,
+                                turnID: turn.id, following: following, showsSummary: !turn.canCollapseProcess,
+                                disclosure: disclosure)
+                                .padding(.bottom, message.text.isEmpty ? 0 : 16).environment(store))))
+                    }
+                }
+            }
+            for message in turn.resultMessages {
+                result.append(.init(id: "message:" + message.id, revision: message.hashValue,
+                    content: AnyView(MessageView(message: message, sessionID: sessionID,
+                        showsResponseActions: turn.actionMessageID == message.id)
+                        .padding(.bottom, 22).environment(store))))
+            }
         }
         result += (store.queuedInputs[sessionID] ?? []).map { item in
-            .init(id: "queued-bubble:" + item.id, revision: String(describing: item).hashValue ^ queueReadingHeight(item.id).hashValue,
+            .init(id: "queued-bubble:" + item.id, revision: String(describing: item).hashValue,
                   content: AnyView(queuedBubble(item).environment(store)))
         }
         result += (store.pendingInteractions[sessionID] ?? []).map { item in
             .init(id: "interaction:" + item.id, revision: String(describing: item).hashValue,
                   content: AnyView(InteractionRequestCard(interaction: item).padding(.bottom, 28).environment(store)))
         }
+        if reserveReplySpace {
+            result.append(.init(id: "reply-space", revision: readableHeight.hashValue,
+                content: AnyView(Color.clear.frame(height: max(0, readableHeight)))))
+        }
         return result
     }
-    private func issueScrollToLatest() {
-        listCommand = .init(id: UUID(), target: nil, bottom: true)
+    private func issueScrollToLatest(animated: Bool = true) {
+        listCommand = .init(id: UUID(), target: nil, bottom: true, animated: animated)
     }
     private func issueScrollToSent() {
         guard let bubble = latestBubbleID else { return }
-        let target = turns.last(where: { $0.userMessages.contains(where: { $0.id == bubble }) })?.id ?? bubble
+        let target = bubble.hasPrefix("queued-bubble:") ? bubble : "message:" + bubble
         listCommand = .init(id: UUID(), target: target, bottom: false)
     }
 
@@ -135,12 +165,34 @@ struct ChatView: View {
                         .buttonStyle(NativeGlassButtonStyle()).buttonBorderShape(.circle)
                         // The overlay anchors at the safe-area bottom (the controls' top
                         // edge), so it already tracks panels and keyboard height.
-                        .padding(.bottom, 8).accessibilityLabel("跳到最新消息").accessibilityIdentifier("chat.jumpLatest")
+                        .padding(.bottom, 8).accessibilityLabel(L10n.tr("跳到最新消息")).accessibilityIdentifier("chat.jumpLatest")
                 }
             }
-            .onChange(of: store.messages(sessionID), initial: true) { _, messages in
-                turns = TranscriptPresentation.group(messages)
+            .task(id: store.messages(sessionID)) {
+                let messages = store.messages(sessionID)
+                // Completed Markdown must have a measured representation before
+                // its row enters the snapshot; never insert a 120pt placeholder.
+                for message in messages where !message.isStreaming && !message.text.isEmpty {
+                    let user = message.role == .user
+                    guard !Task.isCancelled else { return }
+                    if MessageTextCache.shared.cached(text: message.text, user: user) == nil {
+                        let text = message.text
+                        let worker = Task.detached(priority: .userInitiated) {
+                            MessageTextCache.parse(text: text, user: user)
+                        }
+                        let blocks = await withTaskCancellationHandler { await worker.value } onCancel: { worker.cancel() }
+                        guard !Task.isCancelled else { return }
+                        MessageTextCache.shared.store(blocks, text: text, user: user)
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                let grouped = TranscriptPresentation.group(messages)
+                disclosure.synchronize(turns: grouped, allowsAutoCollapse: followsBottom || keepSentBubble, reduceMotion: reduceMotion)
+                turns = grouped
                 if keepSentBubble { issueScrollToSent() }
+            }
+            .onChange(of: followsBottom || keepSentBubble, initial: true) { _, allowed in
+                disclosure.synchronize(turns: turns, allowsAutoCollapse: allowed, reduceMotion: reduceMotion)
             }
             .onChange(of: store.sentBubbleFocus[sessionID]) { _, signal in
                 if signal != nil { focusSentBubble(); issueScrollToSent() }
@@ -172,15 +224,15 @@ struct ChatView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(session?.title ?? "任务").font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                        Text("\(session?.projectName ?? "项目") · \(store.hostName)")
+                        Text(session?.title ?? L10n.tr("任务")).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                        Text("\(session?.projectName ?? L10n.tr("项目")) · \(store.hostName)")
                             .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { store.path.append(.newSession) } label: {
                         ComposeGlyph().stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)).frame(width: 24, height: 24)
-                    }.accessibilityLabel("新建聊天").accessibilityIdentifier("chat.new")
+                    }.accessibilityLabel(L10n.tr("新建聊天")).accessibilityIdentifier("chat.new")
                     threadMenu
                 }
             }
@@ -193,7 +245,7 @@ struct ChatView: View {
                 if !didInitialScroll && !keepSentBubble && !hasUserNavigated {
                     await Task.yield()
                     if beginsAtReferenceHistory {
-                        listCommand = .init(id: UUID(), target: turns.first?.id, bottom: false)
+                        listCommand = .init(id: UUID(), target: turns.first?.messages.first.map { "message:" + $0.id }, bottom: false)
                     } else { followsBottom = true; issueScrollToLatest() }
                     didInitialScroll = true
                 }
@@ -203,17 +255,18 @@ struct ChatView: View {
                 }
                 if store.isReferenceMode, ProcessInfo.processInfo.arguments.contains("--send-anchor-review") {
                     try? await Task.sleep(for: .seconds(1))
-                    _ = await store.send("发送后定位在顶部菜单栏下方", to: sessionID, inputID: "anchor-review-send")
+                    _ = await store.send(L10n.tr("发送后定位在顶部菜单栏下方"), to: sessionID, inputID: "anchor-review-send")
                 }
                 #endif
             }
-            .alert("重命名任务", isPresented: $renamePresented) {
-                TextField("任务名称", text: $renameText).accessibilityIdentifier("rename.field")
-                Button("取消", role: .cancel) {}
-                Button("保存") { store.rename(sessionID, title: renameText) }
+            .alert(L10n.tr("重命名任务"), isPresented: $renamePresented) {
+                TextField(L10n.tr("任务名称"), text: $renameText).accessibilityIdentifier("rename.field")
+                Button(L10n.tr("取消"), role: .cancel) {}
+                Button(L10n.tr("保存")) { store.rename(sessionID, title: renameText) }
                     .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .tint(.primary)
+            .onDisappear { disclosure.cancelScheduled() }
         }
     }
 
@@ -236,32 +289,22 @@ struct ChatView: View {
         reserveReplySpace = true
     }
 
-    private func turnReadingHeight(_ id: String) -> CGFloat {
-        guard reserveReplySpace, id == turns.last?.id, (store.queuedInputs[sessionID] ?? []).isEmpty else { return 0 }
-        return readableHeight
-    }
-
-    private func queueReadingHeight(_ id: String) -> CGFloat {
-        guard reserveReplySpace, id == store.queuedInputs[sessionID]?.last?.id else { return 0 }
-        return readableHeight
-    }
-
     private func queuedBubble(_ item: QueuedInput) -> some View {
                         HStack {
                             Spacer(minLength: 40)
                             VStack(alignment: .trailing, spacing: 12) {
                                 HStack(spacing: 5) {
                                     Image(systemName: item.isGuide ? "arrow.turn.down.right" : "text.line.first.and.arrowtriangle.forward")
-                                    Text(item.transferPending == true ? "引导待确认" : item.isGuide ? "引导待用" : "排队中")
+                                    Text(item.transferPending == true ? L10n.tr("引导待确认") : item.isGuide ? L10n.tr("引导待用") : L10n.tr("排队中"))
                                     Menu {
                                         Text(item.text).lineLimit(1)
-                                        Button("编辑消息", systemImage: "pencil") { store.editingQueuedInput[sessionID] = item }.disabled(item.transferPending == true)
+                                        Button(L10n.tr("编辑消息"), systemImage: "pencil") { store.editingQueuedInput[sessionID] = item }.disabled(item.transferPending == true)
                                         if !item.isGuide {
-                                            Button(item.transferPending == true ? "重试引导" : "改为引导", systemImage: "arrow.turn.down.right") { Task { _ = await store.changeQueuedInput(item, sessionID: sessionID, action: "guide") } }
+                                            Button(item.transferPending == true ? L10n.tr("重试引导") : L10n.tr("改为引导"), systemImage: "arrow.turn.down.right") { Task { _ = await store.changeQueuedInput(item, sessionID: sessionID, action: "guide") } }
                                         }
-                                        Button("取消消息", systemImage: "trash", role: .destructive) { Task { _ = await store.changeQueuedInput(item, sessionID: sessionID, action: "cancel") } }.disabled(item.transferPending == true)
+                                        Button(L10n.tr("取消消息"), systemImage: "trash", role: .destructive) { Task { _ = await store.changeQueuedInput(item, sessionID: sessionID, action: "cancel") } }.disabled(item.transferPending == true)
                                     } label: { Image(systemName: "ellipsis").frame(width: 28, height: 24).contentShape(Rectangle()) }
-                                    .accessibilityLabel("排队消息菜单").accessibilityIdentifier("queue.menu.\(item.id)")
+                                    .accessibilityLabel(L10n.tr("排队消息菜单")).accessibilityIdentifier("queue.menu.\(item.id)")
                                     .disabled(store.queueActions.contains(item.id))
                                 }.font(.caption).foregroundStyle(.secondary)
                                 RichMessageText(text: item.text, user: true).equatable()
@@ -270,7 +313,7 @@ struct ChatView: View {
                             }
                         }.padding(.vertical, 12)
                             .id("queued-bubble:" + item.id)
-                            .frame(minHeight: queueReadingHeight(item.id), alignment: .top)
+
     }
 
     private var beginsAtReferenceHistory: Bool {
@@ -292,7 +335,7 @@ struct ChatView: View {
 
     private var threadMenu: some View {
         Menu {
-            Section(session?.title ?? "任务") {
+            Section(session?.title ?? L10n.tr("任务")) {
                 if let item = metadataMenuItems.first(where: { $0.id == .pin }) {
                     Button(item.title, systemImage: item.symbol) { store.togglePin(sessionID) }
                         .disabled(!item.isEnabled)
@@ -304,13 +347,11 @@ struct ChatView: View {
                     }.disabled(!item.isEnabled)
                 }
                 if store.isReferenceMode || session?.canFork == true {
-                    Button(store.isForking(sessionID) ? "正在创建分支…" : "创建分支", systemImage: "arrow.triangle.branch") { store.forkSession(sessionID) }
+                    Button(store.isForking(sessionID) ? L10n.tr("正在创建分支…") : L10n.tr("创建分支"), systemImage: "arrow.triangle.branch") { store.forkSession(sessionID) }
                         .disabled(store.isForking(sessionID) || session?.isArchived == true)
                         .accessibilityIdentifier("chat.fork")
                 }
-                Button("复制对话串 ID", systemImage: "square.on.square") { store.copy(sessionID) }
-                Button("模拟器镜像", systemImage: "rectangle.on.rectangle") { store.sheet = .mirror }
-                    .accessibilityIdentifier("chat.mirror")
+                Button(L10n.tr("复制对话串 ID"), systemImage: "square.on.square") { store.copy(sessionID) }
                 if let item = metadataMenuItems.first(where: { $0.id == .archive }) {
                     Button(item.title, systemImage: item.symbol, role: item.destructive ? .destructive : nil) { store.archive(sessionID, archived: session?.isArchived != true) }
                         .disabled(!item.isEnabled)
@@ -318,13 +359,13 @@ struct ChatView: View {
             }
             Section {
                 if !["bridge-subagent", "official-relay-subagent"].contains(session?.source ?? "") {
-                    Button("更改", systemImage: "point.3.connected.trianglepath.dotted") { store.sheet = .files(sessionID, true) }
+                    Button(L10n.tr("更改"), systemImage: "point.3.connected.trianglepath.dotted") { store.sheet = .files(sessionID, true) }
                 }
-                Button("文件", systemImage: "folder") { store.sheet = .files(sessionID, false) }
+                Button(L10n.tr("文件"), systemImage: "folder") { store.sheet = .files(sessionID, false) }
             }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 20, weight: .semibold))
-        }.accessibilityLabel("任务菜单").accessibilityIdentifier("chat.menu")
+        }.accessibilityLabel(L10n.tr("任务菜单")).accessibilityIdentifier("chat.menu")
     }
 }
 
@@ -350,13 +391,13 @@ struct NewSessionView: View {
                     }
                 }.accessibilityIdentifier("new.host")
                 Menu {
-                    Picker("项目", selection: $store.selectedProjectID) {
+                    Picker(L10n.tr("项目"), selection: $store.selectedProjectID) {
                         ForEach(store.projects) { project in Text(project.name).tag(Optional(project.id)) }
                     }
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "folder").frame(width: 24)
-                        Text(store.projects.first { $0.id == store.selectedProjectID }?.name ?? "选择项目")
+                        Text(store.projects.first { $0.id == store.selectedProjectID }?.name ?? L10n.tr("选择项目"))
                         Image(systemName: "chevron.up.chevron.down").font(.system(size: 12))
                     }
                 }.accessibilityIdentifier("new.project")
@@ -378,20 +419,27 @@ struct NewSessionView: View {
     }
 }
 
-private struct TranscriptListRow {
+struct TranscriptListRow {
     let id: String
     let revision: Int
     let content: AnyView
 }
-private struct TranscriptListCommand: Equatable {
+struct TranscriptListCommand: Equatable {
     let id: UUID
     let target: String?
     let bottom: Bool
+    var animated: Bool = false
+}
+
+/// Lets a finger cancel touches on hosted SwiftUI controls so a fast fling
+/// can be grabbed mid-deceleration (default UITableView often cannot).
+private final class InterruptibleTranscriptTable: UITableView {
+    override func touchesShouldCancel(in view: UIView) -> Bool { true }
 }
 
 /// UITableView owns reuse, exact visible-row layout and interactive scrolling.
 /// The first visible row + its pixel displacement survives prepend/reconfigure.
-private struct StableTranscriptList: UIViewRepresentable {
+struct StableTranscriptList: UIViewRepresentable {
     let rows: [TranscriptListRow]
     let command: TranscriptListCommand?
     let followsBottom: Bool
@@ -401,7 +449,9 @@ private struct StableTranscriptList: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITableView {
-        let table = UITableView(frame: .zero, style: .plain)
+        // Subclass so cell/SwiftUI controls cannot eat the finger that should
+        // stop a fast fling mid-deceleration.
+        let table = InterruptibleTranscriptTable(frame: .zero, style: .plain)
         table.backgroundColor = .clear
         table.separatorStyle = .none
         table.rowHeight = UITableView.automaticDimension
@@ -409,6 +459,8 @@ private struct StableTranscriptList: UIViewRepresentable {
         table.contentInset = UIEdgeInsets(top: 14, left: 0, bottom: bottomInset, right: 0)
         table.contentInsetAdjustmentBehavior = .never
         table.keyboardDismissMode = .interactive
+        table.delaysContentTouches = false
+        table.canCancelContentTouches = true
         table.accessibilityIdentifier = "chat.transcript"
         table.delegate = context.coordinator
         table.register(UITableViewCell.self, forCellReuseIdentifier: "transcript")
@@ -421,13 +473,18 @@ private struct StableTranscriptList: UIViewRepresentable {
             guard let row = coordinator?.rowMap[id] else { return cell }
             cell.selectionStyle = .none
             cell.backgroundColor = .clear
-            cell.contentConfiguration = UIHostingConfiguration { row.content }.minSize(height: 0).margins(.vertical, 0).margins(.horizontal, 16)
+            cell.accessibilityIdentifier = id
+            cell.contentConfiguration = UIHostingConfiguration { row.content.id(id) }.minSize(height: 0).margins(.vertical, 0).margins(.horizontal, 16)
             return cell
         }
         return table
     }
     func updateUIView(_ table: UITableView, context: Context) {
         context.coordinator.parent = self
+        // Do not clear userReleasedFollow here: followsBottom can still be the
+        // pre-drag value on the first update after willBeginDragging, which
+        // would re-arm scrollBottom and snap history loads back to the bottom.
+        // Jump / initial bottom commands clear the latch inside execute(_:).
         if abs(table.contentInset.bottom - bottomInset) > 0.25 { table.contentInset.bottom = bottomInset }
         context.coordinator.update(rows: rows, command: command)
     }
@@ -443,7 +500,10 @@ private struct StableTranscriptList: UIViewRepresentable {
         func contentSizeChanged() {
             guard let table else { return }
             // Only an explicit follow intent may track newly measured content.
-            if !applying, parent.followsBottom, !table.isDragging, !table.isDecelerating {
+            // Local latch clears immediately on drag (before SwiftUI props update).
+            // Never snap while an animated jump is in flight or while near top.
+            if !applying, followAllowed, !isAnimatingJump,
+               !table.isDragging, !table.isDecelerating {
                 scrollBottom()
             }
             reportViewport()
@@ -451,6 +511,11 @@ private struct StableTranscriptList: UIViewRepresentable {
         var navigation = 0
         var applying = false
         var needsUpdate = false
+        /// Cleared synchronously in willBeginDragging so contentSizeChanged cannot
+        /// race SwiftUI's followsBottom propagation and yank the user back down.
+        var userReleasedFollow = false
+        var isAnimatingJump = false
+        var followAllowed: Bool { parent.followsBottom && !userReleasedFollow }
         #if DEBUG
         var probeStarted = false
         #endif
@@ -459,22 +524,24 @@ private struct StableTranscriptList: UIViewRepresentable {
         init(_ parent: StableTranscriptList) { self.parent = parent }
         func update(rows: [TranscriptListRow], command: TranscriptListCommand?) {
             guard let table else { return }
-            if applying { needsUpdate = true; return }
+            if applying || table.isTracking || table.isDragging || table.isDecelerating || isAnimatingJump { needsUpdate = true; return }
             if abs(lastWidth - table.bounds.width) > 0.5 { heights = [:]; lastWidth = table.bounds.width }
             let nextIDs = rows.map(\.id)
             let changed = rows.filter { rowMap[$0.id]?.revision != $0.revision }.map(\.id)
             let hasChanges = ids != nextIDs || !changed.isEmpty
             if !hasChanges { execute(command); return }
-            let anchor = table.indexPathsForVisibleRows?.sorted().first.flatMap { path -> (String, CGFloat)? in
-                guard let id = dataSource.itemIdentifier(for: path) else { return nil }
+            let survivingIDs = Set(nextIDs)
+            let anchor = table.indexPathsForVisibleRows?.sorted().compactMap { path -> (String, CGFloat)? in
+                guard let id = dataSource.itemIdentifier(for: path), survivingIDs.contains(id) else { return nil }
                 return (id, table.rectForRow(at: path).minY - table.contentOffset.y)
-            }
+            }.first
             let wasEmpty = ids.isEmpty
             let token = navigation
             rowMap = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
             ids = nextIDs
             heights = heights.filter { rowMap[$0.key] != nil }
-            for id in changed { heights.removeValue(forKey: id) }
+            // Keep the last measured estimate until the changed row is measured
+            // again, instead of resetting long cells to the 180pt fallback.
             applying = true
             var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
             snapshot.appendSections([0]); snapshot.appendItems(nextIDs)
@@ -484,10 +551,10 @@ private struct StableTranscriptList: UIViewRepresentable {
                 guard let self, let table = self.table else { return }
                 table.layoutIfNeeded()
                 self.applying = false
-                if token == self.navigation, !table.isDragging, !table.isDecelerating {
+                if token == self.navigation, !table.isDragging, !table.isDecelerating, !self.isAnimatingJump {
                     if self.parent.command?.id != self.lastCommand, self.parent.command != nil {
                         self.execute(self.parent.command)
-                    } else if self.parent.followsBottom || wasEmpty {
+                    } else if self.followAllowed || (wasEmpty && !self.userReleasedFollow) {
                         self.scrollBottom()
                     } else if let anchor, let path = self.dataSource.indexPath(for: anchor.0) {
                         let y = table.rectForRow(at: path).minY - anchor.1
@@ -539,16 +606,36 @@ private struct StableTranscriptList: UIViewRepresentable {
             let maximum = max(minimum, table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom)
             table.setContentOffset(CGPoint(x: 0, y: min(maximum, max(minimum, y))), animated: false)
         }
-        func scrollBottom() {
+        func scrollBottom(animated: Bool = false) {
             guard let table, let last = ids.last, let path = dataSource.indexPath(for: last) else { return }
+            if animated && !UIAccessibility.isReduceMotionEnabled {
+                // Materialize the destination before choosing the offset. Very
+                // long history jumps do not animate through thousands of points.
+                let origin = table.contentOffset.y
+                UIView.performWithoutAnimation {
+                    table.scrollToRow(at: path, at: .bottom, animated: false)
+                    table.layoutIfNeeded()
+                }
+                let targetY = max(-table.adjustedContentInset.top,
+                    table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom)
+                let travel = min(table.bounds.height * 0.8, max(0, targetY - origin))
+                setOffset(targetY - travel)
+                isAnimatingJump = travel > 1
+                table.setContentOffset(CGPoint(x: 0, y: targetY), animated: isAnimatingJump)
+                return
+            }
             table.scrollToRow(at: path, at: .bottom, animated: false)
             table.layoutIfNeeded()
             setOffset(table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom)
         }
         func execute(_ command: TranscriptListCommand?) {
             guard let command, command.id != lastCommand, let table, !table.isDragging, !table.isDecelerating else { return }
-            if command.bottom { lastCommand = command.id; scrollBottom() }
-            else if let target = command.target, let path = dataSource.indexPath(for: target) {
+            if command.bottom {
+                // Explicit jump-to-latest restores follow; history loads must not.
+                userReleasedFollow = false
+                lastCommand = command.id
+                scrollBottom(animated: command.animated)
+            } else if let target = command.target, let path = dataSource.indexPath(for: target) {
                 lastCommand = command.id
                 table.scrollToRow(at: path, at: .top, animated: false)
             }
@@ -567,21 +654,40 @@ private struct StableTranscriptList: UIViewRepresentable {
         func scrollViewDidScroll(_ scrollView: UIScrollView) { reportViewport() }
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             navigation += 1
+            userReleasedFollow = true
+            // Kill any in-flight jump animation at the finger's current place.
+            if isAnimatingJump {
+                let shown = scrollView.layer.presentation()?.bounds.origin.y
+                let y = shown ?? scrollView.contentOffset.y
+                scrollView.layer.removeAllAnimations()
+                scrollView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            }
+            isAnimatingJump = false
             parent.onInteraction(true)
         }
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-            if !decelerate { reportViewport(); parent.onInteraction(false) }
+            if !decelerate { settleInteraction() }
         }
-        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { reportViewport(); parent.onInteraction(false) }
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { settleInteraction() }
+        private func settleInteraction() {
+            reportViewport()
+            parent.onInteraction(false)
+            if needsUpdate { needsUpdate = false; update(rows: parent.rows, command: parent.command) }
+        }
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+            isAnimatingJump = false
+            if needsUpdate { needsUpdate = false; update(rows: parent.rows, command: parent.command) }
+            reportViewport()
+        }
         func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
             guard let id = dataSource.itemIdentifier(for: indexPath) else { return 180 }
             return heights[id] ?? 180
         }
         func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-            if let id = dataSource.itemIdentifier(for: indexPath) { heights[id] = cell.bounds.height }
+            if let id = cell.accessibilityIdentifier, rowMap[id] != nil { heights[id] = cell.bounds.height }
         }
         func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
-            if let id = dataSource.itemIdentifier(for: indexPath) { heights[id] = cell.bounds.height }
+            if let id = cell.accessibilityIdentifier, rowMap[id] != nil { heights[id] = cell.bounds.height }
         }
     }
 }

@@ -72,23 +72,23 @@ struct ComposerView: View {
             if let pending = store.pendingSubmissions[draftKey], !submitting {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("上一条消息尚未确认送达").font(.caption.weight(.medium))
-                        Text(pending.text.isEmpty ? "\(pending.attachments.count) 个附件" : pending.text)
+                        Text(L10n.tr("上一条消息尚未确认送达")).font(.caption.weight(.medium))
+                        Text(pending.text.isEmpty ? L10n.tr("{0} 个附件", "\(pending.attachments.count)") : pending.text)
                             .font(.caption).lineLimit(2).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 4)
                     Button { store.dismissPendingSubmission(draftKey) } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("移除发送提示").accessibilityIdentifier("composer.dismissPending")
-                    Button("重试发送") { submit(retryPending: true) }
+                        .accessibilityLabel(L10n.tr("移除发送提示")).accessibilityIdentifier("composer.dismissPending")
+                    Button(L10n.tr("重试发送")) { submit(retryPending: true) }
                         .font(.caption.weight(.semibold)).disabled(submitting)
                         .accessibilityIdentifier("composer.retryPending")
                 }.padding(12).background(ZTheme.grouped, in: RoundedRectangle(cornerRadius: 16))
             }
             if let id = sessionID, store.editingQueuedInput[id] != nil {
                 HStack {
-                    Label("编辑消息", systemImage: "pencil").font(.caption)
+                    Label(L10n.tr("编辑消息"), systemImage: "pencil").font(.caption)
                     Spacer()
-                    Button("取消") { store.editingQueuedInput[id] = nil; text = store.drafts[draftKey] ?? "" }
+                    Button(L10n.tr("取消")) { store.editingQueuedInput[id] = nil; text = store.drafts[draftKey] ?? "" }
                 }.padding(.horizontal, 12)
             }
             ZStack(alignment: .bottom) {
@@ -117,7 +117,7 @@ struct ComposerView: View {
                 focused = true
                 try? await Task.sleep(for: .milliseconds(350))
                 voicePhase = .recording
-                speech.text = "这是一条语音输入验收消息。"
+                speech.text = L10n.tr("这是一条语音输入验收消息。")
                 voiceTask = Task {
                     var sample = 0
                     while !Task.isCancelled, voicePhase == .recording {
@@ -135,7 +135,13 @@ struct ComposerView: View {
                 showPermissions = true
             }
             #endif
-            if initiallyFocused { focused = true }
+            if initiallyFocused {
+                #if DEBUG
+                focused = !ProcessInfo.processInfo.arguments.contains("--store-assets")
+                #else
+                focused = true
+                #endif
+            }
             if let sessionID { await store.loadSettings(sessionID) }
             reasoningDraft = currentReasoningValue
         }
@@ -202,7 +208,7 @@ struct ComposerView: View {
                     if let data = try? await item.loadTransferable(type: Data.self) {
                         guard identity == draftIdentity else { return }
                         let type = item.supportedContentTypes.first ?? .jpeg
-                        addAttachment(data: data, name: "照片.\(type.preferredFilenameExtension ?? "jpg")",
+                        addAttachment(data: data, name: L10n.tr("照片.{0}", "\(type.preferredFilenameExtension ?? "jpg")"),
                                       mime: type.preferredMIMEType ?? "image/jpeg")
                     }
                 }
@@ -212,17 +218,17 @@ struct ComposerView: View {
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true, onCompletion: importFiles)
         .sheet(isPresented: $showCamera) {
             CameraPicker { data in
-                if let data { addAttachment(data: data, name: "拍摄照片.jpg", mime: "image/jpeg") }
+                if let data { addAttachment(data: data, name: L10n.tr("拍摄照片.jpg"), mime: "image/jpeg") }
             }.ignoresSafeArea()
         }
         .sheet(isPresented: $showGoalEditor) {
             GoalEditorView(sessionID: sessionID)
         }
-        .confirmationDialog("关闭计划模式并恢复完全访问？", isPresented: $confirmPlanExit, titleVisibility: .visible) {
-            Button("恢复完全访问", role: .destructive) { setPlanMode(false, confirmed: true) }
-            Button("取消", role: .cancel) {}
+        .confirmationDialog(L10n.tr("关闭计划模式并恢复完全访问？"), isPresented: $confirmPlanExit, titleVisibility: .visible) {
+            Button(L10n.tr("恢复完全访问"), role: .destructive) { setPlanMode(false, confirmed: true) }
+            Button(L10n.tr("取消"), role: .cancel) {}
         } message: {
-            Text("此任务将可以直接编辑文件和运行命令，不再逐次请求批准。")
+            Text(L10n.tr("此任务将可以直接编辑文件和运行命令，不再逐次请求批准。"))
         }
     }
 
@@ -233,7 +239,7 @@ struct ComposerView: View {
                     defer { if access { url.stopAccessingSecurityScopedResource() } }
                     let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
                     guard (values.fileSize ?? 0) <= 8 * 1024 * 1024 else {
-                        store.errorMessage = "请选择小于 8 MB 的文件。"; continue
+                        store.errorMessage = L10n.tr("请选择小于 8 MB 的文件。"); continue
                     }
                     let data = try Data(contentsOf: url)
                     addAttachment(data: data, name: url.lastPathComponent,
@@ -253,7 +259,7 @@ struct ComposerView: View {
                                 Text(attachment.name).font(.caption).lineLimit(1)
                                 Button { attachments.removeAll { $0.id == attachment.id } } label: {
                                     Image(systemName: "xmark.circle.fill")
-                                }.accessibilityLabel("移除 \(attachment.name)")
+                                }.accessibilityLabel(L10n.tr("移除 {0}", "\(attachment.name)"))
                             }.padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
                         }
                     }
@@ -273,7 +279,7 @@ struct ComposerView: View {
                         attachmentMenu
                         permissionButton
                         if isPlanMode {
-                            Text("计划").font(.caption).foregroundStyle(ZTheme.accent)
+                            Text(L10n.tr("计划")).font(.caption).foregroundStyle(ZTheme.accent)
                         }
                     }
                     Spacer(minLength: 4)
@@ -315,8 +321,8 @@ struct ComposerView: View {
 
     private var inputField: some View {
         let reduced = reduceMotion
-        return TextField(isRunning ? "跟进" : "在 \(store.hostName) 上工作", text: $text,
-                         prompt: Text(isRunning ? "跟进" : "在 \(store.hostName) 上工作").foregroundStyle(Color(uiColor: .placeholderText)), axis: .vertical)
+        return TextField(isRunning ? L10n.tr("跟进") : L10n.tr("在 {0} 上工作", "\(store.hostName)"), text: $text,
+                         prompt: Text(isRunning ? L10n.tr("跟进") : L10n.tr("在 {0} 上工作", "\(store.hostName)")).foregroundStyle(Color(uiColor: .placeholderText)), axis: .vertical)
             .font(.system(size: 17))
             .lineLimit(expanded ? 1...6 : 1...1)
             .focused($focused)
@@ -337,7 +343,7 @@ struct ComposerView: View {
             Image(systemName: "mic").font(.system(size: 20, weight: .regular))
                 .foregroundStyle(Color.primary).frame(width: 32, height: 34)
         }.disabled(submitting || isRunning)
-            .accessibilityLabel("语音输入").accessibilityIdentifier("composer.microphone").accessibilityHidden(voiceActive)
+            .accessibilityLabel(L10n.tr("语音输入")).accessibilityIdentifier("composer.microphone").accessibilityHidden(voiceActive)
     }
 
     private func startInlineVoice() {
@@ -379,7 +385,7 @@ struct ComposerView: View {
             guard voiceAttempt == attempt, draftIdentity == identity, !Task.isCancelled else { return }
             guard !transcript.isEmpty else {
                 voicePhase = .idle
-                store.errorMessage = speech.error ?? "没有识别到文字，请再试一次。"
+                store.errorMessage = speech.error ?? L10n.tr("没有识别到文字，请再试一次。")
                 return
             }
             withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.4, dampingFraction: 0.88)) {
@@ -410,7 +416,7 @@ struct ComposerView: View {
             .background(!isRunning && !canSend ? Color.gray.opacity(0.28) : ZTheme.accent, in: Circle())
         }
         .disabled(submitting || (isRunning ? (sessionID.map { store.stoppingSessions.contains($0) } ?? false) : !canSend))
-        .accessibilityLabel(isRunning && !canSend ? "停止任务" : "发送消息")
+        .accessibilityLabel(isRunning && !canSend ? L10n.tr("停止任务") : L10n.tr("发送消息"))
         .accessibilityIdentifier("composer.send").accessibilityHidden(voiceActive)
     }
 
@@ -419,7 +425,7 @@ struct ComposerView: View {
             Image(systemName: "plus").font(.system(size: 21, weight: .regular)).frame(width: 28, height: 34)
         }
         .disabled(attachmentDraftIdentity != draftIdentity)
-        .tint(.primary).accessibilityLabel("添加附件或模式").accessibilityIdentifier("composer.add").accessibilityHidden(voiceActive)
+        .tint(.primary).accessibilityLabel(L10n.tr("添加附件或模式")).accessibilityIdentifier("composer.add").accessibilityHidden(voiceActive)
         .nativeFloatingPanel(isPresented: $showAttachmentMenu, preferredWidth: 320,
                              cornerRadius: 48, placement: .sourceLeading,
                              onDismiss: performPendingAttachmentAction) { attachmentPanel }
@@ -428,23 +434,23 @@ struct ComposerView: View {
     private var attachmentPanel: some View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    attachmentAction(isPlanMode ? "关闭计划模式" : "计划模式", symbol: "list.bullet", enabled: store.canEditSettings(sessionID)) {
+                    attachmentAction(isPlanMode ? L10n.tr("关闭计划模式") : L10n.tr("计划模式"), symbol: "list.bullet", enabled: store.canEditSettings(sessionID)) {
                         if isPlanMode && permission == .full && !store.isReferenceMode { confirmPlanExit = true }
                         else { setPlanMode(!isPlanMode) }
                     }
-                    attachmentAction("追求目标", symbol: "scope", enabled: store.canStartGoal(sessionID)) { showGoalEditor = true }
-                    attachmentAction("文件", symbol: "paperclip") { showFiles = true }
-                    attachmentAction("相机", symbol: "camera") {
+                    attachmentAction(L10n.tr("追求目标"), symbol: "scope", enabled: store.canStartGoal(sessionID)) { showGoalEditor = true }
+                    attachmentAction(L10n.tr("文件"), symbol: "paperclip") { showFiles = true }
+                    attachmentAction(L10n.tr("相机"), symbol: "camera") {
                         if UIImagePickerController.isSourceTypeAvailable(.camera) { showCamera = true }
-                        else { store.errorMessage = "此设备没有可用相机。你可以从照片中选择图片。" }
+                        else { store.errorMessage = L10n.tr("此设备没有可用相机。你可以从照片中选择图片。") }
                     }
-                    attachmentAction("照片", symbol: "photo.on.rectangle") { showPhotos = true }
+                    attachmentAction(L10n.tr("照片"), symbol: "photo.on.rectangle") { showPhotos = true }
                     if showsReferenceDocuments {
-                        Text("插件").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                        Text(L10n.tr("插件")).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                             .padding(.horizontal, 28).padding(.top, 18)
                         attachmentAction("Documents", symbol: "doc.text.fill", rowHeight: 44) { showFiles = true }
                     } else if !store.canStartGoal(sessionID) {
-                        Text(store.connection.isOnline ? "请在可控制的任务中设置目标。" : "连接电脑后可以设置目标。")
+                        Text(store.connection.isOnline ? L10n.tr("请在可控制的任务中设置目标。") : L10n.tr("连接电脑后可以设置目标。"))
                             .font(.footnote).foregroundStyle(.secondary)
                             .padding(.horizontal, 28).padding(.top, 4).padding(.bottom, 8)
                     }
@@ -491,7 +497,7 @@ struct ComposerView: View {
                 .font(.system(size: 19)).foregroundStyle(permission == .full ? .orange : .secondary)
                 .frame(width: 34, height: 34)
         }
-        .accessibilityLabel("权限，\(permission.title)").accessibilityIdentifier("composer.permissions").accessibilityHidden(voiceActive)
+        .accessibilityLabel(L10n.tr("权限，{0}", "\(permission.title)")).accessibilityIdentifier("composer.permissions").accessibilityHidden(voiceActive)
         .popover(isPresented: $showPermissions, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
             PermissionsView(sessionID: sessionID).presentationCompactAdaptation(.popover)
         }
@@ -504,7 +510,7 @@ struct ComposerView: View {
         } label: {
             ReasoningDial(value: displayedReasoning ?? currentReasoningValue, levels: availableReasoning, activation: dialActivation)
                 .frame(width: 32, height: 34)
-        }.accessibilityLabel("模型与思考强度").accessibilityIdentifier("composer.reasoning").accessibilityHidden(voiceActive)
+        }.accessibilityLabel(L10n.tr("模型与思考强度")).accessibilityIdentifier("composer.reasoning").accessibilityHidden(voiceActive)
     }
 
     private var reasoningPanel: some View {
@@ -556,7 +562,7 @@ struct ComposerView: View {
             }
         }
         .onTapGesture(count: 2) { showReasoning = false }
-        .accessibilityAction(named: "返回输入") { showReasoning = false }
+        .accessibilityAction(named: L10n.tr("返回输入")) { showReasoning = false }
     }
 
     private func setPlanMode(_ enabled: Bool, confirmed: Bool = false) {
@@ -573,12 +579,12 @@ struct ComposerView: View {
         let allowed = ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf", "text/plain", "text/markdown", "text/csv", "application/json"]
         let resolvedMime = allowed.contains(mime) ? mime : String(data: data, encoding: .utf8) != nil ? "text/plain" : mime
         let limit = resolvedMime.hasPrefix("image/") || resolvedMime == "application/pdf" ? 8 * 1024 * 1024 : 64 * 1024
-        guard attachments.count < 6 else { store.errorMessage = "每条消息最多添加 6 个附件。"; return }
-        guard !data.isEmpty else { store.errorMessage = "文件为空，请选择有内容的文件。"; return }
+        guard attachments.count < 6 else { store.errorMessage = L10n.tr("每条消息最多添加 6 个附件。"); return }
+        guard !data.isEmpty else { store.errorMessage = L10n.tr("文件为空，请选择有内容的文件。"); return }
         guard data.count <= limit else {
-            store.errorMessage = limit > 100_000 ? "图片或 PDF 不能超过 8 MB。" : "文本附件不能超过 64 KB。"; return
+            store.errorMessage = limit > 100_000 ? L10n.tr("图片或 PDF 不能超过 8 MB。") : L10n.tr("文本附件不能超过 64 KB。"); return
         }
-        guard allowed.contains(resolvedMime) else { store.errorMessage = "暂不支持这个文件类型。"; return }
+        guard allowed.contains(resolvedMime) else { store.errorMessage = L10n.tr("暂不支持这个文件类型。"); return }
         attachments.append(Attachment(name: name, data: data, mimeType: resolvedMime))
     }
 
@@ -587,14 +593,14 @@ struct ComposerView: View {
     }
     private var currentModelName: String {
         if store.isReferenceMode { return store.options.model }
-        guard let selection else { return "沿用电脑配置" }
+        guard let selection else { return L10n.tr("沿用电脑配置") }
         return store.models.first(where: { $0.providerId == selection.providerId && $0.modelId == selection.modelId })?.name ?? selection.modelId
     }
     private var currentReasoning: ReasoningLevel {
         store.isReferenceMode ? store.options.reasoning : selection?.thoughtLevel.flatMap(ReasoningLevel.init(wireValue:)) ?? .high
     }
     private var currentReasoningValue: String { store.isReferenceMode ? store.options.reasoning.wireValue : selection?.thoughtLevel ?? "high" }
-    private func reasoningLabel(_ value: String) -> String { ReasoningLevel(wireValue: value)?.label ?? ["none": "关闭" ][value] ?? value }
+    private func reasoningLabel(_ value: String) -> String { ReasoningLevel(wireValue: value)?.label ?? ["none": L10n.tr("关闭") ][value] ?? value }
     private var availableReasoning: [String] {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--reasoning-eight-review") { return ["none", "minimal", "low", "medium", "high", "xhigh", "max", "future"] }
@@ -702,7 +708,7 @@ struct ReasoningSlider: View {
                     if levels.contains(level) { onCommit(level) }
                 })
         }
-        .accessibilityElement().accessibilityLabel("思考强度").accessibilityValue(ReasoningLevel(wireValue: level)?.label ?? level)
+        .accessibilityElement().accessibilityLabel(L10n.tr("思考强度")).accessibilityValue(ReasoningLevel(wireValue: level)?.label ?? level)
         .accessibilityAdjustableAction { direction in
             guard !levels.isEmpty else { return }
             let delta = direction == .increment ? 1 : -1
@@ -744,10 +750,10 @@ private struct ContextUsageButton: View {
     @Binding var presented: Bool
     private var percent: Double { min(100, max(0, usage.usedPercent ?? 0)) }
     private func tokens(_ value: Double) -> String {
-        value >= 10_000 ? String(format: "%.1f万", value / 10_000) : value.formatted(.number.precision(.fractionLength(0)))
+        value.formatted(.number.notation(.compactName).precision(.fractionLength(0...1)).locale(L10n.locale))
     }
     private var categories: [(String, Double)] {
-        let labels = [("系统工具", ["system_tool_schemas"]), ("MCP 工具", ["mcp_tool_schemas"]), ("消息", ["messages"]), ("系统提示词", ["system_prompt"]), ("技能", ["skills"]), ("其他", ["meta_user_context", "tool_prompt"])]
+        let labels = [(L10n.tr("系统工具"), ["system_tool_schemas"]), (L10n.tr("MCP 工具"), ["mcp_tool_schemas"]), (L10n.tr("消息"), ["messages"]), (L10n.tr("系统提示词"), ["system_prompt"]), (L10n.tr("技能"), ["skills"]), (L10n.tr("其他"), ["meta_user_context", "tool_prompt"])]
         return labels.compactMap { label, sources in
             let rows = usage.breakdown.filter { sources.contains($0.source) }
             return rows.isEmpty ? nil : (label, rows.reduce(0) { $0 + $1.percent })
@@ -764,13 +770,13 @@ private struct ContextUsageButton: View {
                 } else { Text("—").font(.system(size: 10)) }
             }.frame(width: 19, height: 19).frame(width: 32, height: 36).contentShape(Rectangle())
         }.buttonStyle(.plain)
-            .accessibilityLabel(usage.available ? "上下文已用 \(percent.formatted(.number.precision(.fractionLength(1))))%" : "上下文用量暂不可用")
+            .accessibilityLabel(usage.available ? L10n.tr("上下文已用 {0}%", "\(percent.formatted(.number.precision(.fractionLength(1))))") : L10n.tr("上下文用量暂不可用"))
             .accessibilityIdentifier("composer.contextUsage")
             .popover(isPresented: $presented, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("上下文容量").font(.headline)
+                    Text(L10n.tr("上下文容量")).font(.headline)
                     if usage.available, let used = usage.usedTokens, let max = usage.maxTokens {
-                        Text("\(tokens(used)) / \(tokens(max))（\(percent.formatted(.number.precision(.fractionLength(1))))%）")
+                        Text("\(tokens(used)) / \(tokens(max)) (\(percent.formatted(.number.precision(.fractionLength(1))))%)")
                             .font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
                         ProgressView(value: percent, total: 100).tint(ZTheme.accent)
                         ForEach(categories, id: \.0) { label, value in
@@ -782,13 +788,13 @@ private struct ContextUsageButton: View {
                             }.font(.subheadline)
                         }
                         if !categories.isEmpty {
-                            Text("分类占比按主机的字符统计，与桌面一致。").font(.caption2).foregroundStyle(.secondary)
+                            Text(L10n.tr("分类占比按主机的字符统计，与桌面一致。")).font(.caption2).foregroundStyle(.secondary)
                         }
                         if let threshold = usage.autoCompactThresholdTokens {
-                            Text("达到 \(tokens(threshold)) tokens 时由电脑自动压缩。").font(.caption).foregroundStyle(.secondary)
+                            Text(L10n.tr("达到 {0} tokens 时由电脑自动压缩。", "\(tokens(threshold))")).font(.caption).foregroundStyle(.secondary)
                         }
                     } else {
-                        Text("电脑尚未提供当前上下文统计。").font(.subheadline).foregroundStyle(.secondary)
+                        Text(L10n.tr("电脑尚未提供当前上下文统计。")).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }.padding(18).frame(width: 290)
                     .presentationCompactAdaptation(.popover)
@@ -806,10 +812,10 @@ private struct CompactionStatusView: View {
             if compaction.active {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("正在压缩上下文…")
+                    Text(L10n.tr("正在压缩上下文…"))
                 }.accessibilityIdentifier("context.compacting")
             } else if visibleCompletion, let latest = compaction.latest {
-                Label(latest.status == "success" ? "上下文已压缩" : latest.status == "failed" ? "上下文压缩失败" : "上下文压缩已结束", systemImage: latest.status == "success" ? "checkmark.circle" : "info.circle")
+                Label(latest.status == "success" ? L10n.tr("上下文已压缩") : latest.status == "failed" ? L10n.tr("上下文压缩失败") : L10n.tr("上下文压缩已结束"), systemImage: latest.status == "success" ? "checkmark.circle" : "info.circle")
                     .accessibilityIdentifier("context.compacted")
             }
         }.font(.caption).foregroundStyle(.secondary)

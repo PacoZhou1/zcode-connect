@@ -65,7 +65,7 @@ public struct RelayFailure: Error, LocalizedError, Sendable, Equatable {
     static func closed() -> Self { .init("relay_disconnected", "The desktop relay is disconnected.", outcomeUncertain: true) }
     static func rejected(code: String?, paired: Bool) -> Self {
         if code == "KICKED" {
-            return .init("controller_replaced", "另一台手机已接管连接，请关闭旧页面后重新连接。", outcomeUncertain: paired)
+            return .init("controller_replaced", L10n.tr("另一台手机已接管连接，请关闭旧页面后重新连接。"), outcomeUncertain: paired)
         }
         // Keep only a bounded protocol code, never server text that could echo
         // pairing material, URLs or other remote content into the interface.
@@ -73,7 +73,7 @@ public struct RelayFailure: Error, LocalizedError, Sendable, Equatable {
             value.range(of: #"\A[A-Z][A-Z0-9_]{0,63}\z"#, options: .regularExpression) != nil ? value : nil
         }
         let detail = safeCode.map { "（\($0)）" } ?? ""
-        return .init("relay_rejected", "远程服务拒绝了连接\(detail)。请保留此错误代码以便排查。", outcomeUncertain: paired)
+        return .init("relay_rejected", L10n.tr("远程服务拒绝了连接{0}。请保留此错误代码以便排查。", "\(detail)"), outcomeUncertain: paired)
     }
 }
 
@@ -89,6 +89,8 @@ public struct RelayPairing: Sendable, CustomStringConvertible, CustomDebugString
     public let serviceID: String
     public let profileURL: URL
     public let isSelfHosted: Bool
+    public let protocolVersion: Int
+    public var usesAccount: Bool { protocolVersion == 2 }
     private let passHash: String
     public var description: String { "RelayPairing(credential: redacted)" }
     public var debugDescription: String { description }
@@ -98,17 +100,31 @@ public struct RelayPairing: Sendable, CustomStringConvertible, CustomDebugString
         try self.init(pairingURL: scannedURL, customRelayURL: nil)
     }
 
-    /// A custom service requires this explicit transport envelope; it cannot redirect
-    /// an ordinary official QR or borrow the HTTP bridge's URL/token parser.
+    /// Custom QR URLs derive only the fixed WSS path on the same HTTPS origin.
+    /// Legacy explicit envelopes remain supported. No network discovery or redirect
+    /// is used, and official credentials can never be routed to a custom service.
     public init(payload: String) throws {
         let text = payload.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.first != "{" { try self.init(scannedURL: text); return }
+        if text.first != "{" {
+            if var endpoint = URLComponents(string: text),
+               ["/zcode/remote/v4", "/zcode/remote/v4/"].contains(endpoint.path) {
+                endpoint.scheme = "wss"; endpoint.path = "/zcode/ws"
+                endpoint.query = nil; endpoint.fragment = nil
+                guard let relayURL = endpoint.url?.absoluteString else {
+                    throw RelayFailure("relay_invalid_pairing", L10n.tr("连接二维码无效，请在电脑上重新打开远程控制。"))
+                }
+                try self.init(pairingURL: text, customRelayURL: relayURL)
+            } else {
+                try self.init(scannedURL: text)
+            }
+            return
+        }
         guard text.utf8.count <= 16_384, let data = text.data(using: .utf8),
               let object = try? RelayJSON(data: data).object,
               Set(object.keys) == Set(["transport", "url", "relayURL"]),
               object["transport"]?.string == "zcode-relay",
               let url = object["url"]?.string, let relayURL = object["relayURL"]?.string else {
-            throw RelayFailure("relay_invalid_pairing", "自建 Relay 连接信息无效，请使用中转服务导出的完整连接信息。")
+            throw RelayFailure("relay_invalid_pairing", L10n.tr("自建 Relay 连接信息无效，请使用中转服务导出的完整连接信息。"))
         }
         try self.init(pairingURL: url, customRelayURL: relayURL)
     }
@@ -118,7 +134,7 @@ public struct RelayPairing: Sendable, CustomStringConvertible, CustomDebugString
               page.scheme == "https", let host = Self.canonicalHost(page.host),
               page.user == nil, page.password == nil, page.fragment == nil,
               Self.validPort(page.port) else {
-            throw RelayFailure("relay_invalid_pairing", "连接信息必须包含有效的加密配对地址。")
+            throw RelayFailure("relay_invalid_pairing", L10n.tr("连接信息必须包含有效的加密配对地址。"))
         }
         let custom = customRelayURL != nil
         var relay: URLComponents
@@ -130,7 +146,7 @@ public struct RelayPairing: Sendable, CustomStringConvertible, CustomDebugString
                   ["/zcode/remote/v4", "/zcode/remote/v4/"].contains(page.path), page.percentEncodedPath == page.path,
                   endpoint.path == "/zcode/ws", endpoint.percentEncodedPath == endpoint.path,
                   endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil else {
-                throw RelayFailure("relay_invalid_pairing", "自建 Relay 的配对地址与加密中转必须属于同一服务，且不能转发官方配对凭据。")
+                throw RelayFailure("relay_invalid_pairing", L10n.tr("自建 Relay 的配对地址与加密中转必须属于同一服务，且不能转发官方配对凭据。"))
             }
             endpoint.host = endpointHost; if endpoint.port == 443 { endpoint.port = nil }
             relay = endpoint
@@ -147,13 +163,27 @@ public struct RelayPairing: Sendable, CustomStringConvertible, CustomDebugString
             throw RelayFailure("relay_invalid_pairing", "The pairing QR contains duplicate fields.")
         }
         if custom, items.contains(where: { !fields.contains($0.name) }) {
-            throw RelayFailure("relay_invalid_pairing", "自建 Relay 配对地址包含不支持的字段。")
+            throw RelayFailure("relay_invalid_pairing", L10n.tr("自建 Relay 配对地址包含不支持的字段。"))
         }
         func field(_ name: String) -> String? { items.first { $0.name == name }?.value }
-        guard let sid = field("sid"), RelayWire.validID(sid), let hash = field("hash"),
-              (32...512).contains(hash.utf8.count), hash.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
-            throw RelayFailure("relay_invalid_pairing", "The pairing QR is missing its credential.")
+        let accountMode = !custom && field("hash") == nil && field("t") == nil
+        guard let sid = field("sid"), accountMode ? OfficialRelayAPI.validDeviceID(sid) : RelayWire.validID(sid) else {
+            throw RelayFailure("relay_invalid_pairing", L10n.tr("请先选择一台电脑。"))
         }
+        let hash: String
+        if accountMode {
+            guard items.allSatisfy({ ["sid", "mid", "name", "app_version"].contains($0.name) }) else {
+                throw RelayFailure("relay_invalid_pairing", L10n.tr("连接二维码包含不支持的信息。"))
+            }
+            hash = ""; relay = URLComponents(string: OfficialRelay.serviceID)!
+        } else {
+            guard let value = field("hash"), (32...512).contains(value.utf8.count),
+                  value.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
+                throw RelayFailure("relay_invalid_pairing", "The pairing QR is missing its credential.")
+            }
+            hash = value
+        }
+        protocolVersion = accountMode ? 2 : 1
         guard let serviceURL = relay.url else { throw RelayFailure.invalid("Invalid relay endpoint.") }
         serviceID = serviceURL.absoluteString
         if let mid = field("mid"), !mid.isEmpty {
@@ -186,9 +216,33 @@ public struct RelayPairing: Sendable, CustomStringConvertible, CustomDebugString
     }
 
     public func challengeProof(nonce: String) throws -> String {
+        guard !usesAccount else { throw RelayFailure.invalid("V2 does not use challenge credentials.") }
         guard !nonce.isEmpty, nonce.utf8.count <= 4096 else { throw RelayFailure.invalid("Invalid relay challenge.") }
         let value = HMAC<SHA256>.authenticationCode(for: Data("\(nonce)|terminal|\(deviceID)".utf8), using: SymmetricKey(data: Data(passHash.utf8)))
         return Data(value).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+
+    public func authenticatedSocketURL(oneTimeToken: String) throws -> URL {
+        guard usesAccount, serviceID == OfficialRelay.serviceID, OfficialRelayAPI.validOneTimeToken(oneTimeToken),
+              var endpoint = URLComponents(url: relayURL, resolvingAgainstBaseURL: false) else {
+            throw OfficialRelay.failure("account_login_required")
+        }
+        var items = endpoint.queryItems ?? []
+        items.append(URLQueryItem(name: "token", value: oneTimeToken)); endpoint.queryItems = items
+        guard let url = endpoint.url else { throw RelayFailure.invalid("Invalid V2 endpoint.") }
+        return url
+    }
+
+    /// An official V2 entry with no SID is a device-list route, not an invalid legacy QR.
+    public static func isAccountDeviceList(_ text: String) -> Bool {
+        guard text.utf8.count <= 8192, let page = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              page.scheme == "https", page.host == "zcode.z.ai", page.port == nil || page.port == 443,
+              page.user == nil, page.password == nil, page.fragment == nil,
+              ["/remote/v4", "/remote/v4/"].contains(page.path), page.percentEncodedPath == page.path else { return false }
+        let items = page.queryItems ?? []
+        guard items.allSatisfy({ ["sid", "mid", "name", "app_version"].contains($0.name) }),
+              Set(items.map(\.name)).count == items.count else { return false }
+        return items.first(where: { $0.name == "sid" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
     }
 }
 

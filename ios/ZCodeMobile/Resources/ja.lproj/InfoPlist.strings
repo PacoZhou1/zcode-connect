@@ -1,0 +1,5 @@
+"NSLocalNetworkUsageDescription" = "コンピュータに接続して、ZCode のタスクを確認し、作業を続けます。";
+"NSCameraUsageDescription" = "コンピュータの接続用 QR コードをスキャンしたり、タスク用の写真を撮影したりします。";
+"NSMicrophoneUsageDescription" = "音声をタスクの指示に変換します。";
+"NSSpeechRecognitionUsageDescription" = "音声を編集可能なテキストに変換し、送信前に確認できます。";
+"NSPhotoLibraryUsageDescription" = "タスクに添付する写真を選択します。";

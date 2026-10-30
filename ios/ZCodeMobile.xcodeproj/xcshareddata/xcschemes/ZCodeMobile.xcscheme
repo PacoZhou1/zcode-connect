@@ -50,6 +50,17 @@
                ReferencedContainer = "container:ZCodeMobile.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "478E9A29DB34707E984AB901"
+               BuildableName = "ZCodeMobileUITests.xctest"
+               BlueprintName = "ZCodeMobileUITests"
+               ReferencedContainer = "container:ZCodeMobile.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

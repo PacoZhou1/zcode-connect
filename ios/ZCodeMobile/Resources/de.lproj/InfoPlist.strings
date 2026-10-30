@@ -1,0 +1,5 @@
+"NSLocalNetworkUsageDescription" = "Verbinde deinen Computer, um ZCode-Aufgaben anzusehen und fortzusetzen.";
+"NSCameraUsageDescription" = "Scanne den Verbindungs-QR-Code deines Computers oder nimm Fotos für eine Aufgabe auf.";
+"NSMicrophoneUsageDescription" = "Wandle deine Stimme in Aufgabenanweisungen um.";
+"NSSpeechRecognitionUsageDescription" = "Wandle Sprache in bearbeitbaren Text um, den du vor dem Senden prüfen kannst.";
+"NSPhotoLibraryUsageDescription" = "Wähle Fotos aus, die du einer Aufgabe anhängen möchtest.";

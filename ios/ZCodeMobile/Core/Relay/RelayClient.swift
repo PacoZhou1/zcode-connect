@@ -52,9 +52,16 @@ public actor RelayURLSessionSocket: RelaySocketTransport {
     private var tracedSends = 0
     public init() {}
     public func connect(to url: URL) async throws {
-        guard url.scheme == "wss", url.host == "zcode.z.ai", url.path == "/ws",
+        guard url.scheme == "wss", url.host == "zcode.z.ai", ["/ws", "/api/v1/remote/ws2"].contains(url.path),
               url.port == nil || url.port == 443, url.user == nil, url.password == nil, url.fragment == nil else {
             throw RelayFailure("relay_invalid_endpoint", "A custom relay endpoint requires explicit pairing information.")
+        }
+        if url.path == "/api/v1/remote/ws2" {
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            guard items.allSatisfy({ ["token", "mid"].contains($0.name) }), Set(items.map(\.name)).count == items.count,
+                  OfficialRelayAPI.validOneTimeToken(items.first(where: { $0.name == "token" })?.value ?? "") else {
+                throw OfficialRelay.failure("account_login_required")
+            }
         }
         try open(to: url)
     }
@@ -72,7 +79,7 @@ public actor RelayURLSessionSocket: RelaySocketTransport {
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         let session = URLSession(configuration: configuration, delegate: RelaySocketRedirectDelegate(), delegateQueue: nil)
         let task = session.webSocketTask(with: url)
-        task.maximumMessageSize = RelayWire.maxFrame
+        task.maximumMessageSize = url.path == "/api/v1/remote/ws2" ? 1_048_576 : RelayWire.maxFrame
         self.session = session; self.task = task; task.resume()
     }
     public func send(text: String) async throws {
@@ -173,7 +180,7 @@ public actor RelayClient {
         Task { do { try await Task.sleep(for: .seconds(seconds)); guard !Task.isCancelled else { return }; await action() } catch {} }
     }
 
-    public func connect(pairing: RelayPairing, confirmedControllerReplacement: Bool) async throws {
+    public func connect(pairing: RelayPairing, confirmedControllerReplacement: Bool, oneTimeToken: String? = nil) async throws {
         guard confirmedControllerReplacement else { throw RelayFailure("controller_confirmation_required", "Connecting can replace another mobile controller. Confirm the selected desktop first.") }
         guard connectionID == nil, !closing else { throw RelayFailure("relay_already_connected", "Disconnect before pairing another desktop.") }
         if lastDeviceID != pairing.deviceID || lastServiceID != pairing.serviceID { reducers.removeAll(); snapshots.removeAll(); commandHashes.removeAll(); stoppedSessions.removeAll(); workspaceScopeID = nil }
@@ -181,7 +188,10 @@ public actor RelayClient {
         let id = UUID(); connectionID = id; self.pairing = pairing; setState(.connecting)
         RelayConnectionTrace.shared.record("connect_start selfHosted=\(pairing.isSelfHosted) timeout=\(requestTimeout)")
         do {
-            try await transport.connect(pairing: pairing)
+            if pairing.usesAccount {
+                guard let oneTimeToken else { throw OfficialRelay.failure("account_login_required") }
+                try await transport.connect(to: pairing.authenticatedSocketURL(oneTimeToken: oneTimeToken))
+            } else { try await transport.connect(pairing: pairing) }
             receiveTask = Task { [weak self, transport] in
                 do {
                     while !Task.isCancelled {
@@ -194,10 +204,14 @@ public actor RelayClient {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
                     pairWaiter = continuation
                     pairTimeout = timeoutTask(requestTimeout) { [weak self] in await self?.transportFailed(RelayFailure("relay_pairing_timeout", "The desktop did not pair before the deadline."), connectionID: id) }
-                    Task {
+                    _ = Task {
                         do {
                             self.setState(.authenticating)
-                            try await self.sendEnvelope(.object(["type": .string("auth_init"), "role": .string("terminal"), "device_sid": .string(pairing.deviceID), "meta": .object(["platform": .string("web"), "version": .string(pairing.appVersion), "name": .string("zcode-native-ios")]), "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))]))
+                            var envelope: [String: RelayJSON] = ["type": .string("auth_init"), "device_sid": .string(pairing.deviceID),
+                                "meta": .object(["platform": .string("ios"), "version": .string(pairing.appVersion), "name": .string("zcode-connect")]),
+                                "client_ts": .int(self.wireTimestamp)]
+                            if !pairing.usesAccount { envelope["role"] = .string("terminal") }
+                            try await self.sendEnvelope(.object(envelope))
                         } catch { await self.transportFailed(error, connectionID: id) }
                     }
                 }
@@ -233,7 +247,7 @@ public actor RelayClient {
     private func sendEnvelopes(_ values: [RelayJSON]) async throws {
         guard let id = connectionID, !closing else { throw RelayFailure.closed() }
         let texts = try values.map { value in
-            let data = try value.data(); guard data.count <= RelayWire.maxFrame, let text = String(data: data, encoding: .utf8) else { throw RelayFailure.invalid("Relay envelope exceeds 1 MiB.") }; return text
+            let data = try value.data(); guard data.count <= (pairing?.usesAccount == true ? 1_048_576 : RelayWire.maxFrame), let text = String(data: data, encoding: .utf8) else { throw RelayFailure.invalid("Relay envelope exceeds 1 MiB.") }; return text
         }
         let previous = outboundTail, transport = transport
         // Queue an entire fragment batch before awaiting, preventing concurrent RPC calls from interleaving it.
@@ -242,19 +256,33 @@ public actor RelayClient {
     }
     private func sendPayload(_ value: RelayJSON) async throws {
         guard paired else { throw RelayFailure.closed() }
-        try await sendEnvelope(.object(["type": .string("data"), "payload": value, "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))]))
+        try await sendEnvelope(.object(["type": .string("data"), "payload": value, "client_ts": .int(wireTimestamp)]))
     }
     private func receive(_ text: String, connectionID id: UUID) async throws {
         guard connectionID == id else { return }
-        guard text.utf8.count <= RelayWire.maxFrame else { throw RelayFailure.invalid("Oversized relay envelope.") }
+        guard text.utf8.count <= (pairing?.usesAccount == true ? 1_048_576 : RelayWire.maxFrame) else { throw RelayFailure.invalid("Oversized relay envelope.") }
         let value = try RelayJSON(data: Data(text.utf8)), type = try value.requiringString("type")
         if type == "auth_challenge" {
+            guard pairing?.usesAccount != true else { throw RelayFailure.invalid("Unexpected V1 challenge on a V2 connection.") }
             RelayConnectionTrace.shared.record("auth_challenge")
             guard !paired, let pairing else { throw RelayFailure.invalid("Unexpected authentication challenge.") }
             let proof = try pairing.challengeProof(nonce: value.requiringString("nonce"))
             try await sendEnvelope(.object(["type": .string("auth_response"), "device_sid": .string(pairing.deviceID), "proof": .string(proof), "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))])); return
         }
         if ["auth_ack", "pair_status_ack"].contains(type) {
+            if pairing?.usesAccount == true {
+                if type == "auth_ack" {
+                    guard value["device_sid"].string == pairing?.deviceID,
+                          let terminal = value["terminal_sid"].string, !terminal.isEmpty, terminal.utf8.count <= 128 else {
+                        throw RelayFailure.invalid("V2 acknowledgement does not match the selected device.")
+                    }
+                }
+                if let timestamp = value.object?["server_ts"] {
+                    guard let seconds = timestamp.integer, seconds >= 0, seconds <= 253_402_300_799 else {
+                        throw RelayFailure.invalid("V2 timestamp must be Unix seconds.")
+                    }
+                }
+            }
             RelayConnectionTrace.shared.record(type + " status=" + (["matched", "waiting"].contains(value["pair_status"].string ?? "") ? value["pair_status"].string! : "invalid"))
             lastHeartbeat = ProcessInfo.processInfo.systemUptime
             switch value["pair_status"].string {
@@ -262,10 +290,19 @@ public actor RelayClient {
                 if !paired { paired = true; setState(.paired); pairTimeout?.cancel(); pairTimeout = nil; pairWaiter?.resume(); pairWaiter = nil; startHeartbeat(id) }
             case "waiting":
                 if paired { throw RelayFailure("relay_desktop_unpaired", "The desktop is no longer paired.", outcomeUncertain: true) }; setState(.waiting)
+                if pairing?.usesAccount == true && heartbeatTask == nil { startHeartbeat(id) }
             default: throw RelayFailure.invalid("Invalid pairing acknowledgement.")
             }; return
         }
         if type == "error" {
+            if pairing?.usesAccount == true {
+                switch value["code"].string {
+                case "AUTH_FAILED": throw OfficialRelay.failure("account_mismatch")
+                case "DEVICE_OFFLINE": throw OfficialRelay.failure("account_offline")
+                case "WRONG_PARAM": throw RelayFailure("relay_invalid_pairing", L10n.tr("连接信息已失效，请重新选择电脑。"))
+                default: break
+                }
+            }
             throw RelayFailure.rejected(code: value["code"].string, paired: paired)
         }
         guard type == "data", paired else { return }
@@ -306,22 +343,32 @@ public actor RelayClient {
             // A new controller can receive the previous bridge's queued fault.
             // Only a fault scoped to our attached bridge may end this connection.
             guard let bridge, bridge.identity.matches(payload) else { return }
-            throw RelayFailure("desktop_bridge_degraded", "电脑连接暂时中断，正在尝试恢复。", outcomeUncertain: true)
+            throw RelayFailure("desktop_bridge_degraded", L10n.tr("电脑连接暂时中断，正在尝试恢复。"), outcomeUncertain: true)
         }
         if ["workspace-bridge-error", "app-error"].contains(subtype) { throw RelayFailure("desktop_bridge_degraded", "The original desktop service is unavailable.", outcomeUncertain: true) }
     }
     private func startHeartbeat(_ id: UUID) {
+        // V2 already heartbeats while waiting. Keep that task when the peer matches;
+        // cancelling it here would let its cancellation handler close the healthy socket.
+        guard heartbeatTask == nil else { return }
+        let v2 = pairing?.usesAccount == true
         heartbeatTask = Task { [weak self] in
-            do { while !Task.isCancelled { try await Task.sleep(for: .seconds(10)); guard let self else { return }; try await self.heartbeat() } }
+            do { while !Task.isCancelled { try await Task.sleep(for: .seconds(v2 ? Double.random(in: 4...6) : 10)); guard let self else { return }; try await self.heartbeat() } }
             catch { await self?.transportFailed(error, connectionID: id) }
         }
     }
     private func heartbeat() async throws {
-        guard paired, let pairing else { throw RelayFailure.closed() }
-        guard ProcessInfo.processInfo.systemUptime - lastHeartbeat <= 30 else { throw RelayFailure("relay_heartbeat_timeout", "The relay stopped acknowledging heartbeats.", outcomeUncertain: true) }
+        guard let pairing, paired || pairing.usesAccount && state == .waiting else { throw RelayFailure.closed() }
+        guard ProcessInfo.processInfo.systemUptime - lastHeartbeat <= (pairing.usesAccount ? 15 : 30) else { throw RelayFailure("relay_heartbeat_timeout", "The relay stopped acknowledging heartbeats.", outcomeUncertain: true) }
         try frames?.checkDeadline()
         for subscription in conversationAssembler.expire() { requestRecovery(subscription, reason: "conversation_fragment_timeout") }
-        try await sendEnvelope(.object(["type": .string("pair_status_query"), "device_sid": .string(pairing.deviceID), "client_ts": .int(Int(Date().timeIntervalSince1970 * 1000))]))
+        var envelope: [String: RelayJSON] = ["type": .string("pair_status_query"), "client_ts": .int(wireTimestamp)]
+        if !pairing.usesAccount { envelope["device_sid"] = .string(pairing.deviceID) }
+        try await sendEnvelope(.object(envelope))
+    }
+
+    private var wireTimestamp: Int {
+        Int(Date().timeIntervalSince1970 * (pairing?.usesAccount == true ? 1 : 1000))
     }
 
     private func appRequest(type: String, expected: Set<String>, fields: [String: RelayJSON] = [:], workspace: RelayWorkspace? = nil, bridgeID: String? = nil, generation: Int? = nil) async throws -> RelayJSON {
@@ -438,8 +485,8 @@ public actor RelayClient {
                     // Operation names only: never log task IDs, messages, credentials or RPC parameters.
                     Logger(subsystem: "dev.paco.zcode.mobile", category: "Relay").error("Desktop RPC timeout: \(channel, privacy: .public)/\(method, privacy: .public)")
                     let failure = readOnly
-                        ? RelayFailure("relay_read_timeout", "读取电脑上的内容超时，请稍后重试。")
-                        : RelayFailure("relay_rpc_timeout", "电脑尚未确认操作结果。请先恢复连接并核对原操作，避免重复提交。", outcomeUncertain: true)
+                        ? RelayFailure("relay_read_timeout", L10n.tr("读取电脑上的内容超时，请稍后重试。"))
+                        : RelayFailure("relay_rpc_timeout", L10n.tr("电脑尚未确认操作结果。请先恢复连接并核对原操作，避免重复提交。"), outcomeUncertain: true)
                     await self?.completeRPC(id, result: .failure(failure))
                 }
                 rpcRequests[id] = .init(continuation: continuation, timeout: timer)
@@ -461,7 +508,9 @@ public actor RelayClient {
         switch message.type {
         case 201: completeRPC(id, result: .success(body))
         case 202, 203:
-            completeRPC(id, result: .failure(RelayFailure("desktop_rpc_error", "The desktop rejected the service request.")))
+            // Classify only the known missing-method error; never expose raw host payloads.
+            let missingMethod = (body["message"].string ?? body.string ?? "").hasPrefix("Method not found: ")
+            completeRPC(id, result: .failure(RelayFailure(missingMethod ? "desktop_method_unavailable" : "desktop_rpc_error", missingMethod ? L10n.tr("电脑版本不支持此接口。") : "The desktop rejected the service request.")))
         case 204: if id == conversationListener { receiveConversation(body) }
         default: throw RelayFailure.invalid("Unsupported service response type.")
         }
@@ -739,7 +788,7 @@ public actor RelayClient {
             guard command.baseRevision != nil, command.baseLogEpoch?.isEmpty == false else { throw RelayFailure.invalid("Fork requires the source projection revision and epoch.") }
         case "editQueueItem", "deleteQueueItem", "sendQueuedNow":
             guard let id = payload["queueItemId"]?.string, !id.isEmpty,
-                  reducers[sessionID]?.projection?.raw["queue"]["items"].array?.contains(where: { $0["queueItemId"].string == id }) == true else { throw RelayFailure("queue_item_missing", "这条消息已被处理，请刷新会话。") }
+                  reducers[sessionID]?.projection?.raw["queue"]["items"].array?.contains(where: { $0["queueItemId"].string == id }) == true else { throw RelayFailure("queue_item_missing", L10n.tr("这条消息已被处理，请刷新会话。")) }
             if command.type == "editQueueItem" {
                 guard let text = payload["newText"]?.string, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 128_000 else { throw RelayFailure.invalid("Invalid queued message text.") }
             }
@@ -877,9 +926,9 @@ public actor RelayClient {
         let objective = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !readOnlySubagents.contains(sessionID), let projection = reducers[sessionID]?.projection else { throw RelayFailure("goal_start_unavailable", "Open an ordinary task before starting a goal.") }
         guard !objective.isEmpty, objective.utf8.count <= 128_000 else { throw RelayFailure("goal_start_invalid", "A goal needs a nonempty objective of at most 128 KB.") }
-        guard projection.config["mode"].string != "plan" else { throw RelayFailure("goal_plan_mode", "请先关闭计划模式，再开始追求目标。") }
+        guard projection.config["mode"].string != "plan" else { throw RelayFailure("goal_plan_mode", L10n.tr("请先关闭计划模式，再开始追求目标。")) }
         guard !projection.canStop, projection.pendingInteractions.isEmpty, projection.hostGoal?.isActive != true,
-              !["running", "prewarming"].contains(projection.phase) else { throw RelayFailure("goal_start_unavailable", "请先停止或暂停当前任务，再设置新的目标。") }
+              !["running", "prewarming"].contains(projection.phase) else { throw RelayFailure("goal_start_unavailable", L10n.tr("请先停止或暂停当前任务，再设置新的目标。")) }
         return makeCommand(sessionID: sessionID, type: "sendGoalCommand", payload: .object(["text": .string(objective), "displayText": .string("/goal " + objective)]), commandID: commandID)
     }
     public func startGoal(sessionID: String, text: String, commandID: String, explicitUserAction: Bool) async throws -> RelayCommandAck {

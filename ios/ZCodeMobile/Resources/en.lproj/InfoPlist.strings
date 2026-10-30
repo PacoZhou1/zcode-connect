@@ -1,0 +1,5 @@
+"NSLocalNetworkUsageDescription" = "Connect to your computer to view and continue ZCode tasks.";
+"NSCameraUsageDescription" = "Scan the connection QR code on your computer or take photos for a task.";
+"NSMicrophoneUsageDescription" = "Turn your voice into task instructions.";
+"NSSpeechRecognitionUsageDescription" = "Convert speech into editable text for you to review before sending.";
+"NSPhotoLibraryUsageDescription" = "Choose photos to attach to a task.";

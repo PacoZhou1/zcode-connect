@@ -29,13 +29,13 @@ final class SpeechCapture {
         }
         guard generation == self.generation, !Task.isCancelled else { return }
         guard speechPermission == .authorized else {
-            error = "请在系统设置中允许 ZCode 使用语音识别。"; return
+            error = L10n.tr("请在系统设置中允许 zcode connect 使用语音识别。"); return
         }
         let microphone = await AVAudioApplication.requestRecordPermission()
         guard generation == self.generation, !Task.isCancelled else { return }
-        guard microphone else { error = "请在系统设置中允许 ZCode 使用麦克风。"; return }
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN")), recognizer.isAvailable else {
-            error = "语音识别暂不可用，请稍后重试。"; return
+        guard microphone else { error = L10n.tr("请在系统设置中允许 zcode connect 使用麦克风。"); return }
+        guard let recognizer = SFSpeechRecognizer(locale: L10n.locale), recognizer.isAvailable else {
+            error = L10n.tr("语音识别暂不可用，请稍后重试。"); return
         }
         text = ""
         levels = []
@@ -50,7 +50,7 @@ final class SpeechCapture {
             let input = engine.inputNode
             let format = input.outputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else {
-                error = "当前设备没有可用的音频输入。"; stop(); return
+                error = L10n.tr("当前设备没有可用的音频输入。"); stop(); return
             }
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable [weak self] buffer, _ in
                 request.append(buffer)

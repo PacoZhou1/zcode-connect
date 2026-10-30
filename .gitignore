@@ -39,3 +39,6 @@ delivery/
 
 # Private before-images of unrelated server handoff documents.
 docs/backend/evidence/macpro-handoff-update-20260913/*-before.md
+
+# Reviewed runtime deployment kit, rebuilt only from public source.
+!ios/ZCodeMobile/Resources/ZCode-Self-Hosted-Kit.zip

@@ -3,61 +3,76 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @State private var language = LanguageSettings.shared
     var embedded = false
     var body: some View {
         Group {
             if embedded { settingsForm }
             else { NavigationStack { settingsForm } }
         }
+        .modifier(OfficialLoginPresentation())
     }
     private var settingsForm: some View {
         @Bindable var store = store
         return Form {
-            Section("外观") {
-                Picker("颜色", selection: $store.appearance) {
-                    ForEach(["跟随系统", "浅色", "深色"], id: \.self) { Text($0) }
+            OfficialAccountSection(showDevices: false)
+            Section(L10n.tr("语言")) {
+                Picker(L10n.tr("App 语言"), selection: $language.selection) {
+                    ForEach(AppLanguage.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .accessibilityIdentifier("settings.language")
+            }
+            Section(L10n.tr("外观")) {
+                Picker(L10n.tr("颜色"), selection: $store.appearance) {
+                    ForEach(["跟随系统", "浅色", "深色"], id: \.self) { Text(L10n.tr($0)).tag($0) }
                 }
                 NavigationLink {
                     ThemeColorSettingsView()
                 } label: {
                     HStack {
-                        Text("主题色")
+                        Text(L10n.tr("主题色"))
                         Spacer()
                         Circle().fill(ZTheme.accent).frame(width: 20, height: 20)
                         Text(ThemePreferences.shared.selection.label).foregroundStyle(.secondary)
                     }
                 }.accessibilityIdentifier("settings.theme")
-                Toggle("触感反馈", isOn: $store.hapticsEnabled)
-                Toggle("显示时间", isOn: $store.showTimestamps)
-                Toggle("显示上下文用量", isOn: $store.showContextUsage)
+                Toggle(L10n.tr("触感反馈"), isOn: $store.hapticsEnabled)
+                Toggle(L10n.tr("显示时间"), isOn: $store.showTimestamps)
+                Toggle(L10n.tr("显示上下文用量"), isOn: $store.showContextUsage)
                     .accessibilityIdentifier("settings.contextUsage")
-                Toggle("任务完成通知", isOn: $store.completionNotifications)
+                Toggle(L10n.tr("任务完成通知"), isOn: $store.completionNotifications)
                     .accessibilityIdentifier("settings.completionNotifications")
             }
-            Section("连接") {
-                LabeledContent("电脑", value: store.hostName)
-                LabeledContent("状态", value: store.connection.label)
-                if let version = store.bridgeVersion { LabeledContent("ZCode 版本", value: version) }
+            Section(L10n.tr("连接")) {
+                LabeledContent(L10n.tr("电脑"), value: store.hostName)
+                LabeledContent(L10n.tr("状态"), value: store.connection.label)
+                if let version = store.bridgeVersion { LabeledContent(L10n.tr("ZCode 版本"), value: version) }
                 ForEach(store.profiles) { profile in
                     NavigationLink(profile.name) { ConnectionDetailView(profile: profile) }
                 }
-                NavigationLink { PairingView(embedded: true) } label: { Label("添加连接", systemImage: "plus") }
-                NavigationLink { ConnectionGuideView() } label: { Label("手机与电脑连接指南", systemImage: "questionmark.circle") }
+                NavigationLink { PairingView(embedded: true) } label: { Label(L10n.tr("添加连接"), systemImage: "plus") }
+                NavigationLink { ConnectionGuideView() } label: { Label(L10n.tr("手机与电脑连接指南"), systemImage: "questionmark.circle") }
             }
-            Section("关于") {
-                LabeledContent("ZCode Mobile", value: "1.0")
-                Text("使用原生 SwiftUI 与 Apple Liquid Glass 构建。")
+            Section(L10n.tr("关于")) {
+                LabeledContent("zcode connect", value: "1.0")
+                Link(L10n.tr("隐私政策"), destination: URL(string: "https://zcode-remote-support.zch1234512345.chatgpt.site/privacy.html")!)
+                    .accessibilityIdentifier("settings.privacyPolicy")
+                Link(L10n.tr("使用支持"), destination: URL(string: "https://zcode-remote-support.zch1234512345.chatgpt.site/")!)
+                    .accessibilityIdentifier("settings.support")
+                Text(L10n.tr("使用原生 SwiftUI 与 Apple Liquid Glass 构建。"))
                     .font(.footnote).foregroundStyle(.secondary)
                 if !store.isReferenceMode {
-                    Button("体验参考界面") { store.enterReferenceMode(); dismiss() }
+                    Button(L10n.tr("查看演示")) { store.enterReferenceMode(); dismiss() }
                 } else {
-                    Button("退出界面体验") { store.leaveReferenceMode(); dismiss() }
+                    Button(L10n.tr("退出演示")) { store.leaveReferenceMode(); dismiss() }
                 }
             }
         }
-        .navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(L10n.tr("设置")).navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if !embedded { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            if !embedded { ToolbarItem(placement: .confirmationAction) { Button(L10n.tr("完成")) { dismiss() } } }
         }
         .onChange(of: store.appearance) { store.savePreferences() }
         .onChange(of: store.hapticsEnabled) { store.savePreferences() }
@@ -79,26 +94,26 @@ struct ConnectionDetailView: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("名称", value: profile.name)
-                LabeledContent("地址", value: profile.baseURL)
+                LabeledContent(L10n.tr("名称"), value: profile.name)
+                LabeledContent(L10n.tr("地址"), value: profile.baseURL)
             }
             Section {
-                Button("重新连接") {
+                Button(L10n.tr("重新连接")) {
                     if profile.isRelay { confirmRelayReconnect = true }
                     else { Task { await store.connect(profile) } }
                 }.disabled(store.connection == .connecting)
-                Button("移除连接", role: .destructive) { confirmRemoval = true }
+                Button(L10n.tr("移除连接"), role: .destructive) { confirmRemoval = true }
             }
         }.navigationTitle(profile.name).navigationBarTitleDisplayMode(.inline)
-            .confirmationDialog("连接这台电脑？", isPresented: $confirmRelayReconnect, titleVisibility: .visible) {
-                Button("连接并使用此手机控制") {
+            .confirmationDialog(L10n.tr("连接这台电脑？"), isPresented: $confirmRelayReconnect, titleVisibility: .visible) {
+                Button(L10n.tr("连接并使用此手机控制")) {
                     Task { await store.connect(profile, confirmedControllerReplacement: true) }
                 }
-                Button("取消", role: .cancel) {}
-            } message: { Text("如果另一台手机正在控制这台电脑，此次连接可能替换它。电脑上的任务会保留。") }
-            .confirmationDialog("移除这台电脑的连接？", isPresented: $confirmRemoval, titleVisibility: .visible) {
-                Button("移除连接", role: .destructive) { store.removeConnection(profile); dismiss() }
-            } message: { Text("设备上的连接密钥也会被移除，电脑里的任务不会删除。") }
+                Button(L10n.tr("取消"), role: .cancel) {}
+            } message: { Text(L10n.tr("如果另一台手机正在控制这台电脑，此次连接可能替换它。电脑上的任务会保留。")) }
+            .confirmationDialog(L10n.tr("移除这台电脑的连接？"), isPresented: $confirmRemoval, titleVisibility: .visible) {
+                Button(L10n.tr("移除连接"), role: .destructive) { store.removeConnection(profile); dismiss() }
+            } message: { Text(L10n.tr("设备上的连接密钥也会被移除，电脑里的任务不会删除。")) }
     }
 }
 
@@ -124,16 +139,16 @@ struct AdvancedSettingsView: View {
         @Bindable var store = store
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text("高级").font(.system(size: 17, weight: .semibold))
+                Text(L10n.tr("高级")).font(.system(size: 17, weight: .semibold))
                 Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold))
             }.padding(.top, 32).padding(.bottom, 22.8).measureLayout("advanced.header")
             VStack(spacing: 0) {
                 if store.isReferenceMode {
                     Menu {
-                        Picker("模型", selection: $store.options.model) {
+                        Picker(L10n.tr("模型"), selection: $store.options.model) {
                             ForEach(["6 Astra", "5.6 Sol", "5.6 Terra", "5.6 Luna"], id: \.self) { Text($0).tag($0) }
                         }
-                    } label: { settingRow("模型", value: store.options.model) }
+                    } label: { settingRow(L10n.tr("模型"), value: store.options.model) }
                 } else {
                     Menu {
                         ForEach(store.models) { model in
@@ -143,14 +158,14 @@ struct AdvancedSettingsView: View {
                                         ? selection?.thoughtLevel : model.defaultThoughtLevel))
                             } label: {
                                 if let reason = model.unavailableReason, !model.available {
-                                    Label("\(model.name) · \(model.providerName) · \(reason == "provider_disabled" ? "未启用" : "暂不可用")", systemImage: "exclamationmark.circle")
+                                    Label("\(model.name) · \(model.providerName) · \(reason == "provider_disabled" ? L10n.tr("未启用") : L10n.tr("暂不可用"))", systemImage: "exclamationmark.circle")
                                 } else if model.id == currentModel?.id {
                                     Label("\(model.name) · \(model.providerName)", systemImage: "checkmark")
                                 } else { Text("\(model.name) · \(model.providerName)") }
                             }.disabled(!model.available)
                         }
                     } label: {
-                        settingRow("模型", value: currentModel?.name ?? selection?.modelId ?? "沿用电脑配置")
+                        settingRow(L10n.tr("模型"), value: currentModel?.name ?? selection?.modelId ?? L10n.tr("沿用电脑配置"))
                     }
                     .disabled(!canEdit || store.models.isEmpty)
                     .accessibilityIdentifier("advanced.model")
@@ -158,10 +173,10 @@ struct AdvancedSettingsView: View {
                 Divider()
                 if store.isReferenceMode {
                     Menu {
-                        Picker("智能", selection: $store.options.reasoning) {
+                        Picker(L10n.tr("智能"), selection: $store.options.reasoning) {
                             ForEach(ReasoningLevel.allCases) { level in Text(level.label).tag(level) }
                         }
-                    } label: { settingRow("智能", value: store.options.reasoning.label) }
+                    } label: { settingRow(L10n.tr("智能"), value: store.options.reasoning.label) }
                 } else {
                     Menu {
                         ForEach(thoughtChoices, id: \.self) { level in
@@ -172,7 +187,7 @@ struct AdvancedSettingsView: View {
                             }
                         }
                     } label: {
-                        settingRow("智能", value: selection?.thoughtLevel.map { ReasoningLevel(wireValue: $0)?.label ?? $0 } ?? "沿用电脑配置")
+                        settingRow(L10n.tr("智能"), value: selection?.thoughtLevel.map { ReasoningLevel(wireValue: $0)?.label ?? $0 } ?? L10n.tr("沿用电脑配置"))
                     }
                     .disabled(!canEdit || thoughtChoices.isEmpty)
                     .accessibilityIdentifier("advanced.reasoning")
@@ -183,18 +198,18 @@ struct AdvancedSettingsView: View {
             Group {
                 if store.isReferenceMode {
                     Menu {
-                        Picker("速度", selection: $store.options.speed) {
-                            Text("标准").tag("标准")
-                            Text("快速").tag("快速")
+                        Picker(L10n.tr("速度"), selection: $store.options.speed) {
+                            Text(L10n.tr("标准")).tag("标准")
+                            Text(L10n.tr("快速")).tag("快速")
                         }
-                    } label: { settingRow("速度", value: store.options.speed) }
+                    } label: { settingRow(L10n.tr("速度"), value: L10n.tr(store.options.speed)) }
                 } else {
-                    HStack { Text("速度"); Spacer(); Text("由电脑决定").foregroundStyle(.secondary) }.frame(minHeight: 52)
+                    HStack { Text(L10n.tr("速度")); Spacer(); Text(L10n.tr("由电脑决定")).foregroundStyle(.secondary) }.frame(minHeight: 52)
                 }
             }.padding(.horizontal, 20).background(.quaternary.opacity(0.7), in: Capsule()).measureLayout("advanced.speedCard")
-            if busy { ProgressView("正在更新任务设置…").font(.footnote) }
+            if busy { ProgressView(L10n.tr("正在更新任务设置…")).font(.footnote) }
             else if !store.isReferenceMode {
-                Text("选择只应用于当前任务，不会改动电脑的默认设置。")
+                Text(L10n.tr("选择只应用于当前任务，不会改动电脑的默认设置。"))
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Spacer()
@@ -241,8 +256,10 @@ struct PermissionsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                Text(store.isPlanMode(for: sessionID) ? "退出计划后的批准方式" : store.isReferenceMode ? "应如何批准 Codex 操作？" : "应如何批准 ZCode 操作？")
-                Button { showHelp = true } label: { Text("了解更多").underline() }
+                Text(store.isPlanMode(for: sessionID) ? L10n.tr("退出计划后的批准方式") : store.isReferenceMode ? L10n.tr("应如何批准 Codex 操作？") : L10n.tr("应如何批准 ZCode 操作？"))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("permission.heading")
+                Button { showHelp = true } label: { Text(L10n.tr("了解更多")).underline() }
             }.font(.system(size: 15)).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 18) {
               ForEach(PermissionMode.allCases) { mode in
@@ -253,8 +270,9 @@ struct PermissionsView: View {
                     HStack(spacing: 14) {
                         Image(systemName: mode.symbol).font(.system(size: 20)).frame(width: 16)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(mode == .custom && store.isReferenceMode ? "自定义 (config.toml)" : mode.title).font(.system(size: 15))
-                            Text(mode == .custom ? (store.isReferenceMode ? "使用 config.toml 中定义的权限" : "当前连接尚不支持编辑自定义规则") : mode.detail)
+                            Text(mode == .custom && store.isReferenceMode ? L10n.tr("自定义 (config.toml)") : mode.title)
+                                .font(.system(size: 15)).fixedSize(horizontal: false, vertical: true)
+                            Text(mode == .custom ? (store.isReferenceMode ? L10n.tr("使用 config.toml 中定义的权限") : L10n.tr("当前连接尚不支持编辑自定义规则")) : mode.detail)
                                 .font(.system(size: 12)).foregroundStyle(.secondary)
                                 .lineSpacing(4.0 / 3.0).fixedSize(horizontal: false, vertical: true)
                         }.padding(.trailing, 8)
@@ -270,24 +288,24 @@ struct PermissionsView: View {
               }
             }
             if !store.canEditSettings(sessionID) && !busy {
-                Text("请先连接电脑，并打开可控制的任务。").font(.footnote).foregroundStyle(.secondary)
+                Text(L10n.tr("请先连接电脑，并打开可控制的任务。")).font(.footnote).foregroundStyle(.secondary)
             }
             if sessionID != nil && store.activeProfile?.isRelay == true && store.isPlanMode(for: sessionID) {
-                Text("这里保存退出计划后的批准方式，不会关闭计划模式。ZCode 在计划期间仍限制为只读操作。").font(.footnote).foregroundStyle(.secondary)
+                Text(L10n.tr("这里保存退出计划后的批准方式，不会关闭计划模式。ZCode 在计划期间仍限制为只读操作。")).font(.footnote).foregroundStyle(.secondary)
             }
             Text(store.isPlanMode(for: sessionID) && store.activeProfile?.isRelay == true
-                 ? "此选择保存在当前连接中，退出计划时由 App 应用。电脑端自行结束计划仍遵循电脑原来的设置。"
+                 ? L10n.tr("此选择保存在当前连接中，退出计划时由 App 应用。电脑端自行结束计划仍遵循电脑原来的设置。")
                  : sessionID != nil && store.activeProfile?.isRelay == true
-                 ? "此设置由电脑执行，可能同时成为该项目的默认批准方式。当前待批准操作仍需选择“允许本次”或“拒绝”。"
-                 : "批准模式决定之后的操作如何请求许可；当前操作仍需单独批准或拒绝。")
+                 ? L10n.tr("此设置由电脑执行，可能同时成为该项目的默认批准方式。当前待批准操作仍需选择“允许本次”或“拒绝”。")
+                 : L10n.tr("批准模式决定之后的操作如何请求许可；当前操作仍需单独批准或拒绝。"))
                 .font(.footnote).foregroundStyle(.secondary)
-            if busy { ProgressView("正在更新权限…").font(.footnote) }
+            if busy { ProgressView(L10n.tr("正在更新权限…")).font(.footnote) }
         }.padding(.horizontal, 18).padding(.vertical, 14).frame(width: 320).tint(.primary)
             .measureLayout("permissions.popover")
-            .alert("操作权限", isPresented: $showHelp) {
-                Button("知道了", role: .cancel) {}
+            .alert(L10n.tr("操作权限"), isPresented: $showHelp) {
+                Button(L10n.tr("知道了"), role: .cancel) {}
             } message: {
-                Text("请求批准：主机遇到需要许可的操作时，由你决定。替我批准：允许主机按自动编辑策略处理操作。完全访问：主机可直接执行操作。实际规则和可用项以当前主机为准。")
+                Text(L10n.tr("请求批准：主机遇到需要许可的操作时，由你决定。替我批准：允许主机按自动编辑策略处理操作。完全访问：主机可直接执行操作。实际规则和可用项以当前主机为准。"))
             }
             .task {
             while !Task.isCancelled {
@@ -296,11 +314,11 @@ struct PermissionsView: View {
                 do { try await Task.sleep(for: .seconds(10)) } catch { return }
             }
         }
-            .confirmationDialog("允许此任务完全访问电脑？", isPresented: $confirmFullAccess, titleVisibility: .visible) {
-                Button("允许完全访问", role: .destructive) { apply(.full, confirmed: true) }
-                Button("取消", role: .cancel) {}
+            .confirmationDialog(L10n.tr("允许此任务完全访问电脑？"), isPresented: $confirmFullAccess, titleVisibility: .visible) {
+                Button(L10n.tr("允许完全访问"), role: .destructive) { apply(.full, confirmed: true) }
+                Button(L10n.tr("取消"), role: .cancel) {}
             } message: {
-                Text(store.activeProfile?.isRelay == true && sessionID != nil ? "ZCode 可以直接编辑文件和运行命令，不再逐次请求批准。电脑可能同时将其保存为该项目的默认批准方式。" : "ZCode 可以直接编辑文件和运行命令，不再逐次请求批准。")
+                Text(store.activeProfile?.isRelay == true && sessionID != nil ? L10n.tr("ZCode 可以直接编辑文件和运行命令，不再逐次请求批准。电脑可能同时将其保存为该项目的默认批准方式。") : L10n.tr("ZCode 可以直接编辑文件和运行命令，不再逐次请求批准。"))
             }
     }
     private func apply(_ mode: PermissionMode, confirmed: Bool = false) {
@@ -342,17 +360,17 @@ struct ThemeColorSettingsView: View {
                     .accessibilityAddTraits(ThemePreferences.shared.selection == theme ? .isSelected : [])
                 }
             } footer: {
-                Text("应用于按钮、图标与对话气泡，所有电脑共用此设置。")
+                Text(L10n.tr("应用于按钮、图标与对话气泡，所有电脑共用此设置。"))
             }
-            Section("预览") {
+            Section(L10n.tr("预览")) {
                 HStack {
                     Spacer()
-                    Text("从这里继续你的工作。")
+                    Text(L10n.tr("从这里继续你的工作。"))
                         .foregroundStyle(ZTheme.userText).padding(14)
                         .background(ZTheme.userBubble, in: RoundedRectangle(cornerRadius: 20))
                 }.listRowBackground(Color.clear)
             }
         }
-        .navigationTitle("主题色").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(L10n.tr("主题色")).navigationBarTitleDisplayMode(.inline)
     }
 }

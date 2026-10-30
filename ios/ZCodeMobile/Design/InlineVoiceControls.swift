@@ -16,14 +16,14 @@ struct InlineVoiceControls: View {
             Button(action: cancel) {
                 Image(systemName: "xmark").font(.system(size: 17, weight: .medium))
                     .frame(width: 32, height: 32).background(.primary.opacity(0.035), in: Circle())
-            }.accessibilityLabel("取消语音输入").accessibilityIdentifier("voice.inline.cancel")
+            }.accessibilityLabel(L10n.tr("取消语音输入")).accessibilityIdentifier("voice.inline.cancel")
             Group {
                 if phase == .recording {
                     LiveVoiceWaveform(capture: capture)
                 } else {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.mini)
-                        Text(phase == .preparing ? "正在准备…" : "正在转录")
+                        Text(phase == .preparing ? L10n.tr("正在准备…") : L10n.tr("正在转录"))
                             .font(.system(size: 13)).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity)
                 }
@@ -32,13 +32,13 @@ struct InlineVoiceControls: View {
                 Image(systemName: "stop.fill").font(.system(size: 12))
                     .frame(width: 32, height: 32).background(.primary.opacity(0.035), in: Circle())
             }.disabled(phase != .recording)
-                .accessibilityLabel("停止录音并编辑文字").accessibilityIdentifier("voice.inline.finish")
+                .accessibilityLabel(L10n.tr("停止录音并编辑文字")).accessibilityIdentifier("voice.inline.finish")
             Button(action: send) {
                 Image(systemName: "arrow.up").font(.system(size: 21, weight: .semibold))
                     .foregroundStyle(.white).frame(width: 32, height: 32)
                     .background(phase == .recording ? ZTheme.accent : .gray.opacity(0.4), in: Circle())
             }.disabled(phase != .recording)
-                .accessibilityLabel("转录并发送").accessibilityIdentifier("voice.inline.send")
+                .accessibilityLabel(L10n.tr("转录并发送")).accessibilityIdentifier("voice.inline.send")
         }
         .buttonStyle(.plain).foregroundStyle(.primary)
         .padding(.horizontal, 6).frame(height: 48)
@@ -67,7 +67,7 @@ struct LiveVoiceWaveform: View {
             }
             context.stroke(bars, with: .color(.primary.opacity(0.72)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
         }
-        .accessibilityLabel("录音音量波形")
-        .accessibilityValue(capture.isRecording ? "正在录音" : "录音已停止")
+        .accessibilityLabel(L10n.tr("录音音量波形"))
+        .accessibilityValue(capture.isRecording ? L10n.tr("正在录音") : L10n.tr("录音已停止"))
     }
 }

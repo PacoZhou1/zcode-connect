@@ -6,10 +6,10 @@ enum ConnectionState: Equatable {
     var isOnline: Bool { self == .connected }
     var label: String {
         switch self {
-        case .disconnected: "离线"
-        case .connecting: "正在连接"
-        case .connected: "已连接"
-        case .failed: "连接中断"
+        case .disconnected: L10n.tr("离线")
+        case .connecting: L10n.tr("正在连接")
+        case .connected: L10n.tr("已连接")
+        case .failed: L10n.tr("连接中断")
         }
     }
 }
@@ -35,11 +35,11 @@ enum SessionStatus: String, Codable, CaseIterable {
 
     var label: String {
         switch self {
-        case .idle: "就绪"
-        case .running: "进行中"
-        case .waiting: "等待批准"
-        case .completed: "完成"
-        case .failed: "需要关注"
+        case .idle: L10n.tr("就绪")
+        case .running: L10n.tr("进行中")
+        case .waiting: L10n.tr("等待批准")
+        case .completed: L10n.tr("完成")
+        case .failed: L10n.tr("需要关注")
         }
     }
 }
@@ -89,19 +89,19 @@ enum SessionMenuPolicy {
         let remoteEnabled = isReferenceMode || isOnline
         var items: [SessionMenuItem] = []
         if isReferenceMode || (owned && session.canPin != false) {
-            items.append(.init(id: .pin, title: session.isPinned ? "取消置顶" : "置顶",
+            items.append(.init(id: .pin, title: session.isPinned ? L10n.tr("取消置顶") : L10n.tr("置顶"),
                                symbol: session.isPinned ? "pin.slash" : "pin", isEnabled: remoteEnabled))
         }
         if isReferenceMode || (owned && session.canRename != false) {
-            items.append(.init(id: .rename, title: "重命名", symbol: "pencil", isEnabled: remoteEnabled))
+            items.append(.init(id: .rename, title: L10n.tr("重命名"), symbol: "pencil", isEnabled: remoteEnabled))
         }
         let syncsUnread = !isReferenceMode && (session.canMarkUnread ?? (session.unreadScope == "bridge" || isRelay))
-        let localSuffix = !isReferenceMode && !syncsUnread ? "（仅此手机）" : ""
-        items.append(.init(id: .unread, title: (isUnread ? "标记为已读" : "标记为未读") + localSuffix,
+        let localSuffix = !isReferenceMode && !syncsUnread ? L10n.tr("（仅此手机）") : ""
+        items.append(.init(id: .unread, title: (isUnread ? L10n.tr("标记为已读") : L10n.tr("标记为未读")) + localSuffix,
                            symbol: "circle.fill", isEnabled: !syncsUnread || isOnline))
-        items.append(.init(id: .copyID, title: "复制对话串 ID", symbol: "square.on.square"))
+        items.append(.init(id: .copyID, title: L10n.tr("复制对话串 ID"), symbol: "square.on.square"))
         if isReferenceMode || (owned && session.canArchive != false) {
-            items.append(.init(id: .archive, title: session.isArchived ? "取消归档" : "归档", symbol: "archivebox",
+            items.append(.init(id: .archive, title: session.isArchived ? L10n.tr("取消归档") : L10n.tr("归档"), symbol: "archivebox",
                                destructive: !session.isArchived, isEnabled: remoteEnabled))
         }
         return items
@@ -148,18 +148,20 @@ struct ToolStep: Identifiable, Codable, Hashable {
 
     var webAction: String? {
         let name = title.lowercased().replacingOccurrences(of: "_", with: "")
-        if name.contains("webfetch") { return "获取" }
-        if name.contains("websearch") { return "搜索" }
+        if name.contains("webfetch") { return L10n.tr("获取") }
+        if name.contains("websearch") { return L10n.tr("搜索") }
         return nil
     }
     var displayTitle: String {
-        guard let action = webAction else { return title }
+        guard webAction != nil else { return title }
+        let isFetch = activityKind == .webFetch
         switch status {
-        case .running, .waiting: return action + "中"
-        case .failed: return action + "失败"
-        default: return "已" + action
+        case .running, .waiting: return isFetch ? L10n.tr("正在获取") : L10n.tr("正在搜索")
+        case .failed: return isFetch ? L10n.tr("获取失败") : L10n.tr("搜索失败")
+        default: return isFetch ? L10n.tr("已获取") : L10n.tr("已搜索")
         }
     }
+
     var website: URL? {
         guard let websiteURL, let url = URL(string: websiteURL),
               ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else { return nil }
@@ -241,7 +243,7 @@ enum ReasoningScale {
 enum ReasoningLevel: Int, CaseIterable, Codable, Identifiable {
     case minimal, low, medium, high, xhigh, maximum, ultra
     var id: Int { rawValue }
-    var label: String { ["极低", "低", "中", "高", "极高", "最高", "超高"][rawValue] }
+    var label: String { [L10n.tr("极低"), L10n.tr("低"), L10n.tr("中"), L10n.tr("高"), L10n.tr("极高"), L10n.tr("最高"), L10n.tr("超高")][rawValue] }
     var wireValue: String { ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"][rawValue] }
     init?(wireValue: String) {
         guard let value = Self.allCases.first(where: { $0.wireValue == wireValue }) else { return nil }
@@ -254,18 +256,18 @@ enum PermissionMode: String, CaseIterable, Codable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .ask: "请求批准"
-        case .automatic: "替我批准"
-        case .full: "完全访问"
-        case .custom: "自定义"
+        case .ask: L10n.tr("请求批准")
+        case .automatic: L10n.tr("替我批准")
+        case .full: L10n.tr("完全访问")
+        case .custom: L10n.tr("自定义")
         }
     }
     var detail: String {
         switch self {
-        case .ask: "编辑外部文件和使用互联网前始终先询问"
-        case .automatic: "仅在检测到可能不安全的操作时进行询问"
-        case .full: "完全访问计算机（风险较高）"
-        case .custom: "使用电脑上定义的权限"
+        case .ask: L10n.tr("编辑外部文件和使用互联网前始终先询问")
+        case .automatic: L10n.tr("仅在检测到可能不安全的操作时进行询问")
+        case .full: L10n.tr("完全访问计算机（风险较高）")
+        case .custom: L10n.tr("使用电脑上定义的权限")
         }
     }
     var symbol: String {
@@ -309,7 +311,13 @@ struct ConnectionProfile: Identifiable, Codable, Hashable {
     var relayDeviceID: String?
     var relayWorkspaceKey: String?
     var relayServiceID: String?
+    var relayAccountScope: String?
+    var relayMachineID: String?
     var isRelay: Bool { relayDeviceID != nil }
+    var isAccountRelay: Bool { relayServiceID == OfficialRelay.serviceID }
+    var isCustomRelay: Bool {
+        isRelay && relayServiceID != nil && relayServiceID != RelayPairing.officialServiceID && !isAccountRelay
+    }
 }
 
 enum AppRoute: Hashable {
@@ -318,7 +326,7 @@ enum AppRoute: Hashable {
 }
 
 enum AppSheet: Identifiable {
-    case connections, settings, pairing, advanced, files(String, Bool), agent(AgentTask), voice, mirror
+    case connections, settings, pairing, advanced, files(String, Bool), agent(AgentTask), voice
     var id: String {
         switch self {
         case .connections: "connections"
@@ -328,7 +336,6 @@ enum AppSheet: Identifiable {
         case let .files(id, modified): "files-\(id)-\(modified)"
         case let .agent(agent): "agent-\(agent.id)"
         case .voice: "voice"
-        case .mirror: "mirror"
         }
     }
 }
@@ -369,24 +376,24 @@ enum ToolActivityKind: String, CaseIterable {
     }
     var verb: String {
         switch self {
-        case .command: "运行"
-        case .read: "读取"
-        case .write: "修改"
-        case .search, .webSearch: "搜索"
-        case .files: "查看"
-        case .webFetch: "获取"
-        case .build: "构建"
-        case .test: "测试"
-        case .versionControl: "操作版本库"
-        case .package: "管理依赖"
-        case .network: "请求"
-        case .computer: "操作"
-        case .agent: "协作"
-        case .plan: "规划"
-        case .question: "询问"
-        case .wait: "等待"
-        case .image: "处理图片"
-        case .generic: "调用"
+        case .command: L10n.tr("运行")
+        case .read: L10n.tr("读取")
+        case .write: L10n.tr("修改")
+        case .search, .webSearch: L10n.tr("搜索")
+        case .files: L10n.tr("查看")
+        case .webFetch: L10n.tr("获取")
+        case .build: L10n.tr("构建")
+        case .test: L10n.tr("测试")
+        case .versionControl: L10n.tr("操作版本库")
+        case .package: L10n.tr("管理依赖")
+        case .network: L10n.tr("请求")
+        case .computer: L10n.tr("操作")
+        case .agent: L10n.tr("协作")
+        case .plan: L10n.tr("规划")
+        case .question: L10n.tr("询问")
+        case .wait: L10n.tr("等待")
+        case .image: L10n.tr("处理图片")
+        case .generic: L10n.tr("调用")
         }
     }
 
@@ -422,13 +429,13 @@ extension ToolStep {
     var activityKind: ToolActivityKind { ToolActivityKind.classify(title) }
     var activityStatus: String {
         let verb = activityKind.verb
-        if rawStatus.map({ ["cancelled", "canceled", "interrupted", "stopped"].contains($0.lowercased()) }) == true { return "已中断" }
+        if rawStatus.map({ ["cancelled", "canceled", "interrupted", "stopped"].contains($0.lowercased()) }) == true { return L10n.tr("已中断") }
         switch status {
-        case .running: return activityKind == .webFetch || activityKind == .webSearch ? verb + "中" : "正在" + verb
-        case .waiting: return rawStatus == "queued" ? "排队中" : "等待确认"
-        case .failed: return verb + "失败"
-        case .completed: return activityKind == .generic ? "已调用" : "已" + verb
-        default: return "状态未确认"
+        case .running: return L10n.tr("正在{0}", verb)
+        case .waiting: return rawStatus == "queued" ? L10n.tr("排队中") : L10n.tr("等待确认")
+        case .failed: return L10n.tr("{0}失败", verb)
+        case .completed: return L10n.tr("已完成：{0}", verb)
+        default: return L10n.tr("状态未确认")
         }
     }
     /// Never derive a summary from output: large results remain inside disclosure.

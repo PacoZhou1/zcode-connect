@@ -10,11 +10,11 @@ enum DraftAttachmentJournalFailure: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .corruptRecord: "附件草稿记录无法读取，原文件已保留。"
-        case .unsupportedVersion: "附件草稿使用尚不支持的格式，原文件已保留。"
-        case .scopeMismatch: "附件草稿与当前电脑或任务不匹配，原文件已保留。"
-        case .oversizedRecord: "附件草稿记录超过容量限制，原文件已保留。"
-        case .invalidAttachments: "附件草稿数据无效，请检查文件数量、大小和名称。"
+        case .corruptRecord: L10n.tr("附件草稿记录无法读取，原文件已保留。")
+        case .unsupportedVersion: L10n.tr("附件草稿使用尚不支持的格式，原文件已保留。")
+        case .scopeMismatch: L10n.tr("附件草稿与当前电脑或任务不匹配，原文件已保留。")
+        case .oversizedRecord: L10n.tr("附件草稿记录超过容量限制，原文件已保留。")
+        case .invalidAttachments: L10n.tr("附件草稿数据无效，请检查文件数量、大小和名称。")
         }
     }
 }

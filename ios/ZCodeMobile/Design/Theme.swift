@@ -6,12 +6,12 @@ enum AccentTheme: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .violet: "紫色"
-        case .blue: "蓝色"
-        case .teal: "青色"
-        case .green: "绿色"
-        case .orange: "橙色"
-        case .rose: "玫瑰色"
+        case .violet: L10n.tr("紫色")
+        case .blue: L10n.tr("蓝色")
+        case .teal: L10n.tr("青色")
+        case .green: L10n.tr("绿色")
+        case .orange: L10n.tr("橙色")
+        case .rose: L10n.tr("玫瑰色")
         }
     }
     var rgb: (Double, Double, Double) {
@@ -113,7 +113,7 @@ struct GlassSearchField: View {
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                }.accessibilityLabel("清除搜索")
+                }.accessibilityLabel(L10n.tr("清除搜索"))
             }
         }
         .padding(.horizontal, 12).frame(height: 48)

@@ -7,9 +7,9 @@ struct BridgeFailure: LocalizedError {
     let code: String
     var errorDescription: String? {
         switch code {
-        case "input_pending": "电脑尚未确认上一条消息的结果。请重试确认，避免重复发送。"
-        case "relay_operation_in_progress": "正在同步此任务的另一项操作，请稍后再试。"
-        case "input_rejected": "电脑未接收这条消息。"
+        case "input_pending": L10n.tr("电脑尚未确认上一条消息的结果。请重试确认，避免重复发送。")
+        case "relay_operation_in_progress": L10n.tr("正在同步此任务的另一项操作，请稍后再试。")
+        case "input_rejected": L10n.tr("电脑未接收这条消息。")
         default: message
         }
     }
@@ -218,7 +218,7 @@ struct BridgeMessage: Decodable, Sendable {
                     text: text, createdAt: Date.fromBridge(createdAt),
                     steps: (toolCalls ?? []).map {
                         ToolStep(id: $0.id, title: $0.name,
-                                 detail: [$0.input.map { "输入\n\($0.formatted)" }, $0.output.map { "输出\n\($0)" }].compactMap { $0 }.joined(separator: "\n\n"),
+                                 detail: [$0.input.map { L10n.tr("输入\n{0}", "\($0.formatted)") }, $0.output.map { L10n.tr("输出\n{0}", "\($0)") }].compactMap { $0 }.joined(separator: "\n\n"),
                                  status: $0.localStatus,
                                  websiteURL: $0.websiteURL, inputJSON: $0.inputPreviewJSON, rawStatus: $0.rawStatus ?? $0.status)
                     },
@@ -362,7 +362,7 @@ struct BridgeClient: Sendable {
         let pieces = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
         var components = URLComponents(url: baseURL.appending(path: String(pieces[0])), resolvingAgainstBaseURL: false)!
         if pieces.count == 2 { components.percentEncodedQuery = String(pieces[1]) }
-        guard let url = components.url else { throw BridgeFailure(message: "连接地址无效。", code: "invalid_url") }
+        guard let url = components.url else { throw BridgeFailure(message: L10n.tr("连接地址无效。"), code: "invalid_url") }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 30
@@ -371,19 +371,19 @@ struct BridgeClient: Sendable {
         request.httpBody = body
         let (data, response) = try await session.data(for: request, delegate: transportDelegate)
         guard let response = response as? HTTPURLResponse else {
-            throw BridgeFailure(message: "电脑没有返回可识别的响应。", code: "invalid_response")
+            throw BridgeFailure(message: L10n.tr("电脑没有返回可识别的响应。"), code: "invalid_response")
         }
         guard (200..<300).contains(response.statusCode) else {
             let failure = try? JSONDecoder().decode(BridgeErrorBody.self, from: data)
             let message: String
             switch response.statusCode {
-            case 401: message = "连接密钥不正确或已失效，请重新连接。"
+            case 401: message = L10n.tr("连接密钥不正确或已失效，请重新连接。")
             case 409: message = failure?.error.code == "session_read_only"
-                ? "这个任务由电脑上的 ZCode 管理，当前连接只能查看。"
-                : "任务状态已改变，请刷新后重试。"
-            case 503: message = "电脑上的 ZCode 尚未就绪，请检查后重试。"
-            case 504: message = "电脑响应超时，请先确认任务状态再重试。"
-            default: message = failure?.error.message ?? "连接失败（\(response.statusCode)）。"
+                ? L10n.tr("这个任务由电脑上的 ZCode 管理，当前连接只能查看。")
+                : L10n.tr("任务状态已改变，请刷新后重试。")
+            case 503: message = L10n.tr("电脑上的 ZCode 尚未就绪，请检查后重试。")
+            case 504: message = L10n.tr("电脑响应超时，请先确认任务状态再重试。")
+            default: message = failure?.error.message ?? L10n.tr("连接失败（{0}）。", "\(response.statusCode)")
             }
             throw BridgeFailure(message: message, code: failure?.error.code ?? "http_\(response.statusCode)")
         }
@@ -398,7 +398,7 @@ struct BridgeClient: Sendable {
         request.timeoutInterval = 60 * 60
         let (bytes, response) = try await session.bytes(for: request, delegate: transportDelegate)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw BridgeFailure(message: "实时连接已断开。", code: "stream_failed")
+            throw BridgeFailure(message: L10n.tr("实时连接已断开。"), code: "stream_failed")
         }
         var decoder = ServerSentEventsDecoder()
         for try await byte in bytes {
@@ -499,14 +499,14 @@ enum CredentialStore {
         let updated = SecItemUpdate(query as CFDictionary, [kSecValueData as String: Data(value.utf8)] as CFDictionary)
         if updated == errSecSuccess { return }
         guard updated == errSecItemNotFound else {
-            throw BridgeFailure(message: "无法安全更新连接密钥。", code: "keychain_\(updated)")
+            throw BridgeFailure(message: L10n.tr("无法安全更新连接密钥。"), code: "keychain_\(updated)")
         }
         var item = query
         item[kSecValueData as String] = Data(value.utf8)
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else {
-            throw BridgeFailure(message: "无法安全保存连接密钥。", code: "keychain_\(status)")
+            throw BridgeFailure(message: L10n.tr("无法安全保存连接密钥。"), code: "keychain_\(status)")
         }
     }
     static func remove(_ id: String) {

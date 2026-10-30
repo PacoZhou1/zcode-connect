@@ -97,9 +97,9 @@ struct FilesView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if identity.supportsChanges {
-                    Picker("文件范围", selection: $modified) {
-                        Text("已修改").tag(true)
-                        Text("所有文件").tag(false)
+                    Picker(L10n.tr("文件范围"), selection: $modified) {
+                        Text(L10n.tr("已修改")).tag(true)
+                        Text(L10n.tr("所有文件")).tag(false)
                     }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 11.666667)
                         .accessibilityIdentifier("files.filter")
                     Divider()
@@ -107,23 +107,23 @@ struct FilesView: View {
                 if loading || loadedIdentity != identity {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error = modified ? changesFailure : failure {
-                    ContentUnavailableView("无法读取文件", systemImage: "wifi.exclamationmark", description: Text(error))
-                        .overlay(alignment: .bottom) { Button("重试") { Task { await load() } }.buttonStyle(NativeGlassButtonStyle()).padding(30) }
+                    ContentUnavailableView(L10n.tr("无法读取文件"), systemImage: "wifi.exclamationmark", description: Text(error))
+                        .overlay(alignment: .bottom) { Button(L10n.tr("重试")) { Task { await load() } }.buttonStyle(NativeGlassButtonStyle()).padding(30) }
                 } else if modified {
                     modifiedList
                 } else {
                     allFilesList
                 }
             }
-            .navigationTitle("文件").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(L10n.tr("文件")).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 14, weight: .medium)) }
-                        .accessibilityLabel("关闭文件").accessibilityIdentifier("files.close")
+                        .accessibilityLabel(L10n.tr("关闭文件")).accessibilityIdentifier("files.close")
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                GlassSearchField(text: $search, placeholder: "搜索文件")
+                GlassSearchField(text: $search, placeholder: L10n.tr("搜索文件"))
                     .padding(.horizontal, 28).padding(.top, 10).padding(.bottom, -5.333333)
             }
             .navigationDestination(item: $selectedFile) { file in
@@ -151,17 +151,17 @@ struct FilesView: View {
         Group {
             let visibleRows = rows
             if searching {
-                ProgressView("搜索项目文件…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView(L10n.tr("搜索项目文件…")).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let searchFailure {
-                ContentUnavailableView("搜索失败", systemImage: "magnifyingglass", description: Text(searchFailure))
+                ContentUnavailableView(L10n.tr("搜索失败"), systemImage: "magnifyingglass", description: Text(searchFailure))
             } else if !visibleRows.isEmpty {
                 List {
                     if search.isEmpty && rootListing.truncated {
-                        Text("这个目录仅显示部分内容，请用更具体的文件名搜索项目。")
+                        Text(L10n.tr("这个目录仅显示部分内容，请用更具体的文件名搜索项目。"))
                             .font(.footnote).foregroundStyle(.secondary)
                             .accessibilityIdentifier("files.root.truncated")
                     } else if searchIncomplete {
-                        Text("仅显示部分结果，请用更具体的文件名继续搜索。").font(.footnote).foregroundStyle(.secondary)
+                        Text(L10n.tr("仅显示部分结果，请用更具体的文件名继续搜索。")).font(.footnote).foregroundStyle(.secondary)
                     }
                     ForEach(visibleRows) { row in
                         fileRow(row.file, depth: row.depth)
@@ -173,10 +173,10 @@ struct FilesView: View {
                     .environment(\.defaultMinListRowHeight, 0)
             } else {
                 let incomplete = search.isEmpty ? rootListing.truncated : searchIncomplete
-                ContentUnavailableView(incomplete ? (search.isEmpty ? "目录结果不完整" : "搜索结果不完整") :
-                                        (search.isEmpty ? "这个文件夹为空" : "没有找到文件"), systemImage: "folder",
-                    description: Text(incomplete ? "电脑只返回了部分结果，请用更具体的文件名搜索项目。" :
-                                      search.isEmpty ? "项目中的文件会显示在这里。" : "试试其他文件名。"))
+                ContentUnavailableView(incomplete ? (search.isEmpty ? L10n.tr("目录结果不完整") : L10n.tr("搜索结果不完整")) :
+                                        (search.isEmpty ? L10n.tr("这个文件夹为空") : L10n.tr("没有找到文件")), systemImage: "folder",
+                    description: Text(incomplete ? L10n.tr("电脑只返回了部分结果，请用更具体的文件名搜索项目。") :
+                                      search.isEmpty ? L10n.tr("项目中的文件会显示在这里。") : L10n.tr("试试其他文件名。")))
             }
         }
     }
@@ -185,17 +185,17 @@ struct FilesView: View {
         Group {
             let filtered = changes.filter { search.isEmpty || $0.path.localizedStandardContains(search) }
             if filtered.isEmpty {
-                ContentUnavailableView(changesTruncated ? "变更结果不完整" : (search.isEmpty ? "没有文件变更" : "没有找到文件"), systemImage: "doc.text.magnifyingglass",
-                    description: Text(changesTruncated ? "电脑仅返回了部分变更，请在电脑上查看完整结果。" :
-                                      search.isEmpty ? "任务修改文件后，变更会显示在这里。" : "试试其他文件名。"))
+                ContentUnavailableView(changesTruncated ? L10n.tr("变更结果不完整") : (search.isEmpty ? L10n.tr("没有文件变更") : L10n.tr("没有找到文件")), systemImage: "doc.text.magnifyingglass",
+                    description: Text(changesTruncated ? L10n.tr("电脑仅返回了部分变更，请在电脑上查看完整结果。") :
+                                      search.isEmpty ? L10n.tr("任务修改文件后，变更会显示在这里。") : L10n.tr("试试其他文件名。")))
             } else {
                 List {
                     if changesSource == "workspace" || changesSource == "workspace-git-unstaged" {
-                        Text("当前项目的工作区变更，可能包含其他任务或你手动编辑的内容。")
+                        Text(L10n.tr("当前项目的工作区变更，可能包含其他任务或你手动编辑的内容。"))
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     if changesTruncated {
-                        Text("变更较多，当前仅显示部分内容。").font(.footnote).foregroundStyle(.secondary)
+                        Text(L10n.tr("变更较多，当前仅显示部分内容。")).font(.footnote).foregroundStyle(.secondary)
                     }
                     ForEach(filtered) { change in
                     Button { selectedChange = change } label: {
@@ -252,12 +252,12 @@ struct FilesView: View {
     @ViewBuilder private func directoryFeedback(_ file: RemoteFile, depth: Int) -> some View {
         if let error = folderFailures[file.path] {
             VStack(alignment: .leading, spacing: 6) {
-                Text("无法读取此文件夹：\(error)")
-                Button("重试") { loadChildren(file) }
+                Text(L10n.tr("无法读取此文件夹：{0}", "\(error)"))
+                Button(L10n.tr("重试")) { loadChildren(file) }
             }.font(.footnote).foregroundStyle(.secondary)
                 .padding(.leading, CGFloat(depth + 1) * 16)
         } else if children[file.path]?.truncated == true {
-            Text("\(file.name) 仅显示部分内容，可搜索项目中的文件名。")
+            Text(L10n.tr("{0} 仅显示部分内容，可搜索项目中的文件名。", "\(file.name)"))
                 .font(.footnote).foregroundStyle(.secondary)
                 .padding(.leading, CGFloat(depth + 1) * 16)
                 .accessibilityIdentifier("files.directory.truncated.\(file.path)")
@@ -362,11 +362,11 @@ struct FilePreviewView: View {
     var body: some View {
         Group {
             if source != identity {
-                ContentUnavailableView("连接已切换", systemImage: "desktopcomputer", description: Text("请返回文件列表重新选择文件。"))
-            } else if let error { ContentUnavailableView("无法预览", systemImage: "doc", description: Text(error)) }
+                ContentUnavailableView(L10n.tr("连接已切换"), systemImage: "desktopcomputer", description: Text(L10n.tr("请返回文件列表重新选择文件。")))
+            } else if let error { ContentUnavailableView(L10n.tr("无法预览"), systemImage: "doc", description: Text(error)) }
             else if let content {
                 ScrollView([.horizontal, .vertical]) {
-                    Text(content.isEmpty ? "空文件" : content)
+                    Text(content.isEmpty ? L10n.tr("空文件") : content)
                 .font(.system(size: 14, design: .monospaced)).textSelection(.enabled)
                 .padding(18).frame(maxWidth: .infinity, alignment: .leading)
                 }.defaultScrollAnchor(.topLeading)
@@ -375,7 +375,7 @@ struct FilePreviewView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { if source == identity { store.copy(content ?? "") } } label: { Image(systemName: "square.on.square") }
-                        .accessibilityLabel("复制文件内容")
+                        .accessibilityLabel(L10n.tr("复制文件内容"))
                         .disabled(content == nil || source != identity)
                 }
             }
@@ -407,7 +407,7 @@ struct DiffView: View {
         ScrollView([.horizontal, .vertical]) {
             VStack(alignment: .leading, spacing: 0) {
                 if change.truncated == true {
-                    Text("此文件的差异过长，预览未显示全部内容。").font(.footnote).foregroundStyle(.secondary).padding(12)
+                    Text(L10n.tr("此文件的差异过长，预览未显示全部内容。")).font(.footnote).foregroundStyle(.secondary).padding(12)
                 }
                 ForEach(Array(change.diff.components(separatedBy: "\n").enumerated()), id: \.offset) { index, line in
                     HStack(alignment: .top, spacing: 12) {
@@ -424,7 +424,7 @@ struct DiffView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { store.copy(change.diff) } label: { Image(systemName: "square.on.square") }
-                    .accessibilityLabel("复制变更")
+                    .accessibilityLabel(L10n.tr("复制变更"))
             }
         }
     }

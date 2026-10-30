@@ -18,6 +18,40 @@ public struct RelayWorkspaceState: Sendable {
         guard raw["settings"]["model"]["available"].array != nil else { throw RelayFailure.invalid("The desktop omitted its model catalog.") }
         self.raw = raw
     }
+    init(presentation: RelayJSON, catalog: RelayJSON) throws {
+        guard let providers = catalog["providers"].array,
+              let mode = presentation["mode"].string else {
+            throw RelayFailure.invalid("The desktop omitted workspace presentation or model registry.")
+        }
+        let selected = catalog["preferredSelection"]
+        _ = try selected.requiringString("providerId")
+        _ = try selected.requiringString("modelId")
+        var options: [RelayJSON] = []
+        for provider in providers {
+            let providerID = try provider.requiringString("providerId")
+            for model in provider["models"].array ?? [] {
+                let modelID = try model.requiringString("modelId")
+                let config = model["config"]
+                let levels = config["optionSpecs"]["reasoningLevel"]["values"].array ?? []
+                var option: [String: RelayJSON] = [
+                    "ref": .object(["providerId": .string(providerID), "modelId": .string(modelID)]),
+                    "label": .string(modelID), "providerLabel": provider["providerName"],
+                    "supportsImages": config["properties"]["inputFormat"]["supportsImage"],
+                    "supportsPdf": config["properties"]["inputFormat"]["supportsPdf"],
+                    "reasoning": .object(["levels": .array(levels)])]
+                if config["enabled"].bool == false || provider["config"]["enabled"].bool == false {
+                    option["disabledReason"] = .string(L10n.tr("已在电脑端停用"))
+                }
+                options.append(.object(option))
+            }
+        }
+        let selectedLevels = options.first { $0["ref"]["providerId"] == selected["providerId"] && $0["ref"]["modelId"] == selected["modelId"] }?["reasoning"]["levels"] ?? .array([])
+        try self.init(raw: .object(["settings": .object([
+            "model": .object(["current": selected, "available": .array(options)]),
+            "thoughtLevel": .object(["current": selected["options"]["reasoningLevel"], "available": selectedLevels]),
+            "mode": .object(["current": .string(mode)])])]))
+    }
+
 }
 
 public struct RelayWorkspaceFile: Codable, Sendable, Equatable, Identifiable {
@@ -47,7 +81,14 @@ public enum RelayWorkspacePath {
 
 public extension RelayClient {
     func readWorkspaceState() async throws -> RelayWorkspaceState {
-        try await RelayWorkspaceState(raw: rpc("zcode-session", "readWorkspaceState"))
+        do { return try await RelayWorkspaceState(raw: rpc("zcode-session", "readWorkspaceState")) }
+        catch let error as RelayFailure where error.code == "desktop_method_unavailable" {
+            // 3.12 separates workspace presentation from the provider registry.
+            // Only a missing method selects this path: auth/network failures must propagate.
+            let presentation = try await rpc("zcode-session", "readWorkspacePresentation")
+            let catalog = try await rpc("model-selection", "getView")
+            return try RelayWorkspaceState(presentation: presentation, catalog: catalog)
+        }
     }
     func listModels() async throws -> [RelayJSON] { try await readWorkspaceState().models }
 
@@ -76,7 +117,7 @@ public extension RelayClient {
         let changesThought = thoughtLevel.map { $0 != snapshot.thoughtLevel } ?? false
         if changesModel || changesThought || registerCreatedTask {
             guard snapshot.activeTurnID == nil, !["running", "waiting"].contains(snapshot.status) else {
-                throw RelayFailure("session_busy", "任务进行中，请结束当前轮次后更改模型或思考强度。批准方式可以随时调整。")
+                throw RelayFailure("session_busy", L10n.tr("任务进行中，请结束当前轮次后更改模型或思考强度。批准方式可以随时调整。"))
             }
         }
         if registerCreatedTask, model == nil { throw RelayFailure.invalid("Registering a newly created task requires its exact selected model.") }

@@ -15,8 +15,8 @@ struct VoiceCaptureView: View {
                     if capture.isRecording { LiveVoiceWaveform(capture: capture).frame(width: 240, height: 60) }
                     else { Image(systemName: "mic").font(.system(size: 60, weight: .light)).foregroundStyle(ZTheme.accent) }
                 }.frame(height: 60)
-                Text(capture.isRecording ? "正在听…" : "说出你的任务").font(.title2.weight(.semibold))
-                Text("识别后可编辑文字，再发送到电脑。").font(.subheadline).foregroundStyle(.secondary)
+                Text(capture.isRecording ? L10n.tr("正在听…") : L10n.tr("说出你的任务")).font(.title2.weight(.semibold))
+                Text(L10n.tr("识别后可编辑文字，再发送到电脑。")).font(.subheadline).foregroundStyle(.secondary)
                 if let error = capture.error { Text(error).font(.subheadline).foregroundStyle(.red).multilineTextAlignment(.center) }
                 TextEditor(text: $capture.text)
                     .scrollContentBackground(.hidden).padding(12)
@@ -24,13 +24,13 @@ struct VoiceCaptureView: View {
                     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 22))
                     .accessibilityIdentifier("voice.transcript")
                 HStack(spacing: 20) {
-                    Button(capture.isStarting ? "正在准备…" : capture.isRecording ? "停止录音" : "开始录音") {
+                    Button(capture.isStarting ? L10n.tr("正在准备…") : capture.isRecording ? L10n.tr("停止录音") : L10n.tr("开始录音")) {
                         if capture.isRecording {
                             finishing = true
                             Task { _ = await capture.finish(); finishing = false }
                         } else { Task { await capture.start() } }
                     }.buttonStyle(NativeGlassButtonStyle()).controlSize(.large).disabled(capture.isStarting || finishing)
-                    Button("使用文字") {
+                    Button(L10n.tr("使用文字")) {
                         finishing = true
                         let currentAttempt = attempt
                         let sessionID = store.currentSessionID
@@ -52,8 +52,8 @@ struct VoiceCaptureView: View {
                 }
                 Spacer()
             }.padding(24)
-                .navigationTitle("语音输入").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { capture.stop(); dismiss() } } }
+                .navigationTitle(L10n.tr("语音输入")).navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(L10n.tr("取消")) { capture.stop(); dismiss() } } }
         }
         .presentationDetents([.medium, .large])
         .onDisappear { attempt = UUID(); capture.stop() }

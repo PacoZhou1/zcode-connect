@@ -9,6 +9,9 @@ struct ZCodeMobileApp: App {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--onboarding-review"),
            let defaults = UserDefaults(suiteName: "dev.paco.zcode.mobile.onboarding-review") {
+            if ProcessInfo.processInfo.arguments.contains("--reset-onboarding-review") {
+                defaults.removePersistentDomain(forName: "dev.paco.zcode.mobile.onboarding-review")
+            }
             return AppStore(defaults: defaults)
         }
         #endif
@@ -22,8 +25,10 @@ struct ZCodeMobileApp: App {
         WindowGroup {
             rootView
                 .environment(store)
+                .environment(\.locale, LanguageSettings.shared.locale)
                 .tint(ZTheme.accent)
                 .preferredColorScheme(store.appearance == "浅色" ? .light : store.appearance == "深色" ? .dark : nil)
+                .onChange(of: LanguageSettings.shared.selection) { store.refreshLocalizedDemo() }
         }
     }
     @ViewBuilder private var rootView: some View {
@@ -63,8 +68,8 @@ final class TaskNotifications: NSObject, UNUserNotificationCenterDelegate, @unch
         guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional,
               settings.alertSetting == .enabled else { return }
         let content = UNMutableNotificationContent()
-        content.title = title.isEmpty ? "任务" : title
-        content.body = "电脑上的任务已完成。"
+        content.title = title.isEmpty ? L10n.tr("任务") : title
+        content.body = L10n.tr("电脑上的任务已完成。")
         content.sound = .default
         content.userInfo = ["sessionID": sessionID]
         let request = UNNotificationRequest(identifier: "task-complete-" + sessionID + "-" + UUID().uuidString,

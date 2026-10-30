@@ -395,6 +395,16 @@ actor MockRelaySocket: RelaySocketTransport {
 @main private struct RelaySelfTests {
     static func main() async throws {
         var checks: [String] = []
+        let newCatalog: RelayJSON = .object([
+            "preferredSelection": .object(["providerId": .string("p"), "modelId": .string("m"), "options": .object(["reasoningLevel": .string("max")])]),
+            "providers": .array([.object(["providerId": .string("p"), "providerName": .string("Provider"), "models": .array([.object([
+                "modelId": .string("m"), "config": .object(["enabled": .bool(false), "optionSpecs": .object(["reasoningLevel": .object(["values": .array([.string("low"), .string("high"), .string("max")])])]), "properties": .object(["inputFormat": .object(["supportsImage": .bool(true)])])])])])])])])
+        let workspace = try RelayWorkspaceState(presentation: .object(["mode": .string("build")]), catalog: newCatalog)
+        try require(workspace.thoughtLevel == "max" && workspace.mode == "build", "New host preferred settings lost")
+        try require(workspace.models.count == 1 && workspace.models[0]["reasoning"]["levels"].array?.count == 3, "New host dynamic levels lost")
+        try require(workspace.models[0]["disabledReason"].string != nil && workspace.models[0]["supportsImages"].bool == true, "New host model capabilities lost")
+        try rejects { _ = try RelayWorkspaceState(presentation: .null, catalog: newCatalog) }
+        checks.append("split_workspace_registry_compatibility")
         checks += try runHookReviewDTOTests()
         checks += try await runConversationCapabilityTests()
         checks += try await runHookReviewClientTests()

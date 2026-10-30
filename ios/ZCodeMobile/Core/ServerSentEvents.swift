@@ -24,13 +24,13 @@ struct ServerSentEventsDecoder: Sendable {
         if byte != 10 && byte != 13 {
             line.append(byte)
             guard retainedBytes + line.count <= Self.maximumEventBytes else {
-                throw BridgeFailure(message: "实时消息过大，请重新载入会话。", code: "event_too_large")
+                throw BridgeFailure(message: L10n.tr("实时消息过大，请重新载入会话。"), code: "event_too_large")
             }
             return nil
         }
         previousWasCR = byte == 13
         guard String(data: line, encoding: .utf8) != nil else {
-            throw BridgeFailure(message: "实时消息格式无效，请重新连接。", code: "event_invalid_utf8")
+            throw BridgeFailure(message: L10n.tr("实时消息格式无效，请重新连接。"), code: "event_invalid_utf8")
         }
         var text = String(decoding: line, as: UTF8.self)
         line.removeAll(keepingCapacity: true)
@@ -61,7 +61,7 @@ struct ServerSentEventsDecoder: Sendable {
         default: break
         }
         guard retainedBytes <= Self.maximumEventBytes else {
-            throw BridgeFailure(message: "实时消息过大，请重新载入会话。", code: "event_too_large")
+            throw BridgeFailure(message: L10n.tr("实时消息过大，请重新载入会话。"), code: "event_too_large")
         }
         return nil
     }

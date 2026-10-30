@@ -20,6 +20,9 @@ struct AppShell: View {
                     }
                 }
         }
+        // Value-less guide links otherwise survive the onboarding root changing
+        // to HomeView after the first successful connection.
+        .id(store.requiresInitialConnection)
         .modifier(FloatingPanelOverlay())
         .sheet(item: $store.sheet) { destination in
             switch destination {
@@ -30,13 +33,12 @@ struct AppShell: View {
             case .files(let id, let modified): FilesView(sessionID: id, initiallyModified: modified)
             case .agent(let agent): AgentDetailView(agent: agent)
             case .voice: VoiceCaptureView()
-            case .mirror: MirrorSheet()
             }
         }
-        .alert("暂时无法完成", isPresented: Binding(
+        .alert(L10n.tr("暂时无法完成"), isPresented: Binding(
             get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } }
         )) {
-            Button("好", role: .cancel) { store.errorMessage = nil }
+            Button(L10n.tr("好"), role: .cancel) { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
         .overlay(alignment: .top) {
             if let toast = store.toast {
@@ -53,7 +55,15 @@ struct AppShell: View {
             }
             await store.start()
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("--mirror-auto") { store.sheet = .mirror }
+            // Deterministic, scoped owner verification on a dedicated QA device.
+            // This opens the same official flow as the visible sign-in buttons; no test credential is injected.
+            if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "--official-login"),
+               ProcessInfo.processInfo.arguments.count > index + 1,
+               let provider = RelayAccountProvider(rawValue: ProcessInfo.processInfo.arguments[index + 1]),
+               store.officialAccount.identity == nil {
+                if !store.requiresInitialConnection { store.sheet = .pairing }
+                store.officialAccount.signIn(provider)
+            }
             #endif
         }
         .task {
@@ -68,6 +78,7 @@ struct AppShell: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                LanguageSettings.shared.refreshSystemLanguages()
                 TaskNotifications.shared.endBackgroundWindow()
                 if store.completionNotifications, store.hasConnectedBefore {
                     Task { await TaskNotifications.shared.requestAuthorizationIfNeeded() }

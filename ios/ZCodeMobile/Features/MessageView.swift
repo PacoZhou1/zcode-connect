@@ -24,8 +24,8 @@ struct MessageView: View {
                         .padding(.horizontal, 16).padding(.vertical, 12)
                         .background(ZTheme.userBubble, in: RoundedRectangle(cornerRadius: 23))
                         .contextMenu {
-                            Button("复制", systemImage: "square.on.square") { store.copy(message.text) }
-                            ShareLink(item: message.text) { Label("分享", systemImage: "square.and.arrow.up") }
+                            Button(L10n.tr("复制"), systemImage: "square.on.square") { store.copy(message.text) }
+                            ShareLink(item: message.text) { Label(L10n.tr("分享"), systemImage: "square.and.arrow.up") }
                         }
                 }
             } else {
@@ -36,7 +36,7 @@ struct MessageView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "brain").font(.system(size: 17)).frame(width: 22).accessibilityHidden(true)
-                            Text("思考过程").frame(maxWidth: .infinity, alignment: .leading)
+                            Text(L10n.tr("思考过程")).frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }.font(.subheadline).foregroundStyle(.secondary)
                 }
@@ -55,7 +55,7 @@ struct MessageView: View {
                 if message.isStreaming {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
-                        Text("正在继续…").font(.caption).foregroundStyle(.secondary)
+                        Text(L10n.tr("正在继续…")).font(.caption).foregroundStyle(.secondary)
                     }
                 } else if message.role == .assistant && showsResponseActions && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     responseActions.padding(.top, -6)
@@ -77,7 +77,7 @@ struct MessageView: View {
         VStack(spacing: 0) {
             Button { withAnimation(.easeInOut(duration: 0.2)) { changesExpanded.toggle() } } label: {
                 HStack {
-                    Text("已更改 \(message.changes.count) 个文件").font(.system(size: 14, weight: .medium))
+                    Text(L10n.tr("已更改 {0} 个文件", "\(message.changes.count)")).font(.system(size: 14, weight: .medium))
                     ChangeCount(additions: message.changes.reduce(0) { $0 + $1.additions },
                                 deletions: message.changes.reduce(0) { $0 + $1.deletions })
                     Spacer()
@@ -106,22 +106,22 @@ struct MessageView: View {
     private var responseActions: some View {
         HStack(spacing: 11) {
             Button { store.copy(message.text) } label: { Image(systemName: "square.on.square") }
-                .accessibilityLabel("复制回复")
+                .accessibilityLabel(L10n.tr("复制回复"))
             Button { store.toggleLocalFeedback(1, messageID: message.id, sessionID: sessionID) } label: {
                 Image(systemName: feedback == 1 ? "hand.thumbsup.fill" : "hand.thumbsup")
-            }.accessibilityLabel("有帮助")
+            }.accessibilityLabel(L10n.tr("有帮助"))
             Button { store.toggleLocalFeedback(-1, messageID: message.id, sessionID: sessionID) } label: {
                 Image(systemName: feedback == -1 ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-            }.accessibilityLabel("没有帮助")
+            }.accessibilityLabel(L10n.tr("没有帮助"))
             if store.isReferenceMode || (message.forkTarget != nil && store.session(sessionID)?.canFork == true) {
                 Button { store.forkSession(sessionID, target: message.forkTarget ?? (store.isReferenceMode ? MessageForkTarget(rowId: 0, entityId: message.id) : nil)) } label: {
                     BranchShareGlyph().stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)).frame(width: 16, height: 16)
-                }.accessibilityLabel("从此回复创建分支")
+                }.accessibilityLabel(L10n.tr("从此回复创建分支"))
                     .accessibilityIdentifier("message.fork.\(message.id)")
                     .disabled(store.isForking(sessionID))
             } else {
                 ShareLink(item: message.text) { Image(systemName: "square.and.arrow.up") }
-                    .accessibilityLabel("分享回复")
+                    .accessibilityLabel(L10n.tr("分享回复"))
             }
             if store.showTimestamps {
                 Text(timestampLabel)
@@ -133,12 +133,12 @@ struct MessageView: View {
     }
 
     private var timestampLabel: String {
-        guard store.isReferenceMode else { return message.createdAt.formatted(date: .omitted, time: .shortened) }
+        guard store.isReferenceMode else { return message.createdAt.formatted(.dateTime.hour().minute().locale(L10n.locale)) }
         switch message.id {
         case "preview-previous": return "10:32"
         case "preview-answer": return "10:40"
-        case "ref-assistant-1": return "星期五 19:04"
-        default: return "星期五 21:53"
+        case "ref-assistant-1": return L10n.tr("星期五 19:04")
+        default: return L10n.tr("星期五 21:53")
         }
     }
 }
@@ -202,6 +202,11 @@ final class MessageTextCache {
         let trimmed = text.trimmingCharacters(in: .newlines)
         return (try? AttributedString(markdown: trimmed, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(trimmed)
     }
+    /// Table cells are remote/user content, never localization keys. Preserve
+    /// inline Markdown without letting SwiftUI look up matching app copy.
+    nonisolated static func tableCell(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    }
     /// Foundation's CommonMark block parser owns syntax, including headings,
     /// lists, quotes and escaped delimiters. Inline runs retain their attributes.
     nonisolated private static func prose(_ text: String, start: Int) -> [MessageTextBlock] {
@@ -225,30 +230,76 @@ final class MessageTextCache {
 
     nonisolated static func parse(text: String, user: Bool) -> [MessageTextBlock] {
         if user { return [.prose(0, attributed(text))] }
-        let fence = String(repeating: String(UnicodeScalar(96)!), count: 3)
-        let segments = text.components(separatedBy: fence)
+        // Recognize fenced blocks only at line starts (CommonMark 0–3 spaces),
+        // with matching delimiter/length. Literal inline ``` is ordinary prose.
+        let lines = text.components(separatedBy: "\n")
         var result: [MessageTextBlock] = []
-        for (index, segment) in segments.enumerated() {
-            if index % 2 == 1 {
-                let lines = segment.components(separatedBy: "\n")
-                result.append(.code(result.count, lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .newlines)))
-            } else {
-                var pending: [String] = []
-                var table: [[String]] = []
-                for line in segment.components(separatedBy: "\n") {
-                    if line.trimmingCharacters(in: .whitespaces).hasPrefix("|") {
-                        if !pending.isEmpty { result.append(contentsOf: prose(pending.joined(separator: "\n"), start: result.count)); pending = [] }
-                        let cells = line.split(separator: "|", omittingEmptySubsequences: true).map { $0.trimmingCharacters(in: .whitespaces) }
-                        if !cells.allSatisfy({ $0.allSatisfy { "-: ".contains($0) } }) { table.append(cells) }
-                    } else {
-                        if !table.isEmpty { result.append(.table(result.count, table)); table = [] }
-                        pending.append(line)
-                    }
-                }
-                if !pending.isEmpty { result.append(contentsOf: prose(pending.joined(separator: "\n"), start: result.count)) }
-                if !table.isEmpty { result.append(.table(result.count, table)) }
-            }
+        var pending: [String] = []
+        var code: [String] = []
+        var opening: (Character, Int)?
+        func fence(_ line: String) -> (Character, Int, String)? {
+            let indent = line.prefix(while: { $0 == " " }).count
+            guard indent <= 3 else { return nil }
+            let body = line.dropFirst(indent)
+            guard let first = body.first, first == "`" || first == "~" else { return nil }
+            let count = body.prefix(while: { $0 == first }).count
+            guard count >= 3 else { return nil }
+            let tail = String(body.dropFirst(count))
+            if first == "`", tail.contains("`") { return nil }
+            return (first, count, tail)
         }
+        func cells(_ line: String) -> [String] {
+            var values: [String] = [], current = "", escaped = false
+            var ticks = 0
+            for char in line.trimmingCharacters(in: .whitespaces) {
+                if escaped { current.append(char); escaped = false; continue }
+                if char == "\\" { current.append(char); escaped = true; continue }
+                if char == "`" { ticks ^= 1 }
+                if char == "|", ticks == 0 { values.append(current); current = "" }
+                else { current.append(char) }
+            }
+            values.append(current)
+            if values.first?.isEmpty == true { values.removeFirst() }
+            if values.last?.isEmpty == true { values.removeLast() }
+            return values.map { $0.trimmingCharacters(in: .whitespaces) }
+        }
+        func flushProse() {
+            guard !pending.isEmpty else { return }
+            result.append(contentsOf: prose(pending.joined(separator: "\n"), start: result.count))
+            pending.removeAll(keepingCapacity: true)
+        }
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            if let active = opening {
+                if let marker = fence(line), marker.0 == active.0, marker.1 >= active.1,
+                   marker.2.trimmingCharacters(in: .whitespaces).isEmpty {
+                    result.append(.code(result.count, code.joined(separator: "\n")))
+                    code.removeAll(keepingCapacity: true); opening = nil
+                } else { code.append(line) }
+            } else if let marker = fence(line) {
+                flushProse(); opening = (marker.0, marker.1)
+            } else if index + 1 < lines.count, line.contains("|"), !cells(line).isEmpty {
+                let separator = cells(lines[index + 1])
+                let header = cells(line)
+                let isTable = separator.count == header.count && separator.allSatisfy {
+                    let dashes = $0.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+                    return !dashes.isEmpty && dashes.allSatisfy { $0 == "-" }
+                }
+                if isTable {
+                    flushProse()
+                    var table = [header]; index += 2
+                    while index < lines.count, lines[index].contains("|"), !lines[index].isEmpty {
+                        table.append(cells(lines[index])); index += 1
+                    }
+                    result.append(.table(result.count, table))
+                    continue
+                } else { pending.append(line) }
+            } else { pending.append(line) }
+            index += 1
+        }
+        if opening != nil { result.append(.code(result.count, code.joined(separator: "\n"))) }
+        flushProse()
         return result
     }
 }
@@ -406,6 +457,11 @@ private struct MessageTextBlockRow: View, Equatable {
     private func quoteDepth(_ text: AttributedString) -> Int {
         (text.runs.first?.presentationIntent?.components ?? []).filter { $0.kind == .blockQuote }.count
     }
+    private func listDepth(_ text: AttributedString) -> Int {
+        (text.runs.first?.presentationIntent?.components ?? []).filter {
+            switch $0.kind { case .orderedList, .unorderedList: true; default: false }
+        }.count
+    }
     private func listMarker(_ text: AttributedString) -> String? {
         let components = text.runs.first?.presentationIntent?.components ?? []
         let ordered = components.contains { $0.kind == .orderedList }
@@ -422,13 +478,15 @@ private struct MessageTextBlockRow: View, Equatable {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     if let marker = listMarker(content) { Text(marker).foregroundStyle(.secondary).frame(minWidth: 18, alignment: .trailing) }
                     Text(content)
-                        .font(proseFont(content)).tracking(user ? 0 : 0.3)
+                        .font(proseFont(content))
+                        .lineLimit(nil)
                         .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
                         .foregroundStyle(user ? ZTheme.userText : .primary)
                         .frame(maxWidth: user ? nil : .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
-                .padding(.leading, quoteDepth(content) > 0 ? 12 : 0)
+                .padding(.leading, CGFloat(quoteDepth(content) * 12 + max(0, listDepth(content) - 1) * 18))
                 .overlay(alignment: .leading) {
                     if quoteDepth(content) > 0 { Rectangle().fill(.quaternary).frame(width: 3) }
                 }
@@ -441,14 +499,14 @@ private struct MessageTextBlockRow: View, Equatable {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                         HStack(alignment: .top, spacing: 20) {
                             ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                                Text(cell).font(.system(size: 16, weight: index == 0 ? .semibold : .regular))
+                                Text(MessageTextCache.tableCell(cell)).font(.system(size: 16, weight: index == 0 ? .semibold : .regular))
                                     .frame(width: 150, alignment: .leading)
                             }
                         }.padding(.vertical, 14)
                         Divider()
                     }
                 }
-            }.padding(.vertical, 8).accessibilityLabel("数据表格，可横向滚动")
+            }.padding(.vertical, 8).accessibilityLabel(L10n.tr("数据表格，可横向滚动"))
         }
     }
 }
@@ -459,9 +517,9 @@ struct CodeBlockView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("代码").font(.caption)
+                Text(L10n.tr("代码")).font(.caption)
                 Spacer()
-                Button { store.copy(code) } label: { Label("复制", systemImage: "square.on.square").font(.caption) }
+                Button { store.copy(code) } label: { Label(L10n.tr("复制"), systemImage: "square.on.square").font(.caption) }
             }.padding(12).foregroundStyle(.secondary)
             Divider()
             ScrollView(.horizontal) {
@@ -493,13 +551,13 @@ private struct ToolActivityGroup: View {
         let active = steps.filter { $0.status == .running }.count
         let failures = steps.filter { $0.status == .failed }.count
         let waiting = steps.filter { $0.status == .waiting }.count
-        if active > 0 { return "正在执行 · \(active) 项进行中，共 \(steps.count) 项" }
-        if waiting > 0 { return "等待确认 · \(waiting) 项" }
-        if failures > 0 { return "执行记录 · \(failures) 项未完成，共 \(steps.count) 项" }
-        if steps.contains(where: { $0.status == .idle }) { return "执行记录 · \(steps.count) 项" }
-        if commands == steps.count { return "已运行 \(commands) 条命令" }
-        if commands == 0 { return "已调用 \(steps.count) 个工具" }
-        return "已运行 \(commands) 条命令，调用 \(steps.count - commands) 个工具"
+        if active > 0 { return L10n.tr("正在执行 · {0} 项进行中，共 {1} 项", "\(active)", "\(steps.count)") }
+        if waiting > 0 { return L10n.tr("等待确认 · {0} 项", "\(waiting)") }
+        if failures > 0 { return L10n.tr("执行记录 · {0} 项未完成，共 {1} 项", "\(failures)", "\(steps.count)") }
+        if steps.contains(where: { $0.status == .idle }) { return L10n.tr("执行记录 · {0} 项", "\(steps.count)") }
+        if commands == steps.count { return L10n.tr("已运行 {0} 条命令", "\(commands)") }
+        if commands == 0 { return L10n.tr("已调用 {0} 个工具", "\(steps.count)") }
+        return L10n.tr("已运行 {0} 条命令，调用 {1} 个工具", "\(commands)", "\(steps.count - commands)")
     }
     var body: some View {
         Group {
@@ -529,7 +587,7 @@ private struct ToolActivityGroup: View {
                 }
             }
             if let elapsed, !elapsed.isEmpty {
-                Text("总用时 \(elapsed)").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.tr("总用时 {0}", "\(elapsed)")).font(.caption).foregroundStyle(.secondary)
                     .padding(.leading, 30)
             }
         }
@@ -543,7 +601,7 @@ private struct ToolActivityRow: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
-            Text(step.detail.isEmpty ? "没有更多详情" : step.detail)
+            Text(step.detail.isEmpty ? L10n.tr("没有更多详情") : step.detail)
                 .font(.system(.caption, design: .monospaced))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -571,7 +629,7 @@ private struct ToolActivityRow: View {
         .tint(.secondary)
         .preference(key: ToolInspectionPreferenceKey.self, value: expanded)
         .accessibilityIdentifier("tool.activity." + step.id)
-        .accessibilityHint("展开查看完整输入与输出")
+        .accessibilityHint(L10n.tr("展开查看完整输入与输出"))
     }
     @ViewBuilder private var icon: some View {
         if step.activityKind == .webFetch, let url = step.faviconURL {
@@ -604,7 +662,7 @@ private struct CompactActivityDisclosureStyle: DisclosureGroupStyle {
                         .accessibilityHidden(true)
                 }.frame(minHeight: 28).contentShape(Rectangle())
             }.buttonStyle(.plain)
-                .accessibilityValue(configuration.isExpanded ? "已展开" : "已折叠")
+                .accessibilityValue(configuration.isExpanded ? L10n.tr("已展开") : L10n.tr("已折叠"))
             if configuration.isExpanded { configuration.content.transition(.opacity) }
         }
     }

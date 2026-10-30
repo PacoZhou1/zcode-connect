@@ -22,7 +22,7 @@ enum RelayBridgeMapping {
         let state = status(projection, snapshot: snapshot, meta: meta)
         let controllable = meta?.provider == nil || meta?.provider == "glm"
         let archived = meta?.archived ?? false
-        var value: [String: RelayJSON] = ["id": .string(id), "title": .string(meta?.title.nilIfEmpty ?? projection?.title.nilIfEmpty ?? snapshot?.title.nilIfEmpty ?? "新任务"), "projectId": .string(projectID), "projectName": .string(URL(fileURLWithPath: bridge.workspacePath).lastPathComponent), "source": .string("official-relay"), "status": .string(state), "updatedAt": date(meta?.updatedAt ?? snapshot?.raw["session"]["updatedAt"].number), "pinned": .bool(meta?.pinned ?? false), "archived": .bool(archived),
+        var value: [String: RelayJSON] = ["id": .string(id), "title": .string(meta?.title.nilIfEmpty ?? projection?.title.nilIfEmpty ?? snapshot?.title.nilIfEmpty ?? L10n.tr("新任务")), "projectId": .string(projectID), "projectName": .string(URL(fileURLWithPath: bridge.workspacePath).lastPathComponent), "source": .string("official-relay"), "status": .string(state), "updatedAt": date(meta?.updatedAt ?? snapshot?.raw["session"]["updatedAt"].number), "pinned": .bool(meta?.pinned ?? false), "archived": .bool(archived),
             "unread": .bool(meta?.unreadAt != nil), "unreadAt": meta?.unreadAt.map(RelayJSON.number) ?? .null, "unreadScope": .string("desktop"),
             "capabilities": .object(["read": .bool(controllable), "send": .bool(controllable && !archived), "stop": .bool(controllable && (projection?.canStop ?? ["running", "waiting"].contains(state))), "approve": .bool(controllable), "changes": .bool(true), "markUnread": .bool(controllable), "rename": .bool(controllable), "pin": .bool(controllable), "archive": .bool(controllable), "fork": .bool(controllable && !archived && !(projection?.forkTargets.isEmpty ?? true))])]
         var provider = snapshot?.model["providerId"].string ?? projection?.config["provider"].string
@@ -108,9 +108,9 @@ enum RelayBridgeMapping {
     static func interaction(_ pending: RelayPendingInteraction, sessionID: String) -> RelayJSON {
         let p = pending.payload
         if pending.kind == "workspaceHookReview", let review = try? pending.workspaceHookReview() {
-            return .object(["id": .string(pending.id), "sessionId": .string(sessionID), "kind": .string(pending.kind), "title": .string("审查工作区钩子"), "reason": .string("所选钩子的信任会持久保存。"), "hookReview": review.wire])
+            return .object(["id": .string(pending.id), "sessionId": .string(sessionID), "kind": .string(pending.kind), "title": .string(L10n.tr("审查工作区钩子")), "reason": .string(L10n.tr("所选钩子的信任会持久保存。")), "hookReview": review.wire])
         }
-        return .object(["id": .string(pending.id), "sessionId": .string(sessionID), "kind": .string(pending.kind), "title": p["toolName"].string.map(RelayJSON.string) ?? .string("需要你的回答"), "reason": p["reason"].string.map(RelayJSON.string) ?? p["prompt"], "toolName": p["toolName"], "questions": p["questions"], "input": p["input"]])
+        return .object(["id": .string(pending.id), "sessionId": .string(sessionID), "kind": .string(pending.kind), "title": p["toolName"].string.map(RelayJSON.string) ?? .string(L10n.tr("需要你的回答")), "reason": p["reason"].string.map(RelayJSON.string) ?? p["prompt"], "toolName": p["toolName"], "questions": p["questions"], "input": p["input"]])
     }
     static func history(_ projection: RelayConversationProjection) -> RelayJSON {
         let before = projection.rows.first?["rowId"].integer, first = projection.raw["rows"]["firstRowId"].integer

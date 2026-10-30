@@ -44,7 +44,7 @@ struct InteractionRequestCard: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label(requiresDesktop ? "需要审查工作区命令" : isPermission ? "需要你的批准" : isPlan ? "确认方案" : "需要你的回答",
+            Label(requiresDesktop ? L10n.tr("需要审查工作区命令") : isPermission ? L10n.tr("需要你的批准") : isPlan ? L10n.tr("确认方案") : L10n.tr("需要你的回答"),
                   systemImage: requiresDesktop ? "terminal" : isPermission ? "hand.raised" : isPlan ? "list.bullet.clipboard" : "text.bubble")
                 .font(.headline)
             if interaction.title != interaction.toolName { Text(interaction.title).font(.body) }
@@ -53,33 +53,33 @@ struct InteractionRequestCard: View {
             }
             if requiresDesktop {
                 if interaction.hookReview != nil {
-                    Text("工作区命令需要逐项审查。信任会持久保存，不能按一次性审批处理。")
+                    Text(L10n.tr("工作区命令需要逐项审查。信任会持久保存，不能按一次性审批处理。"))
                         .font(.subheadline).foregroundStyle(.secondary)
-                    Button("审查工作区命令") { showHookReview = true }
+                    Button(L10n.tr("审查工作区命令")) { showHookReview = true }
                         .buttonStyle(NativeGlassButtonStyle()).accessibilityIdentifier("hooks.openReview")
                 } else {
-                    Label("此操作需要在电脑端确认，请回到 ZCode 处理。", systemImage: "desktopcomputer")
+                    Label(L10n.tr("此操作需要在电脑端确认，请回到 ZCode 处理。"), systemImage: "desktopcomputer")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             } else if isPlan {
                 if let plan = interaction.input?.objectValue?["plan"]?.stringValue, !plan.isEmpty {
-                    DisclosureGroup("查看完整方案") {
+                    DisclosureGroup(L10n.tr("查看完整方案")) {
                         Text(plan).font(.subheadline).textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                     }
                 }
-                TextField("需要调整？在这里写下修改意见", text: $feedback, axis: .vertical)
+                TextField(L10n.tr("需要调整？在这里写下修改意见"), text: $feedback, axis: .vertical)
                     .lineLimit(2...6).padding(12)
                     .background(.background, in: RoundedRectangle(cornerRadius: 14))
                     .accessibilityIdentifier("interaction.feedback")
                 if blocksPlanFeedback {
-                    Text("请填写具体修改意见。若想执行方案，请清空修改意见，再点“批准并执行”。")
+                    Text(L10n.tr("请填写具体修改意见。若想执行方案，请清空修改意见，再点“批准并执行”。"))
                         .font(.subheadline).foregroundStyle(.secondary)
                         .accessibilityIdentifier("interaction.feedback.validation")
                 }
             } else if isPermission {
                 if let input = interaction.input {
-                    DisclosureGroup("操作详情") {
+                    DisclosureGroup(L10n.tr("操作详情")) {
                         Text(input.formatted).font(.system(size: 12, design: .monospaced))
                             .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
                     }.font(.subheadline)
@@ -87,18 +87,18 @@ struct InteractionRequestCard: View {
             } else if !questions.isEmpty {
                 ForEach(questions) { question in questionForm(question) }
             } else {
-                TextField("填写回答", text: $feedback, axis: .vertical).lineLimit(2...6)
+                TextField(L10n.tr("填写回答"), text: $feedback, axis: .vertical).lineLimit(2...6)
                     .padding(12).background(.background, in: RoundedRectangle(cornerRadius: 14))
                     .accessibilityIdentifier("interaction.answer")
             }
             if !requiresDesktop {
             HStack(spacing: 14) {
-                Button(isPermission ? "拒绝" : isPlan ? "暂不执行" : "跳过", role: .destructive) {
+                Button(isPermission ? L10n.tr("拒绝") : isPlan ? L10n.tr("暂不执行") : L10n.tr("跳过"), role: .destructive) {
                     submit(accept: false)
                 }.buttonStyle(NativeGlassButtonStyle())
                 Spacer(minLength: 0)
                 if busy { ProgressView() }
-                Button(isPermission ? "允许本次" : isPlan ? (trimmedFeedback.isEmpty ? "批准并执行" : "发送修改意见") : "提交回答") {
+                Button(isPermission ? L10n.tr("允许本次") : isPlan ? (trimmedFeedback.isEmpty ? L10n.tr("批准并执行") : L10n.tr("发送修改意见")) : L10n.tr("提交回答")) {
                     submit(accept: true)
                 }.buttonStyle(.glassProminent).disabled(!canAnswer)
                     .accessibilityIdentifier("interaction.submit")
@@ -145,7 +145,7 @@ struct InteractionRequestCard: View {
                 Text(header).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }
             Text(question.question).font(.body.weight(.medium))
-            if question.multiSelect == true { Text("可多选").font(.caption).foregroundStyle(.secondary) }
+            if question.multiSelect == true { Text(L10n.tr("可多选")).font(.caption).foregroundStyle(.secondary) }
             ForEach(question.options ?? []) { option in
                 let value = option.value ?? option.label
                 let selected = selections[question.id]?.contains(value) == true
@@ -175,7 +175,7 @@ struct InteractionRequestCard: View {
                         .background(.background, in: RoundedRectangle(cornerRadius: 14))
                 }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
             }
-            TextField(question.options?.isEmpty == false ? "或填写你的回答" : "填写回答",
+            TextField(question.options?.isEmpty == false ? L10n.tr("或填写你的回答") : L10n.tr("填写回答"),
                 text: Binding(get: { otherAnswers[question.id] ?? "" }, set: { value in
                     otherAnswers[question.id] = value
                     if question.multiSelect != true && !value.isEmpty { selections[question.id] = [] }

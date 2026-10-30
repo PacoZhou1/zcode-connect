@@ -49,6 +49,6 @@ func relayDigest(_ data: Data) -> String { SHA256.hash(data: data).map { String(
 func relayBridgeFailure(_ error: any Error) -> BridgeFailure {
     if let error = error as? BridgeFailure { return error }
     if let error = error as? RelayFailure { return .init(message: error.message, code: error.code) }
-    if error is CancellationError { return .init(message: "操作已取消，原请求仍保留。", code: "cancelled") }
-    return .init(message: "电脑连接或本地请求日志暂时不可用。", code: "relay_transport_error")
+    if error is CancellationError { return .init(message: L10n.tr("操作已取消，原请求仍保留。"), code: "cancelled") }
+    return .init(message: L10n.tr("电脑连接或本地请求日志暂时不可用。"), code: "relay_transport_error")
 }

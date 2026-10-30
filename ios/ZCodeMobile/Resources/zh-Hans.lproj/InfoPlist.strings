@@ -1,0 +1,5 @@
+"NSLocalNetworkUsageDescription" = "连接你的电脑，查看与继续 ZCode 任务。";
+"NSCameraUsageDescription" = "扫描电脑上的连接二维码，或为任务拍摄照片。";
+"NSMicrophoneUsageDescription" = "将你的语音转换成任务内容。";
+"NSSpeechRecognitionUsageDescription" = "将语音转换为可编辑的文字，确认后发送。";
+"NSPhotoLibraryUsageDescription" = "为任务选择需要的照片。";

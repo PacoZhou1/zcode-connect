@@ -1,13 +1,14 @@
 # Native official relay adapter
 
-`RelayClient` is an independent Swift 6 actor using Foundation and CryptoKit. It reads and controls the selected **original desktop workspace service** through the official encrypted relay. It never launches another CLI runtime. All source is in this directory; it has no AppStore, UI, or HTTP-client dependency.
+`RelayClient` is an independent Swift 6 actor using Foundation and CryptoKit. It reads and controls the selected **original desktop workspace service** through the official encrypted relay. It never launches another CLI runtime. The relay actor has no AppStore or UI dependency; `RelayOfficialAPI` separately handles the official account HTTP endpoints.
 
-Implementation is ready for integration. Offline official codec compatibility, a mocked complete connection, and arm64 iOS 26 SDK compilation pass. **A real official account connection has not been attempted.** Keep that boundary visible until explicit pairing and live acceptance are complete.
+Native V1 and account-based V2 paths are integrated. Offline codec/connection checks, iOS SDK compilation, real authorization initialization/pending requests, and Simulator provider-page cancellation tests pass. **A real account authorization and V2 desktop connection have not been completed.** Keep that boundary visible until explicit pairing and live acceptance are complete. See [account connection notes](../../../../docs/DEVELOPMENT.md#relay-v2-account-connections--账号连接).
 
 ## Integration entry points
 
 1. Store one stable `clientID` for this installation. A changed client identity must not silently inherit another controller's pending journal.
-2. Parse only an explicit user-scanned official QR with `RelayPairing(scannedURL:)`. It contains a secret; never write the URL, QR, `hash`, or HMAC proof to logs, analytics, crash reports, or ordinary preferences. The type's printable descriptions redact its credential.
+2. For legacy V1, parse an explicit user-scanned official QR with `RelayPairing(scannedURL:)`. It contains a secret; never write the URL, QR, `hash`, or HMAC proof to logs, analytics, crash reports, or ordinary preferences. The type's printable descriptions redact its credential.
+   For V2, authenticate through `OfficialAccountController`, select a server-returned device (or scan a V2 QR), and request a fresh `terminalToken` for **each** `connect(..., oneTimeToken:)` call. Do not reuse a consumed token. JWTs stay in HTTP Authorization headers; they never go to the relay socket or a custom domain. V2 QR routes have no pairing secret, but still keep account/device details private.
 3. Show the selected desktop and explain that connecting may replace another mobile controller. Call `connect(pairing:confirmedControllerReplacement:true)` only after that explicit action. The adapter never reconnects after `KICKED` or network loss.
 4. Call `bootstrap()` (or `workspaces()` to refresh), then `openWorkspace(key:taskID:)` for one host-returned workspace key. Calls during a workspace switch fail with `relay_busy`; serialize navigation and pending command reconciliation. Remote workspaces need the host identity and remote session ID.
 5. Use `listTasks(archived:pinned:)` and `readSession(_:)`. Task engine `provider` is not the selected model provider. Read current model/thought/mode from `RelaySessionSnapshot` or `projection.config`; do not synthesize defaults.

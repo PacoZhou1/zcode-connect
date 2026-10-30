@@ -81,9 +81,29 @@ private final class RedirectResult: @unchecked Sendable {
             try check(pairing.challengeProof(nonce: "fixture-nonce") == officialPairing.challengeProof(nonce: "fixture-nonce"), "Custom mode changed the official cryptographic contract")
             try check(!pairing.description.contains(secret) && !pairing.debugDescription.contains(secret) && !pairing.serviceID.contains(secret), "Sensitive pairing description")
         }
-        await run("plain_custom_url_cannot_relax_official_scanner") {
+        await run("direct_custom_qr_keeps_official_only_initializer_strict") {
             try rejected { _ = try RelayPairing(scannedURL: "https://relay-a.example.invalid/zcode/remote/v4?sid=mock-desktop&hash=\(secret)") }
-            try rejected { _ = try RelayPairing(payload: "https://relay-a.example.invalid/zcode/remote/v4?sid=mock-desktop&hash=\(secret)") }
+            let raw = "https://relay-a.example.invalid/zcode/remote/v4?sid=mock-desktop&hash=\(secret)&mid=fixture-mid&name=Fixture&app_version=fixture"
+            let direct = try RelayPairing(payload: " \n" + raw + "\n"), legacy = try RelayPairing(payload: payload())
+            try check(direct.serviceID == legacy.serviceID && direct.relayURL == legacy.relayURL, "Direct QR changed service or device routing")
+            try check(direct.challengeProof(nonce: "fixture-nonce") == legacy.challengeProof(nonce: "fixture-nonce"), "Direct QR changed credential proof")
+            try check(direct.deviceName == "Fixture" && direct.profileURL.query == nil, "Direct QR lost name or exposed secret")
+            let port = try RelayPairing(payload: raw.replacingOccurrences(of: "relay-a.example.invalid", with: "relay-a.example.invalid:8443"))
+            try check(port.serviceID == "wss://relay-a.example.invalid:8443/zcode/ws", "QR lost custom port")
+        }
+        await run("direct_custom_qr_rejects_ambiguous_or_cross_service_inputs") {
+            let page = "https://relay-a.example.invalid/zcode/remote/v4?sid=mock-desktop&hash=\(secret)"
+            for value in [
+                page + "&sid=duplicate", page + "&relayURL=wss://other.invalid/zcode/ws",
+                page + "&enroll=not-for-phone", page + "#fragment",
+                page.replacingOccurrences(of: "https:", with: "http:"),
+                page.replacingOccurrences(of: "https://", with: "https://user:password@"),
+                page.replacingOccurrences(of: "/zcode/remote/v4", with: "/zcode/%72emote/v4"),
+                page.replacingOccurrences(of: "/zcode/remote/v4", with: "/remote/v4"),
+                page.replacingOccurrences(of: "relay-a.example.invalid", with: "ZCODE.Z.AI."),
+                page.replacingOccurrences(of: secret, with: "short"),
+                "https://relay-a.example.invalid", "https://zcode.z.ai", String(repeating: "x", count: 8193)
+            ] { try rejected { _ = try RelayPairing(payload: value) } }
         }
         await run("typed_transport_missing_wrong_or_additional_fields_rejected") {
             for value: RelayJSON in [.string("bridge"), .null, .int(1)] { try rejected { _ = try RelayPairing(payload: payload(extra: ["transport": value])) } }

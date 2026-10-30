@@ -136,7 +136,7 @@ struct ConversationPreview: View {
             if loading && messages.isEmpty {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if messages.isEmpty {
-                Text(failure ?? "暂无消息").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+                Text(failure ?? L10n.tr("暂无消息")).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
