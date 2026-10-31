@@ -63,7 +63,7 @@ struct SettingsView: View {
                 NavigationLink { ConnectionGuideView() } label: { Label(L10n.tr("手机与电脑连接指南"), systemImage: "questionmark.circle") }
             }
             Section(L10n.tr("关于")) {
-                LabeledContent("zcode connect", value: "1.0")
+                LabeledContent("zcode connect", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
                 Link(L10n.tr("隐私政策"), destination: URL(string: "https://zcode-remote-support.zch1234512345.chatgpt.site/privacy.html")!)
                     .accessibilityIdentifier("settings.privacyPolicy")
                 Link(L10n.tr("使用支持"), destination: URL(string: "https://zcode-remote-support.zch1234512345.chatgpt.site/")!)
