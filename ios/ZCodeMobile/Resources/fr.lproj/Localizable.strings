@@ -810,3 +810,6 @@
 "{0} 登录成功" = "Connexion à {0} réussie";
 "在电脑上登录同一账号，开启远程控制，然后扫描二维码。" = "Connectez-vous au même compte sur votre ordinateur, activez le contrôle à distance, puis scannez le code QR.";
 "下一步：连接电脑" = "Étape suivante : connecter l’ordinateur";
+
+"正在打开登录页面…" = "Ouverture de la page de connexion…";
+"打开登录页面" = "Ouvrir la page de connexion";

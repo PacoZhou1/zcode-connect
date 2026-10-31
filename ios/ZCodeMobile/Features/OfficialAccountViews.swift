@@ -9,24 +9,44 @@ private struct OfficialLoginBrowser: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }
 
-/// Present once from the screen, never from a Form's conditional Section rows.
+private struct OfficialLoginPresenterKey: EnvironmentKey {
+    static let defaultValue: UUID? = nil
+}
+
+extension EnvironmentValues {
+    var officialLoginPresenterID: UUID? {
+        get { self[OfficialLoginPresenterKey.self] }
+        set { self[OfficialLoginPresenterKey.self] = newValue }
+    }
+}
+
+/// Bind authorization to the screen that started it. A navigation destination can
+/// sit inside another account/settings screen without either presenting for the other.
 struct OfficialLoginPresentation: ViewModifier {
     @Environment(AppStore.self) private var store
+    @State private var presenterID = UUID()
     var enabled = true
     func body(content: Content) -> some View {
         let account = store.officialAccount
-        content.sheet(isPresented: Binding(get: { enabled && account.authorizationURL != nil }, set: { value in
-            if enabled && !value { account.browserDidDismiss() }
-        }), onDismiss: {
-            if enabled { account.browserDidDismiss() }
-        }) {
-            if let url = account.authorizationURL { OfficialLoginBrowser(url: url).ignoresSafeArea() }
-        }
+        let ownsFlow = enabled && (account.authorizationPresenterID == nil || account.authorizationPresenterID == presenterID)
+        content
+            .environment(\.officialLoginPresenterID, presenterID)
+            .sheet(isPresented: Binding(get: { ownsFlow && account.authorizationURL != nil }, set: { value in
+                if ownsFlow && !value { account.browserDidDismiss() }
+            }), onDismiss: {
+                if account.authorizationPresenterID == presenterID { account.browserDidDismiss() }
+            }) {
+                if let url = account.authorizationURL {
+                    OfficialLoginBrowser(url: url).ignoresSafeArea()
+                        .onAppear { account.browserDidPresent(from: presenterID) }
+                }
+            }
     }
 }
 
 struct OfficialAccountSection: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.officialLoginPresenterID) private var presenterID
     @Environment(\.scenePhase) private var scenePhase
     var showDevices = true
     var onSelect: ((RelayAccountDevice) -> Void)?
@@ -46,7 +66,7 @@ struct OfficialAccountSection: View {
                             Spacer()
                             Menu {
                                 if account.identity?.provider != provider {
-                                    Button(L10n.tr("使用此账号")) { account.useAccount(provider) }
+                                    Button(L10n.tr("使用此账号")) { account.useAccount(provider, presenterID: presenterID) }
                                 }
                                 Button(L10n.tr("退出登录"), role: .destructive) {
                                     do { try account.signOut(provider) } catch { account.failure = error.localizedDescription }
@@ -63,12 +83,16 @@ struct OfficialAccountSection: View {
                             Text(provider.title)
                             Spacer()
                             ProgressView().controlSize(.small)
-                            Text(account.confirmingLogin ? L10n.tr("正在确认登录…") : L10n.tr("正在等待登录…"))
+                            Text(account.confirmingLogin ? L10n.tr("正在确认登录…") : account.authorizationPageVisible ? L10n.tr("正在等待登录…") : L10n.tr("正在打开登录页面…"))
                                 .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        if account.authorizationURL != nil && !account.authorizationPageVisible {
+                            Button(L10n.tr("打开登录页面")) { account.presentAuthorization(from: presenterID) }
+                                .accessibilityIdentifier("account.openAuthorization")
                         }
                         Button(L10n.tr("取消")) { account.cancelLogin() }
                     } else {
-                        Button { account.signIn(provider) } label: {
+                        Button { account.signIn(provider, presenterID: presenterID) } label: {
                             HStack {
                                 Text(provider.title)
                                 Spacer()

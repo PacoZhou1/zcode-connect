@@ -59,7 +59,7 @@ struct SettingsView: View {
                 ForEach(store.profiles) { profile in
                     NavigationLink(profile.name) { ConnectionDetailView(profile: profile) }
                 }
-                NavigationLink { PairingView(embedded: true) } label: { Label(L10n.tr("添加连接"), systemImage: "plus") }
+                NavigationLink { PairingView(embedded: true) } label: { Label(L10n.tr("添加连接"), systemImage: "plus") }.accessibilityIdentifier("settings.addConnection")
                 NavigationLink { ConnectionGuideView() } label: { Label(L10n.tr("手机与电脑连接指南"), systemImage: "questionmark.circle") }
             }
             Section(L10n.tr("关于")) {

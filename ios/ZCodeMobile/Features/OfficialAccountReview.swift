@@ -8,6 +8,7 @@ import Foundation
         let domain = "dev.paco.zcode.mobile.account-review"
         let defaults = UserDefaults(suiteName: domain)!
         defaults.removePersistentDomain(forName: domain)
+        if scenario == "existing" { defaults.set(true, forKey: "hasConnectedBefore") }
         let providers: [RelayAccountProvider] = scenario == "both" ? [.zai, .bigmodel]
             : RelayAccountProvider(rawValue: scenario).map { [$0] } ?? []
         let sessions = providers.map { provider in

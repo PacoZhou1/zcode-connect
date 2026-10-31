@@ -30,7 +30,7 @@ struct ConnectionsView: View {
                     }
                     NavigationLink { PairingView(embedded: true) } label: {
                         Label(L10n.tr("添加连接"), systemImage: "plus")
-                    }
+                    }.accessibilityIdentifier("connections.add")
                 }
 
             }
@@ -88,7 +88,7 @@ struct PairingView: View {
             Button(L10n.tr("取消"), role: .cancel) {}
         } message: { Text(L10n.tr("将连接“{0}”，通过{1}读取项目。若另一台手机正在控制，可能会替换它的连接。电脑上的任务会保留。", "\(name.isEmpty ? L10n.tr("我的电脑") : name)", "\(relayServiceHost.map { L10n.tr("你的中转服务器 {0}", "\($0)") } ?? L10n.tr("ZCode 官方中转"))")) }
         .onAppear { isVisible = true; restoreWorkspaceSelection() }
-        .modifier(OfficialLoginPresentation(enabled: !embedded || store.sheet == nil))
+        .modifier(OfficialLoginPresentation(enabled: !onboarding || store.sheet == nil))
         .onChange(of: store.officialAccount.loginCompletion) { _, _ in
             if isVisible, let identity = store.officialAccount.identity {
                 UIAccessibility.post(notification: .announcement, argument: L10n.tr("{0} 登录成功", identity.provider.title) + ". " + L10n.tr("下一步：连接电脑"))

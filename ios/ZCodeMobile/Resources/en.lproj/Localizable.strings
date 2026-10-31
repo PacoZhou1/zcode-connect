@@ -810,3 +810,6 @@
 "{0} 登录成功" = "Signed in to {0}";
 "在电脑上登录同一账号，开启远程控制，然后扫描二维码。" = "Sign in to the same account on your computer, enable remote control, then scan its QR code.";
 "下一步：连接电脑" = "Next: connect your computer";
+
+"正在打开登录页面…" = "Opening sign-in page…";
+"打开登录页面" = "Open sign-in page";

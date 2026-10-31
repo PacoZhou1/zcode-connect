@@ -62,6 +62,23 @@ import XCTest
         app.buttons["pairing.settings"].tap()
         try verifyOfficialBrowser(provider: "bigmodel", app: app)
     }
+    func testExistingUserCanAuthorizeFromAddConnectionSheet() throws {
+        let app = launch("en", scenario: "existing")
+        XCTAssertTrue(app.buttons["home.sidebar"].waitForExistence(timeout: 10))
+        app.buttons["home.sidebar"].tap()
+        XCTAssertTrue(app.buttons["connections.add"].waitForExistence(timeout: 5))
+        app.buttons["connections.add"].tap()
+        try verifyOfficialBrowser(provider: "bigmodel", app: app)
+    }
+    func testSettingsAddConnectionOwnsAuthorization() throws {
+        let app = launch("en")
+        XCTAssertTrue(app.buttons["pairing.settings"].waitForExistence(timeout: 10))
+        app.buttons["pairing.settings"].tap()
+        let add = app.buttons["settings.addConnection"]
+        for _ in 0..<4 where !add.isHittable { app.swipeUp() }
+        XCTAssertTrue(add.waitForExistence(timeout: 5)); add.tap()
+        try verifyOfficialBrowser(provider: "bigmodel", app: app)
+    }
     func testNewQRNeedsAccountBeforeConnecting() throws {
         let app = launch("en")
         let paste = app.buttons["pairing.showPaste"]

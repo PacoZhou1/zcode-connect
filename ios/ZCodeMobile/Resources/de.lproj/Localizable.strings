@@ -810,3 +810,6 @@
 "{0} 登录成功" = "Bei {0} angemeldet";
 "在电脑上登录同一账号，开启远程控制，然后扫描二维码。" = "Melde dich am Computer mit demselben Konto an, aktiviere die Fernsteuerung und scanne dann den QR-Code.";
 "下一步：连接电脑" = "Weiter: Computer verbinden";
+
+"正在打开登录页面…" = "Anmeldeseite wird geöffnet…";
+"打开登录页面" = "Anmeldeseite öffnen";

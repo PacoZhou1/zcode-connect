@@ -96,6 +96,8 @@ final class OfficialAccountController {
     private(set) var loadingDevices = false
     private(set) var signingIn = false
     var authorizationURL: URL?
+    private(set) var authorizationPresenterID: UUID?
+    private(set) var authorizationPageVisible = false
     var failure: String?
     @ObservationIgnored private let api: OfficialRelayAPI
     @ObservationIgnored private let storage: any RelayAccountStorage
@@ -121,11 +123,11 @@ final class OfficialAccountController {
         } catch { loaded = false; failure = error.localizedDescription }
     }
 
-    func useAccount(_ provider: RelayAccountProvider) {
+    func useAccount(_ provider: RelayAccountProvider, presenterID: UUID? = nil) {
         do {
             cancelLogin()
             guard let session = try storage.select(provider), !session.isExpired else {
-                identities[provider] = nil; signIn(provider); return
+                identities[provider] = nil; signIn(provider, presenterID: presenterID); return
             }
             identity = session.identity; devices = []; failure = nil
             deviceRequest = nil; loadingDevices = false
@@ -133,9 +135,10 @@ final class OfficialAccountController {
         } catch { failure = error.localizedDescription }
     }
 
-    func signIn(_ provider: RelayAccountProvider) {
+    func signIn(_ provider: RelayAccountProvider, presenterID: UUID? = nil) {
         guard identity?.provider != provider else { return }
         cancelLogin(); signingIn = true; loginProvider = provider; failure = nil
+        authorizationPresenterID = presenterID
         let attempt = UUID(); revision = attempt
         loginTask = Task { [weak self, api] in
             do {
@@ -154,7 +157,7 @@ final class OfficialAccountController {
                         self.onIdentityChange()
                         self.confirmationTask?.cancel(); self.confirmationTask = nil; self.confirmationDeadline = nil
                         self.signingIn = false; self.confirmingLogin = false; self.loginProvider = nil
-                        self.authorizationURL = nil; self.loginCompletion = UUID()
+                        self.authorizationURL = nil; self.authorizationPageVisible = false; self.loginCompletion = UUID()
                         self.loginTask = nil
                         return
                     }
@@ -166,17 +169,28 @@ final class OfficialAccountController {
             } catch {
                 guard let self, self.revision == attempt else { return }
                 self.confirmationTask?.cancel(); self.confirmationTask = nil; self.confirmationDeadline = nil
-                self.failure = error.localizedDescription; self.signingIn = false; self.confirmingLogin = false; self.loginProvider = nil; self.authorizationURL = nil
+                self.failure = error.localizedDescription; self.signingIn = false; self.confirmingLogin = false; self.loginProvider = nil; self.authorizationURL = nil; self.authorizationPageVisible = false
                 self.loginTask = nil
             }
         }
+    }
+
+    func presentAuthorization(from presenterID: UUID?) {
+        guard signingIn, authorizationURL != nil, !confirmingLogin else { return }
+        authorizationPresenterID = presenterID
+    }
+
+    func browserDidPresent(from presenterID: UUID) {
+        guard signingIn, authorizationURL != nil,
+              authorizationPresenterID == nil || authorizationPresenterID == presenterID else { return }
+        authorizationPresenterID = presenterID; authorizationPageVisible = true
     }
 
     /// Safari can close just before the final poll arrives. Keep the flow alive briefly,
     /// but never treat closing a page as authorization or as a successful login.
     func browserDidDismiss() {
         guard signingIn else { return }
-        authorizationURL = nil; confirmingLogin = true
+        authorizationURL = nil; authorizationPageVisible = false; confirmingLogin = true
         guard confirmationDeadline == nil else { return }
         confirmationDeadline = Date().addingTimeInterval(6)
         let attempt = revision
@@ -192,6 +206,7 @@ final class OfficialAccountController {
     func cancelLogin() {
         confirmationTask?.cancel(); confirmationTask = nil
         revision = UUID(); loginTask?.cancel(); loginTask = nil; signingIn = false; confirmingLogin = false; loginProvider = nil; confirmationDeadline = nil; authorizationURL = nil
+        authorizationPresenterID = nil; authorizationPageVisible = false
     }
 
     func signOut() throws {
