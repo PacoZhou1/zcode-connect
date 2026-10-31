@@ -79,6 +79,15 @@ import XCTest
         XCTAssertTrue(add.waitForExistence(timeout: 5)); add.tap()
         try verifyOfficialBrowser(provider: "bigmodel", app: app)
     }
+    func testScannedCodeStartsConnectionWithoutAConfirmationButton() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--official-account-review", "bigmodel", "--review-scanned-payload", "https://zcode.z.ai/remote/v4?sid=synthetic-new-device&mid=synthetic-new-machine&name=New%20computer", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        // Inject the scanner's recognized-code event; the offline token fixture stops
+        // at the connection boundary so this test never contacts a real computer.
+        XCTAssertTrue(app.staticTexts["Demo connection attempt started"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
     func testNewQRNeedsAccountBeforeConnecting() throws {
         let app = launch("en")
         let paste = app.buttons["pairing.showPaste"]

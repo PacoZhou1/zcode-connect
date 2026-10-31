@@ -39,6 +39,7 @@ import Foundation
     }
     private struct ReviewHTTP: RelayHTTPTransport {
         func send(_ request: URLRequest, limit: Int) async throws -> RelayHTTPReply {
+            if request.url?.path == "/api/v1/remote/token" { throw RelayFailure("review_attempt_started", "Demo connection attempt started") }
             guard request.url?.path == "/api/v1/remote/device" else { throw OfficialRelay.failure("account_login_required") }
             return .init(status: 200, body: try RelayJSON.object(["code": .int(0), "data": .array([])]).data())
         }

@@ -10,7 +10,8 @@ struct ConnectionsView: View {
         NavigationStack {
             List {
                 Section(L10n.tr("我的电脑")) {
-                    ForEach(store.profiles.filter { !$0.isAccountRelay || $0.relayAccountScope == store.officialAccount.identity?.scope }) { profile in
+                    ForEach(store.profiles.filter { !$0.isAccountRelay || $0.relayAccountScope == store.officialAccount.identity?.scope }
+                        .sorted { $0.id == store.activeProfileID && $1.id != store.activeProfileID }) { profile in
                         Button {
                             if profile.isRelay && !(store.activeProfile == profile && store.connection.isOnline && !store.isReferenceMode) { relayReconnect = profile }
                             else { dismiss(); Task { await store.switchComputer(profile) } }
@@ -67,6 +68,8 @@ struct PairingView: View {
     @State private var certificateSHA256 = ""
     @State private var connecting = false
     @State private var scanner = false
+    @State private var scannedPayload: String?
+    @State private var automaticallyConnectScannedRelay = false
     @State private var failure: String?
     @State private var relayPayload: String?
     @State private var relayServiceHost: String?
@@ -87,11 +90,23 @@ struct PairingView: View {
             Button(L10n.tr("连接并使用此手机控制")) { Task { await connectRelay() } }
             Button(L10n.tr("取消"), role: .cancel) {}
         } message: { Text(L10n.tr("将连接“{0}”，通过{1}读取项目。若另一台手机正在控制，可能会替换它的连接。电脑上的任务会保留。", "\(name.isEmpty ? L10n.tr("我的电脑") : name)", "\(relayServiceHost.map { L10n.tr("你的中转服务器 {0}", "\($0)") } ?? L10n.tr("ZCode 官方中转"))")) }
-        .onAppear { isVisible = true; restoreWorkspaceSelection() }
+        .onAppear {
+            isVisible = true; restoreWorkspaceSelection()
+            if automaticallyConnectScannedRelay { Task { await continueScannedConnection() } }
+        }
+        .task {
+            #if DEBUG
+            let args = ProcessInfo.processInfo.arguments
+            if let index = args.firstIndex(of: "--review-scanned-payload"), args.count > index + 1 {
+                await receiveScannedPayload(args[index + 1])
+            }
+            #endif
+        }
         .modifier(OfficialLoginPresentation(enabled: !onboarding || store.sheet == nil))
         .onChange(of: store.officialAccount.loginCompletion) { _, _ in
             if isVisible, let identity = store.officialAccount.identity {
                 UIAccessibility.post(notification: .announcement, argument: L10n.tr("{0} 登录成功", identity.provider.title) + ". " + L10n.tr("下一步：连接电脑"))
+                if automaticallyConnectScannedRelay { Task { await continueScannedConnection() } }
             }
         }
         .onChange(of: store.relayWorkspaceSelection?.id) { _, _ in restoreWorkspaceSelection() }
@@ -103,11 +118,16 @@ struct PairingView: View {
                 else { store.cancelRelayPairing(attempt: relayAttempt) }
             }
         }
-        .sheet(isPresented: $scanner) {
+        .sheet(isPresented: $scanner, onDismiss: {
+            if let raw = scannedPayload {
+                scannedPayload = nil
+                Task { await receiveScannedPayload(raw) }
+            }
+        }) {
             NavigationStack {
                 QRScanner(onCode: { payload in
+                    scannedPayload = payload
                     scanner = false
-                    parse(payload)
                 }, onFailure: {
                     scanner = false
                     failure = L10n.tr("相机暂时无法扫描。请重新尝试，或粘贴电脑上的完整连接链接。")
@@ -121,9 +141,26 @@ struct PairingView: View {
     }
     private var content: some View {
         Form {
-            if choosingWorkspace {
+            if let failure {
+                Section(L10n.tr("需要处理")) {
+                    Text(failure).font(.subheadline).accessibilityIdentifier("pairing.failure")
+                    if cameraSettingsNeeded {
+                        Button(L10n.tr("打开系统设置")) {
+                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                        }
+                    }
+                    NavigationLink(L10n.tr("查看连接排障")) { ConnectionGuideView() }
+                }
+            }
+            if connecting && !choosingWorkspace {
                 Section {
-                    Label(L10n.tr("已连接电脑"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    ProgressView(L10n.tr("正在连接电脑并读取项目…"))
+                        .accessibilityIdentifier("pairing.connecting")
+                    Label(name.isEmpty ? L10n.tr("我的电脑") : name, systemImage: "laptopcomputer")
+                }
+            } else if choosingWorkspace {
+                Section {
+                    Label(name.isEmpty ? L10n.tr("我的电脑") : name, systemImage: "laptopcomputer")
                     Text(selectionContext?.reason.isEmpty == false ? selectionContext!.reason : L10n.tr("选择要继续的项目。任务和文件仍在电脑上。"))
                         .foregroundStyle(.secondary)
                 }
@@ -240,27 +277,17 @@ struct PairingView: View {
                         Text(L10n.tr("连接后选择项目，即可查看和继续任务。"))
                             .font(.subheadline).foregroundStyle(.secondary)
                         Button(L10n.tr("换一个二维码或链接")) {
+                            automaticallyConnectScannedRelay = false
                             relayPayload = nil; relayServiceHost = nil; address = ""; name = ""; failure = nil
                         }.disabled(connecting).accessibilityIdentifier("pairing.replace")
                     }
                     connectButton
                 }
             }
-            if connecting {
-                Section { ProgressView(choosingWorkspace ? L10n.tr("正在读取项目任务…") : L10n.tr("正在连接电脑并读取项目…")) }
+            if connecting && choosingWorkspace {
+                Section { ProgressView(L10n.tr("正在读取项目任务…")) }
             }
-            if let failure {
-                Section(L10n.tr("需要处理")) {
-                    Text(failure).font(.subheadline).accessibilityIdentifier("pairing.failure")
-                    if cameraSettingsNeeded {
-                        Button(L10n.tr("打开系统设置")) {
-                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                        }
-                    }
-                    NavigationLink(L10n.tr("查看连接排障")) { ConnectionGuideView() }
-                }
-            }
-            if !choosingWorkspace && !manualConnection {
+            if !connecting && !choosingWorkspace && !manualConnection {
                 Section {
                     NavigationLink { SelfHostedConnectionGuideView() } label: {
                         Label(L10n.tr("使用自己的中转服务器"), systemImage: "server.rack")
@@ -353,6 +380,24 @@ struct PairingView: View {
         beganRelay = true; choosingWorkspace = true; connecting = false; failure = nil
         relayPayload = nil; relayServiceHost = nil; address = ""; token = ""; certificateSHA256 = ""
     }
+    private func receiveScannedPayload(_ raw: String) async {
+        guard isVisible, !connecting, !choosingWorkspace else { return }
+        parse(raw)
+        guard relayPayload != nil else { return }
+        // Scanning a connection code is the user's request to connect. Clipboard
+        // imports retain their explicit confirmation; repeated camera frames are ignored.
+        automaticallyConnectScannedRelay = true
+        await continueScannedConnection()
+    }
+
+    private func continueScannedConnection() async {
+        guard automaticallyConnectScannedRelay, let raw = relayPayload,
+              let pairing = try? RelayPairing(payload: raw), isVisible, !connecting else { return }
+        if pairing.usesAccount && store.officialAccount.identity == nil { return }
+        automaticallyConnectScannedRelay = false
+        await connectRelay()
+    }
+
     private func connectRelay() async {
         guard isVisible, !connecting, let raw = relayPayload else { return }
         let attempt = UUID(); relayAttempt = attempt
@@ -362,7 +407,8 @@ struct PairingView: View {
             let context = try await store.beginRelayPairing(raw, confirmedControllerReplacement: true, attempt: attempt)
             guard isVisible, relayAttempt == attempt, store.isCurrentRelaySelection(context) else { return }
             selectionContext = context
-            choosingWorkspace = true
+            choosingWorkspace = true; connecting = false
+            if let workspace = store.automaticRelayWorkspace { await chooseWorkspace(workspace) }
         } catch { if relayAttempt == attempt, !(error is CancellationError) { failure = connectionFailureMessage(error) } }
         if relayAttempt == attempt { connecting = false }
     }
@@ -400,6 +446,7 @@ struct PairingView: View {
     }
     private func parse(_ raw: String) {
         guard !connecting, !choosingWorkspace else { return }
+        automaticallyConnectScannedRelay = false
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         // A replacement payload must never reuse another host's address or credential.
         address = ""; token = ""; name = ""; certificateSHA256 = ""; relayPayload = nil; relayServiceHost = nil; failure = nil; cameraSettingsNeeded = false

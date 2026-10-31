@@ -343,10 +343,10 @@ final class AppStore {
         return "\(activeProfileID ?? "unconnected")|"
     }
     private func scopedKey(_ key: String) -> String { "\(persistenceScope)|\(key)" }
-    private func loadScopedState() throws {
+    private func loadScopedState(restoreReadingState: Bool = true) throws {
         transcriptLastLoaded = [:]; transcriptLoading = []; transcriptLoadingOwners = [:]; transcriptLoadErrors = [:]
         let cache = decode([String: CachedTranscript].self, key: scopedKey("transcriptCache.v1")) ?? [:]
-        if sessions.isEmpty, let state = decode(CachedReadingState.self, key: scopedKey("readingState.v1")),
+        if restoreReadingState, sessions.isEmpty, let state = decode(CachedReadingState.self, key: scopedKey("readingState.v1")),
            Date().timeIntervalSince(state.savedAt) < 7 * 86400 {
             sessions = state.sessions; projects = state.projects; hostName = state.hostName
             if path.isEmpty, let id = state.sessionID, sessions.contains(where: { $0.id == id }) { path = [.session(id)] }
@@ -974,7 +974,6 @@ final class AppStore {
             relayBootstrap = bootstrap
             relayWorkspaces = bootstrap.workspaces
             relayPairingText = raw
-            hostName = pairing.deviceName
             return context
         } catch {
             guard isCurrentRelaySelection(context) else { throw CancellationError() }
@@ -1020,27 +1019,12 @@ final class AppStore {
                 relayDeviceID: pairing.deviceID, relayWorkspaceKey: workspaceKey, relayServiceID: pairing.serviceID,
                 relayAccountScope: relayPairingAccountScope,
                 relayMachineID: selectedMID)
-            try CredentialStore.save(raw, id: profile.id)
-            let keepsReadingState = !isReferenceMode && activeProfileID == profile.id && activeProfile?.baseURL == profile.baseURL
-                && activeProfile?.relayDeviceID == profile.relayDeviceID && activeProfile?.relayAccountScope == profile.relayAccountScope
-            client = adapter
-            if !keepsReadingState {
-                sessions = []; transcripts = [:]; histories = [:]; loadingHistory = []; pendingInteractions = [:]
-                modelSelections = [:]; remoteSettings = [:]; uploadedAttachments = [:]
-                projectSettings = [:]; newModelSelection = nil; options = SessionOptions()
-                path = []
+            do {
+                try await activateRelayConnection(profile, using: adapter, pairingPayload: raw, appVersion: pairing.appVersion)
+            } catch {
+                await adapter.shutdown()
+                throw error
             }
-            isReferenceMode = false; referenceReview = false
-            activeProfileID = profile.id
-            if let index = profiles.firstIndex(where: { $0.id == profile.id }) { profiles[index] = profile }
-            else { profiles.append(profile) }
-            if !keepsReadingState { try loadScopedState() }
-            else { reloadScopedPreferences(); pendingSubmissions = try submissionJournal.read(scope: persistenceScope) }
-            save(profiles, key: "connections")
-            defaults.set(profile.id, forKey: "activeConnection")
-            hostName = profile.name; bridgeVersion = pairing.appVersion
-            connection = .connected
-            try await loadRemoteIndex()
             guard !Task.isCancelled, isCurrentRelaySelection(context) else { throw CancellationError() }
             connectedAt = Date()
             if automaticConnectionTask == nil { automaticConnectionAttempt = 1 }
@@ -1059,6 +1043,54 @@ final class AppStore {
             failRelaySelection(error, context: context, reportFailure: reportFailure)
             throw error
         }
+    }
+
+    /// Publish the selected computer only after its complete initial index has validated.
+    /// This boundary also prevents an old reading cache from replacing a fresh host identity.
+    func activateRelayConnection(_ profile: ConnectionProfile, using transport: any RemoteTransport,
+                                 pairingPayload: String, appVersion: String?) async throws {
+        let pairing = try RelayPairing(payload: pairingPayload)
+        guard profile.relayDeviceID == pairing.deviceID, profile.relayServiceID == pairing.serviceID,
+              !pairing.usesAccount || profile.relayAccountScope == officialAccount.identity?.scope && profile.relayAccountScope != nil else {
+            throw OfficialRelay.failure("account_mismatch")
+        }
+        let epoch = connectionEpoch
+        var applied = false
+        try await loadRemoteIndex(using: transport, beforeApplying: { [self] in
+            guard !Task.isCancelled, epoch == connectionEpoch else { throw CancellationError() }
+            try CredentialStore.save(pairingPayload, id: profile.id)
+            let keepsReadingState = !isReferenceMode && activeProfileID == profile.id && activeProfile?.baseURL == profile.baseURL
+                && activeProfile?.relayDeviceID == profile.relayDeviceID && activeProfile?.relayAccountScope == profile.relayAccountScope
+            if !keepsReadingState {
+                sessions = []; projects = []; transcripts = [:]; histories = [:]; loadingHistory = []; pendingInteractions = [:]
+                modelSelections = [:]; remoteSettings = [:]; uploadedAttachments = [:]
+                projectSettings = [:]; newModelSelection = nil; options = SessionOptions()
+                selectedProjectID = nil; path = []; showArchived = false
+            }
+            isReferenceMode = false; referenceReview = false
+            activeProfileID = profile.id
+            if let index = profiles.firstIndex(where: { $0.id == profile.id }) { profiles[index] = profile }
+            else { profiles.append(profile) }
+            if !keepsReadingState { try loadScopedState(restoreReadingState: false) }
+            else { reloadScopedPreferences(); pendingSubmissions = try submissionJournal.read(scope: persistenceScope) }
+            client = transport
+            hostName = profile.name; bridgeVersion = appVersion
+            save(profiles, key: "connections")
+            defaults.set(profile.id, forKey: "activeConnection")
+            applied = true
+        })
+        guard applied, !Task.isCancelled, epoch == connectionEpoch else { throw CancellationError() }
+        connection = .connected
+    }
+
+    var automaticRelayWorkspace: RelayWorkspace? {
+        relayBootstrap.flatMap(Self.automaticWorkspace)
+    }
+    static func automaticWorkspace(_ bootstrap: RelayBootstrap) -> RelayWorkspace? {
+        if let active = bootstrap.activeWorkspaceKey,
+           let workspace = bootstrap.workspaces.first(where: { $0.id == active && $0.canAttach }) { return workspace }
+        let attachable = bootstrap.workspaces.filter(\.canAttach)
+        return attachable.count == 1 ? attachable[0] : nil
     }
 
     func cancelRelayPairing(context: RelayWorkspaceSelectionContext) {
